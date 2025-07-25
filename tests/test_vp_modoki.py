@@ -58,3 +58,26 @@ def test_relaxation_runs(tmp_path: Path):
 
     assert called["steps"] == 100
     assert abs(called["fmax"] - 0.01) < 1e-6
+
+
+def test_all_potentials_give_same_relax(tmp_path: Path):
+    (tmp_path / "POSCAR").write_text(POSCAR_CONTENT)
+    (tmp_path / "INCAR").write_text(INCAR_CONTENT)
+
+    results = []
+
+    def fake_run_relaxation(atoms, calculator, steps, fmax):
+        # store a copy of positions for comparison
+        results.append(atoms.get_positions().copy())
+        return 0.0
+
+    potentials = ["CHGNET", "MATGL", "MACE", "MATTERSIM"]
+    for pot in potentials:
+        (tmp_path / "BCAR").write_text(f"NNP={pot}\n")
+        with patch("vp_modoki.get_calculator", return_value=EMT()):
+            with patch("vp_modoki.run_relaxation", side_effect=fake_run_relaxation):
+                with patch.object(sys, "argv", ["vp_modoki.py", "--dir", str(tmp_path)]):
+                    vp_modoki.main()
+
+    for r in results[1:]:
+        assert ((results[0] - r) ** 2).sum() < 1e-12

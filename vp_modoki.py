@@ -15,8 +15,23 @@ from pymatgen.io.ase import AseAtomsAdaptor
 
 try:
     from chgnet.model import CHGNetCalculator
-except Exception:
+except Exception:  # pragma: no cover - optional dependency
     CHGNetCalculator = None  # type: ignore
+
+try:
+    from matgl.ext.ase import M3GNetCalculator
+except Exception:  # pragma: no cover - optional dependency
+    M3GNetCalculator = None  # type: ignore
+
+try:
+    from mace.calculators import MACECalculator
+except Exception:  # pragma: no cover - optional dependency
+    MACECalculator = None  # type: ignore
+
+try:
+    from mattersim.forcefield import MatterSimCalculator
+except Exception:  # pragma: no cover - optional dependency
+    MatterSimCalculator = None  # type: ignore
 
 from ase import units
 from ase.io import write
@@ -77,8 +92,34 @@ def get_calculator(bcar_tags: Dict[str, str]):
         if model_path and os.path.exists(model_path):
             return CHGNetCalculator(model_path)
         return CHGNetCalculator()
-    else:
-        raise ValueError(f"Unsupported NNP type: {nnp}")
+    if nnp == "MATGL":
+        if M3GNetCalculator is None:
+            raise RuntimeError(
+                "M3GNetCalculator not available. Install matgl and dependencies."
+            )
+        model_path = bcar_tags.get("MODEL")
+        if model_path and os.path.exists(model_path):
+            return M3GNetCalculator(model_path)
+        return M3GNetCalculator()
+    if nnp == "MACE":
+        if MACECalculator is None:
+            raise RuntimeError(
+                "MACECalculator not available. Install mace-torch and dependencies."
+            )
+        model_path = bcar_tags.get("MODEL")
+        if model_path and os.path.exists(model_path):
+            return MACECalculator(model_path)
+        return MACECalculator()
+    if nnp == "MATTERSIM":
+        if MatterSimCalculator is None:
+            raise RuntimeError(
+                "MatterSimCalculator not available. Install mattersim and dependencies."
+            )
+        model_path = bcar_tags.get("MODEL")
+        if model_path and os.path.exists(model_path):
+            return MatterSimCalculator(model_path)
+        return MatterSimCalculator()
+    raise ValueError(f"Unsupported NNP type: {nnp}")
 
 
 def run_single_point(atoms, calculator):
