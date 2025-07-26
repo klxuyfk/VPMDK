@@ -46,9 +46,10 @@ def test_relaxation_runs(tmp_path: Path):
 
     called = {}
 
-    def fake_run_relaxation(atoms, calculator, steps, fmax):
+    def fake_run_relaxation(atoms, calculator, steps, fmax, write_energy_csv=False):
         called["steps"] = steps
         called["fmax"] = fmax
+        called["write"] = write_energy_csv
         return 0.0
 
     with patch("vp_modoki.get_calculator", return_value=EMT()):
@@ -58,6 +59,7 @@ def test_relaxation_runs(tmp_path: Path):
 
     assert called["steps"] == 100
     assert abs(called["fmax"] - 0.01) < 1e-6
+    assert called["write"] is False
 
 
 def test_all_potentials_give_same_relax(tmp_path: Path):
@@ -66,7 +68,7 @@ def test_all_potentials_give_same_relax(tmp_path: Path):
 
     results = []
 
-    def fake_run_relaxation(atoms, calculator, steps, fmax):
+    def fake_run_relaxation(atoms, calculator, steps, fmax, write_energy_csv=False):
         # store a copy of positions for comparison
         results.append(atoms.get_positions().copy())
         return 0.0
@@ -81,3 +83,22 @@ def test_all_potentials_give_same_relax(tmp_path: Path):
 
     for r in results[1:]:
         assert ((results[0] - r) ** 2).sum() < 1e-12
+
+
+def test_energy_csv_flag(tmp_path: Path):
+    (tmp_path / "POSCAR").write_text(POSCAR_CONTENT)
+    (tmp_path / "INCAR").write_text(INCAR_CONTENT)
+    (tmp_path / "BCAR").write_text(BCAR_CONTENT + "WRITE_ENERGY_CSV=1\n")
+
+    called = {}
+
+    def fake_run_relaxation(atoms, calculator, steps, fmax, write_energy_csv=False):
+        called["write"] = write_energy_csv
+        return 0.0
+
+    with patch("vp_modoki.get_calculator", return_value=EMT()):
+        with patch("vp_modoki.run_relaxation", side_effect=fake_run_relaxation):
+            with patch.object(sys, "argv", ["vp_modoki.py", "--dir", str(tmp_path)]):
+                vp_modoki.main()
+
+    assert called["write"] is True
