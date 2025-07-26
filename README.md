@@ -30,6 +30,7 @@ machine-learning potential:
 ```
 NNP=CHGNET            # Name of the potential
 MODEL=/path/to/model  # Optional path to a trained parameter set
+DEVICE=cuda           # Optional for MACE: 'cuda' or 'cpu'
 ```
 
 ### Required Python modules
@@ -56,9 +57,10 @@ defaults automatically.
 
 ### GPU usage
 
-This script does not manage GPU settings, but the potentials themselves use a
-GPU if available. With CUDA devices you can choose which GPU to use with
-`CUDA_VISIBLE_DEVICES`. When running MatGL you may also set
+This script does not directly manage GPU settings. Each potential selects a
+device on its own. MACE checks for a GPU and uses it when available unless
+`DEVICE=cpu` is specified in `BCAR`. With CUDA devices you can choose which GPU
+to use with `CUDA_VISIBLE_DEVICES`. When running MatGL you may also set
 `XLA_PYTHON_CLIENT_PREALLOCATE=false`. A GPU with at least 8 GB of memory is
 recommended, though running on a CPU also works.
 
