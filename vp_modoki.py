@@ -107,9 +107,18 @@ def get_calculator(bcar_tags: Dict[str, str]):
                 "MACECalculator not available. Install mace-torch and dependencies."
             )
         model_path = bcar_tags.get("MODEL")
+        device = bcar_tags.get("DEVICE")
+        if device is None:
+            try:
+                import torch
+
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+            except Exception:
+                device = "cpu"
+
         if model_path and os.path.exists(model_path):
-            return MACECalculator(model_path)
-        return MACECalculator()
+            return MACECalculator(model_path, device=device)
+        return MACECalculator(device=device)
     if nnp == "MATTERSIM":
         if MatterSimCalculator is None:
             raise RuntimeError(
