@@ -9,6 +9,7 @@ import argparse
 import os
 import sys
 from typing import Dict
+import csv
 
 from pymatgen.io.vasp import Incar, Poscar, Potcar
 from pymatgen.io.ase import AseAtomsAdaptor
@@ -138,11 +139,19 @@ def run_single_point(atoms, calculator):
     return e
 
 
-def run_relaxation(atoms, calculator, steps: int, fmax: float):
+def run_relaxation(atoms, calculator, steps: int, fmax: float, write_energy_csv: bool = False):
     atoms.calc = calculator
+    energies = []
     dyn = BFGS(atoms, logfile="OUTCAR")
+    if write_energy_csv:
+        dyn.attach(lambda: energies.append(atoms.get_potential_energy()))
     dyn.run(fmax=fmax, steps=steps)
     write("CONTCAR", atoms)
+    if write_energy_csv:
+        with open("energy.csv", "w", newline="") as csvfile:
+            writer = csv.writer(csvfile)
+            for energy in energies:
+                writer.writerow([energy])
     return atoms.get_potential_energy()
 
 
@@ -188,6 +197,7 @@ def main():
             print(f"INCAR tag {k} is not supported and will be ignored")
 
     calculator = get_calculator(bcar)
+    write_energy_csv = str(bcar.get("WRITE_ENERGY_CSV", "0")).lower() in ("1", "true", "yes", "on")
 
     nsw = int(incar.get("NSW", 0)) if hasattr(incar, "get") else 0
     ibrion = int(incar.get("IBRION", -1)) if hasattr(incar, "get") else -1
@@ -200,7 +210,7 @@ def main():
         potim = float(incar.get("POTIM", 2))
         run_md(atoms, calculator, nsw, tebeg, potim)
     else:
-        run_relaxation(atoms, calculator, nsw, abs(ediffg))
+        run_relaxation(atoms, calculator, nsw, abs(ediffg), write_energy_csv)
 
     print("Calculation completed.")
 

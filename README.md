@@ -31,6 +31,7 @@ machine-learning potential:
 NNP=CHGNET            # Name of the potential
 MODEL=/path/to/model  # Optional path to a trained parameter set
 DEVICE=cuda           # Optional for MACE: 'cuda' or 'cpu'
+WRITE_ENERGY_CSV=1    # Optional: write energy.csv during relaxation
 ```
 
 ### Required Python modules
