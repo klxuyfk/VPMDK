@@ -21,6 +21,20 @@ python vp_modoki.py --dir PATH_TO_INPUT
 The script writes `CONTCAR` for the final structure and prints energies similar
 to VASP output. Unsupported VASP tags are ignored with a warning.
 
+
+## Supported INCAR tags
+
+The script reads a subset of common VASP `INCAR` settings. Other tags are ignored with a warning.
+
+| Tag | Meaning |
+|-----|--------|
+| `NSW` | Number of ionic steps. `0` or omitted performs a single-point calculation. |
+| `IBRION` | Ionic movement algorithm. `0` runs molecular dynamics, any other value triggers a BFGS geometry optimisation with a fixed cell. |
+| `ISIF` | Accepted for compatibility but ignored; the cell shape and volume remain fixed. |
+| `EDIFFG` | Convergence threshold for relaxations. The absolute value sets the maximum force on atoms (eV/Å). |
+| `TEBEG` | Initial temperature in kelvin for molecular dynamics (`IBRION=0`). |
+| `POTIM` | Time step in femtoseconds for molecular dynamics (`IBRION=0`). |
+
 ## Detailed setup instructions
 
 In addition to `POSCAR`, optionally place `INCAR`, `POTCAR` and `BCAR` in the
