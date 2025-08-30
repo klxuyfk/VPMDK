@@ -18,6 +18,8 @@ depends on the corresponding Python packages being installed.
 python vp_modoki.py --dir PATH_TO_INPUT
 ```
 
+If `--dir` is omitted, the current directory (`.`) is used.
+
 The script writes `CONTCAR` for the final structure and prints energies similar
 to VASP output. Unsupported VASP tags are ignored with a warning.
 
@@ -28,12 +30,12 @@ The script reads a subset of common VASP `INCAR` settings. Other tags are ignore
 
 | Tag | Meaning |
 |-----|--------|
-| `NSW` | Number of ionic steps. `0` or omitted performs a single-point calculation. |
-| `IBRION` | Ionic movement algorithm. `0` runs molecular dynamics, any other value triggers a BFGS geometry optimisation with a fixed cell. |
-| `ISIF` | Accepted for compatibility but ignored; the cell shape and volume remain fixed. |
-| `EDIFFG` | Convergence threshold for relaxations. The absolute value sets the maximum force on atoms (eV/Å). |
-| `TEBEG` | Initial temperature in kelvin for molecular dynamics (`IBRION=0`). |
-| `POTIM` | Time step in femtoseconds for molecular dynamics (`IBRION=0`). |
+| `NSW` | Number of ionic steps. Defaults to `0` (single-point calculation). |
+| `IBRION` | Ionic movement algorithm. `0` runs molecular dynamics, any other value triggers a BFGS geometry optimisation with a fixed cell. Defaults to `-1`. |
+| `ISIF` | Accepted for compatibility but ignored; the cell shape and volume remain fixed regardless of the value (default `None`). |
+| `EDIFFG` | Convergence threshold for relaxations in eV/Å. Defaults to `-0.02`. |
+| `TEBEG` | Initial temperature in kelvin for molecular dynamics (`IBRION=0`). Defaults to `300`. |
+| `POTIM` | Time step in femtoseconds for molecular dynamics (`IBRION=0`). Defaults to `2`. |
 
 ## Detailed setup instructions
 
@@ -47,6 +49,15 @@ MODEL=/path/to/model  # Optional path to a trained parameter set
 DEVICE=cuda           # Optional for MACE: 'cuda' or 'cpu'
 WRITE_ENERGY_CSV=1    # Optional: write energy.csv during relaxation
 ```
+
+Available `BCAR` tags and defaults:
+
+| Tag | Meaning | Default |
+|-----|---------|---------|
+| `NNP` | Name of the potential | `CHGNET` |
+| `MODEL` | Path to a trained parameter set | potential's built-in model |
+| `DEVICE` | Device for MACE (`cuda` or `cpu`) | auto-detect (`cuda` if available, else `cpu`) |
+| `WRITE_ENERGY_CSV` | Write `energy.csv` during relaxation (`1` to enable) | `0` (disabled) |
 
 ### Required Python modules
 
