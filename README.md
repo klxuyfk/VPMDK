@@ -122,3 +122,7 @@ Example command:
 ```bash
 python vpmdk.py --dir calc_dir
 ```
+
+## License
+
+VPMDK is distributed under the BSD 3-Clause License. See [LICENSE](LICENSE) for details.
