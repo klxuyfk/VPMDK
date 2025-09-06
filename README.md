@@ -21,11 +21,16 @@ python vpmdk.py --dir PATH_TO_INPUT
 
 If `--dir` is omitted, the current directory (`.`) is used.
 
-The script writes `CONTCAR` for the final structure and prints energies similar
-to VASP output. Unsupported VASP tags are ignored with a warning.
+## Input files
 
+Calculation directories may contain the following files:
 
-## Supported INCAR tags
+- `POSCAR` *(required)* – atomic positions and cell.
+- `INCAR` – VASP-style run parameters; only a subset of tags is supported.
+- `BCAR` – simple `key=value` file selecting the machine-learning potential.
+- `POTCAR` – accepted for compatibility but ignored.
+
+### Supported INCAR tags
 
 The script reads a subset of common VASP `INCAR` settings. Other tags are ignored with a warning.
 
@@ -38,11 +43,9 @@ The script reads a subset of common VASP `INCAR` settings. Other tags are ignore
 | `TEBEG` | Initial temperature in kelvin for molecular dynamics (`IBRION=0`). Defaults to `300`. |
 | `POTIM` | Time step in femtoseconds for molecular dynamics (`IBRION=0`). Defaults to `2`. |
 
-## Detailed setup instructions
+### BCAR tags
 
-In addition to `POSCAR`, optionally place `INCAR`, `POTCAR` and `BCAR` in the
-same directory. `BCAR` is a simple `key=value` text file used to specify the
-machine-learning potential:
+`BCAR` configures the machine-learning potential:
 
 ```
 NNP=CHGNET            # Name of the potential
@@ -59,6 +62,19 @@ Available `BCAR` tags and defaults:
 | `MODEL` | Path to a trained parameter set | potential's built-in model |
 | `DEVICE` | Device for MACE (`cuda` or `cpu`) | auto-detect (`cuda` if available, else `cpu`) |
 | `WRITE_ENERGY_CSV` | Write `energy.csv` during relaxation (`1` to enable) | `0` (disabled) |
+
+## Output files
+
+Depending on the calculation type, VPMDK produces the following files in VASP format:
+
+| File | When produced | Contents |
+|------|---------------|----------|
+| `CONTCAR` | Always | Final atomic positions and cell. |
+| `OUTCAR` | Relaxations and MD | Step-by-step potential, kinetic, and total energies along with temperature. |
+| `XDATCAR` | MD only (`IBRION=0`) | Atomic positions at each MD step (trajectory). |
+| `energy.csv` | Relaxations with `WRITE_ENERGY_CSV=1` | Potential energy at each relaxation step. |
+
+Final energies are also printed to the console for single-point calculations.
 
 ### Required Python modules
 
