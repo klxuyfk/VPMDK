@@ -1,6 +1,6 @@
-# vp_modoki
+# vpmdk
 
-This repository provides a simple script `vp_modoki.py` to run machine-learning
+This repository provides a simple script `vpmdk.py` to run machine-learning
 potentials using VASP style input files. The script supports several
 potentials through their ASE calculators: **CHGNet**, **MatterSim**, **MACE**
 and **MatGL** (via the M3GNet model). Availability of these calculators
@@ -15,7 +15,7 @@ depends on the corresponding Python packages being installed.
 3. Run:
 
 ```bash
-python vp_modoki.py --dir PATH_TO_INPUT
+python vpmdk.py --dir PATH_TO_INPUT
 ```
 
 If `--dir` is omitted, the current directory (`.`) is used.
@@ -103,5 +103,5 @@ calc_dir/
 Example command:
 
 ```bash
-python vp_modoki.py --dir calc_dir
+python vpmdk.py --dir calc_dir
 ```

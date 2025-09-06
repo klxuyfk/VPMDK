@@ -1,4 +1,4 @@
-"""VP Modoki: Run machine-learning potentials using VASP style inputs.
+"""vpmdk: Run machine-learning potentials using VASP style inputs.
 
 This script reads POSCAR, INCAR, POTCAR and BCAR files from a directory,
 performs calculations using an ML potential (currently CHGNet support),

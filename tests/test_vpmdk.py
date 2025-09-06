@@ -3,7 +3,7 @@ import os, sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from unittest.mock import patch
 from ase.calculators.emt import EMT
-import vp_modoki
+import vpmdk
 
 POSCAR_CONTENT = """Si2
 1.0
@@ -52,10 +52,10 @@ def test_relaxation_runs(tmp_path: Path):
         called["write"] = write_energy_csv
         return 0.0
 
-    with patch("vp_modoki.get_calculator", return_value=EMT()):
-        with patch("vp_modoki.run_relaxation", side_effect=fake_run_relaxation):
-            with patch.object(sys, "argv", ["vp_modoki.py", "--dir", str(tmp_path)]):
-                vp_modoki.main()
+    with patch("vpmdk.get_calculator", return_value=EMT()):
+        with patch("vpmdk.run_relaxation", side_effect=fake_run_relaxation):
+            with patch.object(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)]):
+                vpmdk.main()
 
     assert called["steps"] == 100
     assert abs(called["fmax"] - 0.01) < 1e-6
@@ -76,10 +76,10 @@ def test_all_potentials_give_same_relax(tmp_path: Path):
     potentials = ["CHGNET", "MATGL", "MACE", "MATTERSIM"]
     for pot in potentials:
         (tmp_path / "BCAR").write_text(f"NNP={pot}\n")
-        with patch("vp_modoki.get_calculator", return_value=EMT()):
-            with patch("vp_modoki.run_relaxation", side_effect=fake_run_relaxation):
-                with patch.object(sys, "argv", ["vp_modoki.py", "--dir", str(tmp_path)]):
-                    vp_modoki.main()
+        with patch("vpmdk.get_calculator", return_value=EMT()):
+            with patch("vpmdk.run_relaxation", side_effect=fake_run_relaxation):
+                with patch.object(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)]):
+                    vpmdk.main()
 
     for r in results[1:]:
         assert ((results[0] - r) ** 2).sum() < 1e-12
@@ -96,9 +96,9 @@ def test_energy_csv_flag(tmp_path: Path):
         called["write"] = write_energy_csv
         return 0.0
 
-    with patch("vp_modoki.get_calculator", return_value=EMT()):
-        with patch("vp_modoki.run_relaxation", side_effect=fake_run_relaxation):
-            with patch.object(sys, "argv", ["vp_modoki.py", "--dir", str(tmp_path)]):
-                vp_modoki.main()
+    with patch("vpmdk.get_calculator", return_value=EMT()):
+        with patch("vpmdk.run_relaxation", side_effect=fake_run_relaxation):
+            with patch.object(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)]):
+                vpmdk.main()
 
     assert called["write"] is True
