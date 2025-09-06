@@ -1,6 +1,6 @@
 # VPMDK
 
-**VASP-Protocol Machine-learning Dynamics Kit** *(aka “VasP-MoDoKi”)* — a lightweight engine that **reads/writes VASP-style inputs/outputs** and performs **molecular dynamics and structure relaxations** using **machine-learning interatomic potentials**. Keep familiar VASP workflows and artifacts while calculations are executed via ASE-compatible ML calculators. A simple driver script, `vpmdk.py`, is provided.
+VPMDK (*VASP-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is a lightweight engine that **reads and writes VASP-style inputs/outputs** and performs **molecular dynamics and structure relaxations** using **machine-learning interatomic potentials**. Keep familiar VASP workflows and artifacts while computations run through ASE-compatible ML calculators. A simple driver script, `vpmdk.py`, is provided.
 
 **Supported calculators (via ASE):** **CHGNet**, **MatterSim**, **MACE**, and **MatGL** (via the M3GNet model). Availability depends on the corresponding Python packages being installed.
 
