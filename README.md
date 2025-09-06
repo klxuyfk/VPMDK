@@ -1,10 +1,11 @@
-# vpmdk
+# vpmdk — VASP-Protocol Machine-learning Dynamics Kit *(aka “VasP-MoDoKi”)*
 
-This repository provides a simple script `vpmdk.py` to run machine-learning
-potentials using VASP style input files. The script supports several
-potentials through their ASE calculators: **CHGNet**, **MatterSim**, **MACE**
-and **MatGL** (via the M3GNet model). Availability of these calculators
-depends on the corresponding Python packages being installed.
+A lightweight engine that **reads/writes VASP-style inputs/outputs** and performs **molecular dynamics and structure relaxations** using **machine-learning interatomic potentials**. The goal is pragmatic interoperability: keep your familiar VASP workflows and artifacts, while the underlying calculations are driven by ASE-compatible ML calculators.
+
+**Supported calculators (via ASE):** **CHGNet**, **MatterSim**, **MACE**, and **MatGL** (via the M3GNet model). Availability depends on the corresponding Python packages being installed.
+
+*Not affiliated with, endorsed by, or a replacement for VASP; “VASP” is a trademark of its respective owner. vpmdk only mimics VASP I/O conventions for compatibility.*
+
 
 ## Usage
 
