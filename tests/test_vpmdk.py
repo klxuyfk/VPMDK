@@ -3,6 +3,8 @@ import os, sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from unittest.mock import patch
 from ase.calculators.emt import EMT
+from pymatgen.io.vasp import Poscar
+from pymatgen.io.ase import AseAtomsAdaptor
 import vpmdk
 
 POSCAR_CONTENT = """Si2
@@ -102,3 +104,61 @@ def test_energy_csv_flag(tmp_path: Path):
                 vpmdk.main()
 
     assert called["write"] is True
+
+
+def test_fractional_coords_wrapped(tmp_path: Path):
+    poscar = """Si
+1.0
+ 1 0 0
+ 0 1 0
+ 0 0 1
+ Si
+ 1
+Direct
+ 1.1 0.2 0.3
+"""
+    (tmp_path / "POSCAR").write_text(poscar)
+    (tmp_path / "INCAR").write_text("NSW=1\nIBRION=2\n")
+    (tmp_path / "BCAR").write_text(BCAR_CONTENT)
+
+    seen = {}
+
+    def fake_run_relaxation(atoms, calculator, steps, fmax, write_energy_csv=False):
+        seen["scaled"] = atoms.get_scaled_positions(wrap=False).copy()
+        return 0.0
+
+    with patch("vpmdk.get_calculator", return_value=EMT()):
+        with patch("vpmdk.run_relaxation", side_effect=fake_run_relaxation):
+            with patch.object(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)]):
+                vpmdk.main()
+
+    assert ((seen["scaled"] >= 0) & (seen["scaled"] < 1)).all()
+
+
+def test_run_relaxation_wraps_on_write(tmp_path: Path):
+    poscar = """Cu
+1.0
+ 1 0 0
+ 0 1 0
+ 0 0 1
+ Cu
+ 1
+Direct
+ 1.2 0.3 0.4
+"""
+    structure = Poscar.from_str(poscar).structure
+    atoms = AseAtomsAdaptor.get_atoms(structure)
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with patch("ase.optimize.bfgs.BFGS.run", lambda self, *a, **k: None):
+            vpmdk.run_relaxation(atoms, EMT(), steps=0, fmax=0.01)
+    finally:
+        os.chdir(cwd)
+
+    contcar = (tmp_path / "CONTCAR").read_text().splitlines()
+    start = contcar.index("Direct") + 1
+    coords = [list(map(float, line.split())) for line in contcar[start:start + len(atoms)]]
+    for c in coords:
+        assert all(0 <= x < 1 for x in c)

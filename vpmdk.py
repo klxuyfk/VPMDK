@@ -146,7 +146,8 @@ def run_relaxation(atoms, calculator, steps: int, fmax: float, write_energy_csv:
     if write_energy_csv:
         dyn.attach(lambda: energies.append(atoms.get_potential_energy()))
     dyn.run(fmax=fmax, steps=steps)
-    write("CONTCAR", atoms)
+    atoms.wrap()
+    write("CONTCAR", atoms, direct=True)
     if write_energy_csv:
         with open("energy.csv", "w", newline="") as csvfile:
             writer = csv.writer(csvfile)
@@ -161,8 +162,10 @@ def run_md(atoms, calculator, steps: int, temperature: float, timestep: float):
     dyn = VelocityVerlet(atoms, timestep * units.fs, logfile="OUTCAR")
     for i in range(steps):
         dyn.run(1)
-        write("XDATCAR", atoms, append=i > 0)
-    write("CONTCAR", atoms)
+        atoms.wrap()
+        write("XDATCAR", atoms, direct=True, append=i > 0)
+    atoms.wrap()
+    write("CONTCAR", atoms, direct=True)
     return atoms.get_potential_energy()
 
 
@@ -187,6 +190,7 @@ def main():
 
     structure = read_structure(poscar_path, potcar_path if os.path.exists(potcar_path) else None)
     atoms = AseAtomsAdaptor.get_atoms(structure)
+    atoms.wrap()
 
     incar = Incar.from_file(incar_path) if os.path.exists(incar_path) else {}
     bcar = parse_key_value_file(bcar_path) if os.path.exists(bcar_path) else {}
