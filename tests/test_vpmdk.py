@@ -204,6 +204,6 @@ Direct
     finally:
         os.chdir(cwd)
 
-    from ase.filters import UnitCellFilter
+    from ase.constraints import UnitCellFilter
 
     assert isinstance(captured["obj"], UnitCellFilter)

@@ -37,7 +37,7 @@ except Exception:  # pragma: no cover - optional dependency
 from ase import units
 from ase.io import write
 from ase.optimize import BFGS
-from ase.filters import UnitCellFilter
+from ase.constraints import UnitCellFilter
 from ase.md.verlet import VelocityVerlet
 from ase.md import velocitydistribution
 
