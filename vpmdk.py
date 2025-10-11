@@ -37,6 +37,7 @@ except Exception:  # pragma: no cover - optional dependency
 from ase import units
 from ase.io import write
 from ase.optimize import BFGS
+from ase.constraints import UnitCellFilter
 from ase.md.verlet import VelocityVerlet
 from ase.md import velocitydistribution
 
@@ -139,21 +140,32 @@ def run_single_point(atoms, calculator):
     return e
 
 
-def run_relaxation(atoms, calculator, steps: int, fmax: float, write_energy_csv: bool = False):
+def run_relaxation(
+    atoms,
+    calculator,
+    steps: int,
+    fmax: float,
+    write_energy_csv: bool = False,
+    isif: int = 2,
+):
     atoms.calc = calculator
     energies = []
-    dyn = BFGS(atoms, logfile="OUTCAR")
+    relax_object = atoms
+    if isif == 3:
+        relax_object = UnitCellFilter(atoms)
+    dyn = BFGS(relax_object, logfile="OUTCAR")
     if write_energy_csv:
         dyn.attach(lambda: energies.append(atoms.get_potential_energy()))
     dyn.run(fmax=fmax, steps=steps)
-    atoms.wrap()
-    write("CONTCAR", atoms, direct=True)
+    target_atoms = getattr(relax_object, "atoms", atoms)
+    target_atoms.wrap()
+    write("CONTCAR", target_atoms, direct=True)
     if write_energy_csv:
         with open("energy.csv", "w", newline="") as csvfile:
             writer = csv.writer(csvfile)
             for energy in energies:
                 writer.writerow([energy])
-    return atoms.get_potential_energy()
+    return target_atoms.get_potential_energy()
 
 
 def run_md(atoms, calculator, steps: int, temperature: float, timestep: float):
@@ -206,6 +218,13 @@ def main():
     nsw = int(incar.get("NSW", 0)) if hasattr(incar, "get") else 0
     ibrion = int(incar.get("IBRION", -1)) if hasattr(incar, "get") else -1
     ediffg = float(incar.get("EDIFFG", -0.02)) if hasattr(incar, "get") else -0.02
+    isif = int(incar.get("ISIF", 2)) if hasattr(incar, "get") else 2
+
+    if isif not in (2, 3):
+        print(
+            f"Warning: ISIF={isif} is not fully supported; defaulting to ISIF=2 behavior."
+        )
+        isif = 2
 
     if nsw <= 0:
         run_single_point(atoms, calculator)
@@ -214,7 +233,7 @@ def main():
         potim = float(incar.get("POTIM", 2))
         run_md(atoms, calculator, nsw, tebeg, potim)
     else:
-        run_relaxation(atoms, calculator, nsw, abs(ediffg), write_energy_csv)
+        run_relaxation(atoms, calculator, nsw, abs(ediffg), write_energy_csv, isif=isif)
 
     print("Calculation completed.")
 

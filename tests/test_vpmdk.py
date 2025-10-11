@@ -48,10 +48,11 @@ def test_relaxation_runs(tmp_path: Path):
 
     called = {}
 
-    def fake_run_relaxation(atoms, calculator, steps, fmax, write_energy_csv=False):
+    def fake_run_relaxation(atoms, calculator, steps, fmax, write_energy_csv=False, isif=2):
         called["steps"] = steps
         called["fmax"] = fmax
         called["write"] = write_energy_csv
+        called["isif"] = isif
         return 0.0
 
     with patch("vpmdk.get_calculator", return_value=EMT()):
@@ -62,6 +63,7 @@ def test_relaxation_runs(tmp_path: Path):
     assert called["steps"] == 100
     assert abs(called["fmax"] - 0.01) < 1e-6
     assert called["write"] is False
+    assert called["isif"] == 3
 
 
 def test_all_potentials_give_same_relax(tmp_path: Path):
@@ -70,9 +72,10 @@ def test_all_potentials_give_same_relax(tmp_path: Path):
 
     results = []
 
-    def fake_run_relaxation(atoms, calculator, steps, fmax, write_energy_csv=False):
+    def fake_run_relaxation(atoms, calculator, steps, fmax, write_energy_csv=False, isif=2):
         # store a copy of positions for comparison
         results.append(atoms.get_positions().copy())
+        assert isif == 3
         return 0.0
 
     potentials = ["CHGNET", "MATGL", "MACE", "MATTERSIM"]
@@ -94,8 +97,9 @@ def test_energy_csv_flag(tmp_path: Path):
 
     called = {}
 
-    def fake_run_relaxation(atoms, calculator, steps, fmax, write_energy_csv=False):
+    def fake_run_relaxation(atoms, calculator, steps, fmax, write_energy_csv=False, isif=2):
         called["write"] = write_energy_csv
+        called["isif"] = isif
         return 0.0
 
     with patch("vpmdk.get_calculator", return_value=EMT()):
@@ -104,6 +108,7 @@ def test_energy_csv_flag(tmp_path: Path):
                 vpmdk.main()
 
     assert called["write"] is True
+    assert called["isif"] == 3
 
 
 def test_fractional_coords_wrapped(tmp_path: Path):
@@ -123,8 +128,9 @@ Direct
 
     seen = {}
 
-    def fake_run_relaxation(atoms, calculator, steps, fmax, write_energy_csv=False):
+    def fake_run_relaxation(atoms, calculator, steps, fmax, write_energy_csv=False, isif=2):
         seen["scaled"] = atoms.get_scaled_positions(wrap=False).copy()
+        assert isif == 2
         return 0.0
 
     with patch("vpmdk.get_calculator", return_value=EMT()):
@@ -162,3 +168,42 @@ Direct
     coords = [list(map(float, line.split())) for line in contcar[start:start + len(atoms)]]
     for c in coords:
         assert all(0 <= x < 1 for x in c)
+
+
+def test_run_relaxation_isif3_uses_unit_cell_filter(tmp_path: Path):
+    poscar = """Cu
+1.0
+ 1 0 0
+ 0 1 0
+ 0 0 1
+ Cu
+ 1
+Direct
+ 0.1 0.2 0.3
+"""
+    structure = Poscar.from_str(poscar).structure
+    atoms = AseAtomsAdaptor.get_atoms(structure)
+
+    captured = {}
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            captured["obj"] = obj
+
+        def attach(self, *args, **kwargs):
+            pass
+
+        def run(self, *args, **kwargs):
+            pass
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with patch("vpmdk.BFGS", DummyBFGS):
+            vpmdk.run_relaxation(atoms, EMT(), steps=1, fmax=0.01, isif=3)
+    finally:
+        os.chdir(cwd)
+
+    from ase.constraints import UnitCellFilter
+
+    assert isinstance(captured["obj"], UnitCellFilter)
