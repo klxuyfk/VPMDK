@@ -221,7 +221,10 @@ def main():
     isif = int(incar.get("ISIF", 2)) if hasattr(incar, "get") else 2
 
     if isif not in (2, 3):
-        print(f"Warning: ISIF={isif} is not fully supported; defaulting to ISIF=2 behavior.")
+        print(
+            f"Warning: ISIF={isif} is not fully supported; defaulting to ISIF=2 behavior."
+        )
+        isif = 2
 
     if nsw <= 0:
         run_single_point(atoms, calculator)
