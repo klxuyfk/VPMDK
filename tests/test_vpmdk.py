@@ -1,209 +1,325 @@
+from __future__ import annotations
+
 from pathlib import Path
-import os, sys
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from unittest.mock import patch
-from ase.calculators.emt import EMT
+import sys
+import types
+
+import numpy as np
+import pytest
+from ase import Atoms
+from ase.calculators.calculator import Calculator, all_changes
+
+if "pymatgen" not in sys.modules:
+    pymatgen_module = types.ModuleType("pymatgen")
+    sys.modules["pymatgen"] = pymatgen_module
+    io_module = types.ModuleType("pymatgen.io")
+    sys.modules["pymatgen.io"] = io_module
+    vasp_module = types.ModuleType("pymatgen.io.vasp")
+    sys.modules["pymatgen.io.vasp"] = vasp_module
+    ase_module = types.ModuleType("pymatgen.io.ase")
+    sys.modules["pymatgen.io.ase"] = ase_module
+
+    class _Structure:
+        def __init__(self, lattice, frac_coords, species):
+            self.lattice = np.array(lattice, dtype=float)
+            self.frac_coords = np.array(frac_coords, dtype=float)
+            self.species = list(species)
+
+    class Poscar:
+        def __init__(self, structure, site_symbols):
+            self._structure = structure
+            self._site_symbols = list(site_symbols)
+
+        @property
+        def structure(self):
+            return self._structure
+
+        @property
+        def site_symbols(self):
+            return self._site_symbols
+
+        @site_symbols.setter
+        def site_symbols(self, symbols):
+            self._site_symbols = list(symbols)
+
+        @classmethod
+        def from_file(cls, path):
+            with open(path) as f:
+                raw_lines = [line.strip() for line in f if line.strip()]
+            scale = float(raw_lines[1])
+            lattice = [list(map(float, raw_lines[i].split())) for i in range(2, 5)]
+            lattice = np.array(lattice) * scale
+            species_names = raw_lines[5].split()
+            counts = list(map(int, raw_lines[6].split()))
+            coord_start = 8
+            frac_coords = []
+            species = []
+            for name, count in zip(species_names, counts):
+                for _ in range(count):
+                    values = list(map(float, raw_lines[coord_start].split()[:3]))
+                    coord_start += 1
+                    frac_coords.append(values)
+                    species.append(name)
+            structure = _Structure(lattice, frac_coords, species)
+            poscar = cls(structure, species_names)
+            return poscar
+
+        @classmethod
+        def from_str(cls, content):
+            tmp = Path("poscar.tmp")
+            tmp.write_text(content)
+            try:
+                return cls.from_file(tmp)
+            finally:
+                tmp.unlink()
+
+    class Incar(dict):
+        @classmethod
+        def from_file(cls, path):
+            data = cls()
+            with open(path) as f:
+                for line in f:
+                    line = line.split("#")[0].strip()
+                    if not line or "=" not in line:
+                        continue
+                    key, value = line.split("=", 1)
+                    data[key.strip().upper()] = value.strip().split()[0]
+            return data
+
+    class Potcar:
+        def __init__(self, symbols):
+            self.symbols = symbols
+
+        @classmethod
+        def from_file(cls, path):
+            with open(path) as f:
+                lines = [line.strip() for line in f if line.strip()]
+            symbols = [line for line in lines if line.isalpha()]
+            return cls(symbols)
+
+    class AseAtomsAdaptor:
+        @staticmethod
+        def get_atoms(structure):
+            return Atoms(
+                symbols=structure.species,
+                cell=structure.lattice,
+                scaled_positions=structure.frac_coords,
+                pbc=True,
+            )
+
+    vasp_module.Poscar = Poscar
+    vasp_module.Incar = Incar
+    vasp_module.Potcar = Potcar
+    ase_module.AseAtomsAdaptor = AseAtomsAdaptor
+
 from pymatgen.io.vasp import Poscar
 from pymatgen.io.ase import AseAtomsAdaptor
-import vpmdk
 
-POSCAR_CONTENT = """Si2
-1.0
-        3.8669745922         0.0000000000         0.0000000000
-        1.9334872961         3.3488982326         0.0000000000
-        1.9334872961         1.1162994109         3.1573715331
-   Si
-    2
-Direct
-     0.749999979         0.749999983         0.749999997
-     0.500000007         0.499999989         0.499999998
-"""
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import vpmdk  # noqa: E402
 
-INCAR_CONTENT = """Global Parameters
-ISTART =  1            (Read existing wavefunction, if there)
-ISPIN  =  1            (Non-Spin polarised DFT)
-LREAL  = .FALSE.       (Projection operators: automatic)
-LWAVE  = .TRUE.        (Write WAVECAR or not)
-LCHARG = .TRUE.        (Write CHGCAR or not)
-ADDGRID= .TRUE.        (Increase grid, helps GGA convergence)
-Electronic Relaxation
-ISMEAR =  0            (Gaussian smearing, metals:1)
-SIGMA  =  0.05         (Smearing value in eV, metals:0.2)
-NELM   =  90           (Max electronic SCF steps)
-NELMIN =  6            (Min electronic SCF steps)
-EDIFF  =  1E-08        (SCF energy convergence, in eV)
-Ionic Relaxation
-NSW    =  100          (Max ionic steps)
-IBRION =  2            (Algorithm: 0-MD, 1-Quasi-New, 2-CG)
-ISIF   =  3            (Stress/relaxation: 2-Ions, 3-Shape/Ions/V, 4-Shape/Ions)
-EDIFFG = -1E-02        (Ionic convergence, eV/AA)
-"""
-
-BCAR_CONTENT = "NNP=CHGNET\n"
-
-def test_relaxation_runs(tmp_path: Path):
-    (tmp_path / "POSCAR").write_text(POSCAR_CONTENT)
-    (tmp_path / "INCAR").write_text(INCAR_CONTENT)
-    (tmp_path / "BCAR").write_text(BCAR_CONTENT)
-
-    called = {}
-
-    def fake_run_relaxation(atoms, calculator, steps, fmax, write_energy_csv=False, isif=2):
-        called["steps"] = steps
-        called["fmax"] = fmax
-        called["write"] = write_energy_csv
-        called["isif"] = isif
-        return 0.0
-
-    with patch("vpmdk.get_calculator", return_value=EMT()):
-        with patch("vpmdk.run_relaxation", side_effect=fake_run_relaxation):
-            with patch.object(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)]):
-                vpmdk.main()
-
-    assert called["steps"] == 100
-    assert abs(called["fmax"] - 0.01) < 1e-6
-    assert called["write"] is False
-    assert called["isif"] == 3
+DATA_DIR = Path(__file__).resolve().parent
 
 
-def test_all_potentials_give_same_relax(tmp_path: Path):
-    (tmp_path / "POSCAR").write_text(POSCAR_CONTENT)
-    (tmp_path / "INCAR").write_text(INCAR_CONTENT)
+class DummyCalculator(Calculator):
+    """Lightweight calculator returning constant energy."""
 
-    results = []
+    implemented_properties = ["energy", "forces", "stress"]
 
-    def fake_run_relaxation(atoms, calculator, steps, fmax, write_energy_csv=False, isif=2):
-        # store a copy of positions for comparison
-        results.append(atoms.get_positions().copy())
-        assert isif == 3
-        return 0.0
+    def __init__(self):
+        super().__init__()
+        self.called = 0
 
-    potentials = ["CHGNET", "MATGL", "MACE", "MATTERSIM"]
-    for pot in potentials:
-        (tmp_path / "BCAR").write_text(f"NNP={pot}\n")
-        with patch("vpmdk.get_calculator", return_value=EMT()):
-            with patch("vpmdk.run_relaxation", side_effect=fake_run_relaxation):
-                with patch.object(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)]):
-                    vpmdk.main()
-
-    for r in results[1:]:
-        assert ((results[0] - r) ** 2).sum() < 1e-12
-
-
-def test_energy_csv_flag(tmp_path: Path):
-    (tmp_path / "POSCAR").write_text(POSCAR_CONTENT)
-    (tmp_path / "INCAR").write_text(INCAR_CONTENT)
-    (tmp_path / "BCAR").write_text(BCAR_CONTENT + "WRITE_ENERGY_CSV=1\n")
-
-    called = {}
-
-    def fake_run_relaxation(atoms, calculator, steps, fmax, write_energy_csv=False, isif=2):
-        called["write"] = write_energy_csv
-        called["isif"] = isif
-        return 0.0
-
-    with patch("vpmdk.get_calculator", return_value=EMT()):
-        with patch("vpmdk.run_relaxation", side_effect=fake_run_relaxation):
-            with patch.object(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)]):
-                vpmdk.main()
-
-    assert called["write"] is True
-    assert called["isif"] == 3
+    def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+        super().calculate(atoms, properties, system_changes)
+        self.called += 1
+        if atoms is not None:
+            forces = atoms.get_positions() * 0.0
+        else:
+            forces = []
+        self.results = {
+            "energy": 0.5,
+            "forces": forces,
+            "stress": [0.0] * 6,
+        }
 
 
-def test_fractional_coords_wrapped(tmp_path: Path):
-    poscar = """Si
-1.0
- 1 0 0
- 0 1 0
- 0 0 1
- Si
- 1
-Direct
- 1.1 0.2 0.3
-"""
-    (tmp_path / "POSCAR").write_text(poscar)
-    (tmp_path / "INCAR").write_text("NSW=1\nIBRION=2\n")
-    (tmp_path / "BCAR").write_text(BCAR_CONTENT)
+def prepare_inputs(
+    tmp_path: Path,
+    *,
+    potential: str = "CHGNET",
+    incar_overrides: dict[str, str] | None = None,
+    extra_bcar: dict[str, str] | None = None,
+) -> None:
+    """Copy canonical POSCAR/INCAR/BCAR into ``tmp_path`` with overrides."""
 
-    seen = {}
+    (tmp_path / "POSCAR").write_text((DATA_DIR / "POSCAR").read_text())
 
-    def fake_run_relaxation(atoms, calculator, steps, fmax, write_energy_csv=False, isif=2):
-        seen["scaled"] = atoms.get_scaled_positions(wrap=False).copy()
-        assert isif == 2
-        return 0.0
+    incar_lines = (DATA_DIR / "INCAR").read_text().splitlines()
+    if incar_overrides:
+        for key, value in incar_overrides.items():
+            incar_lines.append(f"{key} = {value}")
+    (tmp_path / "INCAR").write_text("\n".join(incar_lines) + "\n")
 
-    with patch("vpmdk.get_calculator", return_value=EMT()):
-        with patch("vpmdk.run_relaxation", side_effect=fake_run_relaxation):
-            with patch.object(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)]):
-                vpmdk.main()
+    bcar_lines = (DATA_DIR / "BCAR").read_text().splitlines()
+    replaced = False
+    for idx, line in enumerate(bcar_lines):
+        if line.startswith("NNP="):
+            bcar_lines[idx] = f"NNP={potential.upper()}"
+            replaced = True
+    if not replaced:
+        bcar_lines.append(f"NNP={potential.upper()}")
+    if extra_bcar:
+        for key, value in extra_bcar.items():
+            bcar_lines.append(f"{key}={value}")
+    (tmp_path / "BCAR").write_text("\n".join(bcar_lines) + "\n")
 
-    assert ((seen["scaled"] >= 0) & (seen["scaled"] < 1)).all()
 
+@pytest.mark.parametrize("potential", ["CHGNET", "MATGL", "MACE", "MATTERSIM"])
+def test_single_point_energy_for_all_potentials(tmp_path: Path, potential: str):
+    prepare_inputs(tmp_path, potential=potential, incar_overrides={"NSW": "0"})
 
-def test_run_relaxation_wraps_on_write(tmp_path: Path):
-    poscar = """Cu
-1.0
- 1 0 0
- 0 1 0
- 0 0 1
- Cu
- 1
-Direct
- 1.2 0.3 0.4
-"""
-    structure = Poscar.from_str(poscar).structure
-    atoms = AseAtomsAdaptor.get_atoms(structure)
+    created: list[tuple[str, DummyCalculator]] = []
 
-    cwd = os.getcwd()
-    os.chdir(tmp_path)
+    def factory(name: str):
+        calc = DummyCalculator()
+        created.append((name, calc))
+        return calc
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(vpmdk, "CHGNetCalculator", lambda *a, **k: factory("CHGNET"))
+    mp.setattr(vpmdk, "M3GNetCalculator", lambda *a, **k: factory("MATGL"))
+    mp.setattr(vpmdk, "MACECalculator", lambda *a, **k: factory("MACE"))
+    mp.setattr(vpmdk, "MatterSimCalculator", lambda *a, **k: factory("MATTERSIM"))
+    mp.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
     try:
-        with patch("ase.optimize.bfgs.BFGS.run", lambda self, *a, **k: None):
-            vpmdk.run_relaxation(atoms, EMT(), steps=0, fmax=0.01)
+        vpmdk.main()
     finally:
-        os.chdir(cwd)
+        mp.undo()
 
-    contcar = (tmp_path / "CONTCAR").read_text().splitlines()
-    start = contcar.index("Direct") + 1
-    coords = [list(map(float, line.split())) for line in contcar[start:start + len(atoms)]]
-    for c in coords:
-        assert all(0 <= x < 1 for x in c)
+    assert created and created[-1][0] == potential
+    assert created[-1][1].called == 1
 
 
-def test_run_relaxation_isif3_uses_unit_cell_filter(tmp_path: Path):
-    poscar = """Cu
-1.0
- 1 0 0
- 0 1 0
- 0 0 1
- Cu
- 1
-Direct
- 0.1 0.2 0.3
-"""
-    structure = Poscar.from_str(poscar).structure
+def load_atoms():
+    structure = Poscar.from_file(DATA_DIR / "POSCAR").structure
     atoms = AseAtomsAdaptor.get_atoms(structure)
+    atoms.wrap()
+    return atoms
 
-    captured = {}
+
+def arrays_close(a, b, tol: float = 1e-8) -> bool:
+    return float(((a - b) ** 2).sum()) <= tol
+
+
+def test_relaxation_isif2_moves_ions_without_changing_cell(tmp_path: Path):
+    atoms = load_atoms()
+    initial_positions = atoms.get_positions().copy()
+    initial_cell = atoms.cell.array.copy()
 
     class DummyBFGS:
         def __init__(self, obj, logfile=None):
-            captured["obj"] = obj
+            self.obj = obj
 
         def attach(self, *args, **kwargs):
             pass
 
         def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            target.positions += 0.05
+
+    mp = pytest.MonkeyPatch()
+    mp.chdir(tmp_path)
+    mp.setattr(vpmdk, "BFGS", DummyBFGS)
+    mp.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_relaxation(atoms, DummyCalculator(), steps=2, fmax=0.01, isif=2)
+    finally:
+        mp.undo()
+
+    assert not arrays_close(atoms.get_positions(), initial_positions)
+    assert arrays_close(atoms.cell.array, initial_cell)
+
+
+def test_relaxation_isif3_moves_ions_and_cell(tmp_path: Path):
+    atoms = load_atoms()
+    initial_positions = atoms.get_positions().copy()
+    initial_cell = atoms.cell.array.copy()
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+
+        def attach(self, *args, **kwargs):
             pass
 
-    cwd = os.getcwd()
-    os.chdir(tmp_path)
+        def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            target.positions += 0.05
+            new_cell = target.cell.array * 1.01
+            target.set_cell(new_cell, scale_atoms=False)
+
+    mp = pytest.MonkeyPatch()
+    mp.chdir(tmp_path)
+    mp.setattr(vpmdk, "BFGS", DummyBFGS)
+    mp.setattr(vpmdk, "write", lambda *a, **k: None)
     try:
-        with patch("vpmdk.BFGS", DummyBFGS):
-            vpmdk.run_relaxation(atoms, EMT(), steps=1, fmax=0.01, isif=3)
+        vpmdk.run_relaxation(atoms, DummyCalculator(), steps=2, fmax=0.01, isif=3)
     finally:
-        os.chdir(cwd)
+        mp.undo()
 
-    from ase.constraints import UnitCellFilter
+    assert not arrays_close(atoms.get_positions(), initial_positions)
+    assert not arrays_close(atoms.cell.array, initial_cell)
 
-    assert isinstance(captured["obj"], UnitCellFilter)
+
+def test_run_md_executes_multiple_steps(tmp_path: Path):
+    atoms = load_atoms()
+
+    class DummyVerlet:
+        def __init__(self, atoms, timestep, logfile=None):
+            self.atoms = atoms
+            self.timestep = timestep
+            self.steps = []
+
+        def run(self, n):
+            self.steps.append(n)
+            self.atoms.positions += 0.01
+
+    written = []
+
+    mp = pytest.MonkeyPatch()
+    mp.chdir(tmp_path)
+    mp.setattr(vpmdk, "VelocityVerlet", DummyVerlet)
+    mp.setattr(vpmdk.velocitydistribution, "MaxwellBoltzmannDistribution", lambda *a, **k: None)
+    mp.setattr(vpmdk, "write", lambda filename, atoms, direct=True, append=False: written.append((filename, append)))
+    try:
+        energy = vpmdk.run_md(atoms, DummyCalculator(), steps=3, temperature=300, timestep=1.0)
+    finally:
+        mp.undo()
+
+    assert isinstance(energy, float)
+    assert written.count(("XDATCAR", False)) == 1
+    assert written.count(("XDATCAR", True)) == 2
+    assert ("CONTCAR", False) in written
+
+
+@pytest.mark.parametrize("isif, expected", [(2, 2), (3, 3)])
+def test_main_relaxation_respects_isif(tmp_path: Path, isif: int, expected: int):
+    prepare_inputs(tmp_path, potential="CHGNET", incar_overrides={"NSW": "2", "ISIF": str(isif)})
+
+    seen = {}
+
+    def fake_run_relaxation(atoms, calculator, steps, fmax, write_energy_csv=False, isif=2):
+        seen["isif"] = isif
+        return 0.0
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(vpmdk, "get_calculator", lambda *_: DummyCalculator())
+    mp.setattr(vpmdk, "run_relaxation", fake_run_relaxation)
+    mp.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        mp.undo()
+
+    assert seen["isif"] == expected
