@@ -1010,6 +1010,21 @@ def test_select_md_dynamics_andersen_uses_probability(monkeypatch):
     assert rescaled == [360.0]
 
 
+def test_select_md_dynamics_andersen_missing_dependency(monkeypatch):
+    atoms = load_atoms()
+    monkeypatch.setattr(vpmdk, "Andersen", None)
+
+    with pytest.raises(RuntimeError, match="Andersen thermostat requested"):
+        vpmdk._select_md_dynamics(
+            atoms,
+            mdalgo=1,
+            timestep=1.0,
+            initial_temperature=300.0,
+            smass=None,
+            thermostat_params={},
+        )
+
+
 def test_select_md_dynamics_langevin_converts_gamma(monkeypatch):
     atoms = load_atoms()
     captured: dict[str, object] = {}
@@ -1056,3 +1071,48 @@ def test_select_md_dynamics_langevin_converts_gamma(monkeypatch):
     updater(325.0)
     assert captured["updates"] == [325.0]
     assert rescaled == [325.0]
+
+
+def test_select_md_dynamics_langevin_missing_dependency(monkeypatch):
+    atoms = load_atoms()
+    monkeypatch.setattr(vpmdk, "Langevin", None)
+
+    with pytest.raises(RuntimeError, match="Langevin thermostat requested"):
+        vpmdk._select_md_dynamics(
+            atoms,
+            mdalgo=3,
+            timestep=1.0,
+            initial_temperature=300.0,
+            smass=None,
+            thermostat_params={},
+        )
+
+
+def test_select_md_dynamics_nose_hoover_missing_dependency(monkeypatch):
+    atoms = load_atoms()
+    monkeypatch.setattr(vpmdk, "NoseHooverChainNVT", None)
+
+    with pytest.raises(RuntimeError, match="Nose-Hoover thermostat requested"):
+        vpmdk._select_md_dynamics(
+            atoms,
+            mdalgo=2,
+            timestep=1.0,
+            initial_temperature=300.0,
+            smass=None,
+            thermostat_params={},
+        )
+
+
+def test_select_md_dynamics_csvr_missing_dependency(monkeypatch):
+    atoms = load_atoms()
+    monkeypatch.setattr(vpmdk, "Bussi", None)
+
+    with pytest.raises(RuntimeError, match="CSVR thermostat requested"):
+        vpmdk._select_md_dynamics(
+            atoms,
+            mdalgo=5,
+            timestep=1.0,
+            initial_temperature=300.0,
+            smass=None,
+            thermostat_params={},
+        )
