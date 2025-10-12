@@ -6,7 +6,6 @@ VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is 
 
 *Not affiliated with, endorsed by, or a replacement for VASP; “VASP” is a trademark of its respective owner. VPMDK only mimics VASP I/O conventions for compatibility.*
 
-
 ## Usage
 
 1. Prepare a directory containing at least `POSCAR`. Optional files are
@@ -15,9 +14,9 @@ VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is 
    wish to use, `chgnet`, `mattersim`, `mace-torch` or `matgl`.
 3. Run:
 
-```bash
-python vpmdk.py --dir PATH_TO_INPUT
-```
+   ```bash
+   python vpmdk.py --dir PATH_TO_INPUT
+   ```
 
 If `--dir` is omitted, the current directory (`.`) is used.
 
@@ -34,14 +33,34 @@ Calculation directories may contain the following files:
 
 The script reads a subset of common VASP `INCAR` settings. Other tags are ignored with a warning.
 
-| Tag | Meaning |
-|-----|--------|
-| `NSW` | Number of ionic steps. Defaults to `0` (single-point calculation). |
-| `IBRION` | Ionic movement algorithm. `0` runs molecular dynamics, any other value triggers a BFGS geometry optimisation with a fixed cell. Defaults to `-1`. |
-| `ISIF` | Controls whether the cell changes during relaxations. `2` keeps the cell fixed (default), `3` relaxes both ions and the unit cell. Other values fall back with a warning (e.g. `4/5→3`, `7→6`, `8→2`). |
-| `EDIFFG` | Convergence threshold for relaxations in eV/Å. Defaults to `-0.02`. |
-| `TEBEG` | Initial temperature in kelvin for molecular dynamics (`IBRION=0`). Defaults to `300`. |
-| `POTIM` | Time step in femtoseconds for molecular dynamics (`IBRION=0`). Defaults to `2`. |
+| Tag | Meaning | Default / Notes |
+|-----|---------|-----------------|
+| `NSW` | Number of ionic steps. | `0` (single-point calculation). |
+| `IBRION` | Ionic movement algorithm. | `0` runs molecular dynamics, any other value triggers a BFGS geometry optimisation with a fixed cell. Defaults to `-1`. |
+| `ISIF` | Controls whether the cell changes during relaxations. | `2` keeps the cell fixed (default), `3` relaxes both ions and the unit cell. Unsupported values fall back with a warning (`4/5→3`, `7→6`, `8→2`). |
+| `EDIFFG` | Convergence threshold for relaxations in eV/Å. | `-0.02`. |
+| `TEBEG` | Initial temperature in kelvin for molecular dynamics (`IBRION=0`). | `300`. |
+| `TEEND` | Final temperature in kelvin when ramping MD runs. | Same as `TEBEG`. Temperature is linearly ramped between `TEBEG` and `TEEND` over the MD steps. |
+| `POTIM` | Time step in femtoseconds for molecular dynamics (`IBRION=0`). | `2`. |
+| `MDALGO` | Selects the MD integrator / thermostat. | `0` (NVE). See [MD algorithms](#md-algorithms) for details. |
+| `SMASS` | Thermostat-specific mass parameter. | Used for Nose–Hoover time constant (`|SMASS|` fs) or as a fallback to set `LANGEVIN_GAMMA` when negative. |
+| `ANDERSEN_PROB` | Collision probability for the Andersen thermostat. | `0.1`. Only used with `MDALGO=1`. |
+| `LANGEVIN_GAMMA` | Friction coefficient (1/ps) for Langevin dynamics. | `1.0`. Only used with `MDALGO=3`; falls back to `|SMASS|` when `SMASS<0`. |
+| `CSVR_PERIOD` | Relaxation time (fs) for the canonical sampling velocity rescaling thermostat. | `max(100×POTIM, POTIM)`. Only used with `MDALGO=5`. |
+| `NHC_NCHAINS` | Nose–Hoover chain length. | `1` for `MDALGO=2`, `3` for `MDALGO=4`. |
+
+### MD algorithms
+
+`MDALGO` selects between different ASE molecular dynamics drivers. Some options require optional ASE modules; if they are missing VPMDK falls back to plain velocity-Verlet (NVE) integration and prints a warning.
+
+| `MDALGO` | Integrator | Notes |
+|---------:|-----------|-------|
+| `0` | Velocity-Verlet (NVE) | No thermostat. |
+| `1` | Andersen thermostat | Controlled by `ANDERSEN_PROB`. |
+| `2` | Nose–Hoover chain (single thermostat) | Uses `SMASS`/`NHC_NCHAINS` to configure the chain. |
+| `3` | Langevin thermostat | Uses `LANGEVIN_GAMMA` (or `|SMASS|` if negative). |
+| `4` | Nose–Hoover chain (three thermostats) | Chain length defaults to 3 unless overridden. |
+| `5` | Bussi (canonical sampling velocity rescaling) thermostat | Uses `CSVR_PERIOD`. |
 
 ### BCAR tags
 
@@ -79,14 +98,18 @@ Final energies are also printed to the console for single-point calculations.
 ### Required Python modules
 
 `ase` and `pymatgen` are always required. Additional modules depend on the
-selected potential:
+selected potential or thermostat:
 
-| Potential        | Module to install        | Notes |
-|------------------|--------------------------|-------|
-| CHGNet           | `chgnet` (uses PyTorch)  | Bundled with a default model; specify `MODEL` to use another |
-| MatGL (M3GNet)   | `matgl` (uses JAX)       | Bundled with a default model; specify `MODEL` to use another |
-| MACE             | `mace-torch` (PyTorch)   | Set `MODEL` to a trained `.model` file |
-| MatterSim        | `mattersim` (PyTorch)    | Set `MODEL` to the trained parameters |
+| Feature | Module to install | Notes |
+|---------|-------------------|-------|
+| CHGNet potential | `chgnet` (uses PyTorch) | Bundled with a default model; specify `MODEL` to use another |
+| MatGL (M3GNet) potential | `matgl` (uses JAX) | Bundled with a default model; specify `MODEL` to use another |
+| MACE potential | `mace-torch` (PyTorch) | Set `MODEL` to a trained `.model` file |
+| MatterSim potential | `mattersim` (PyTorch) | Set `MODEL` to the trained parameters |
+| Andersen thermostat | `ase.md.andersen` (part of ASE extras) | Install ASE with MD extras to enable |
+| Langevin thermostat | `ase.md.langevin` | Ships with ASE; ensure ASE is up to date |
+| Bussi thermostat | `ase.md.bussi` | Included in ASE >= 3.22 |
+| Nose–Hoover chain thermostat | `ase.md.nose_hoover_chain` | Included in ASE >= 3.22 |
 
 Install each module using `pip install MODULE_NAME`. Install the GPU-enabled
 version of PyTorch or JAX if you want to use GPUs.
