@@ -70,11 +70,13 @@ The user selects a potential in `BCAR`, e.g. `NNP=CHGNET`, and runs:
 python vpmdk.py --dir calc_dir
 ```
 
-If the `INCAR` sets `IBRION=0`, the script carries out molecular dynamics for
-`NSW` steps at the temperature and timestep specified by `TEBEG` and `POTIM`. If
-`IBRION` is non-zero, it performs a geometry optimisation until the requested
-force convergence (`EDIFFG`) or step limit is reached, producing updated VASP
-outputs for further processing or submission to downstream workflows.
+If the `INCAR` sets `IBRION<0`, the script performs a single-point evaluation
+without moving ions, matching VASP's behaviour even when `NSW>0`. When
+`IBRION=0`, it carries out molecular dynamics for `NSW` steps at the
+temperature and timestep specified by `TEBEG` and `POTIM`. Positive `IBRION`
+values trigger a geometry optimisation until the requested force convergence
+(`EDIFFG`) or step limit is reached, producing updated VASP outputs for further
+processing or submission to downstream workflows.
 
 # Acknowledgements
 
