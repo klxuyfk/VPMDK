@@ -272,16 +272,13 @@ def _select_md_dynamics(
             dyn = Andersen(
                 atoms,
                 timestep_ase,
-                temperature_K=initial_temperature,
+                temperature=initial_temperature * units.kB,
                 andersen_prob=andersen_prob,
                 logfile="OUTCAR",
             )
 
             def update(temp: float) -> None:
-                try:
-                    dyn.set_temperature(temp)
-                except TypeError:
-                    dyn.set_temperature(temperature_K=temp)
+                dyn.set_temperature(temperature=temp * units.kB)
                 _rescale_velocities(atoms, temp)
 
             return dyn, update
@@ -295,17 +292,14 @@ def _select_md_dynamics(
         dyn = NoseHooverChainNVT(
             atoms,
             timestep=timestep_ase,
-            temperature_K=initial_temperature,
+            temperature=initial_temperature * units.kB,
             tdamp=tdamp_fs * units.fs,
             tchain=chain_length,
             logfile="OUTCAR",
         )
 
         def update(temp: float) -> None:
-            try:
-                dyn.set_temperature(temp)
-            except TypeError:
-                dyn.set_temperature(temperature_K=temp)
+            dyn.set_temperature(temperature=temp * units.kB)
             _rescale_velocities(atoms, temp)
 
         return dyn, update
@@ -331,13 +325,13 @@ def _select_md_dynamics(
             dyn = Langevin(
                 atoms,
                 timestep_ase,
-                temperature_K=initial_temperature,
+                temperature=initial_temperature * units.kB,
                 friction=friction,
                 logfile="OUTCAR",
             )
 
             def update(temp: float) -> None:
-                dyn.set_temperature(temperature_K=temp)
+                dyn.set_temperature(temperature=temp * units.kB)
                 _rescale_velocities(atoms, temp)
 
             return dyn, update
@@ -355,14 +349,17 @@ def _select_md_dynamics(
             dyn = Bussi(
                 atoms,
                 timestep_ase,
-                temperature_K=initial_temperature,
+                temperature=initial_temperature * units.kB,
                 taut=float(taut) * units.fs,
                 logfile="OUTCAR",
             )
 
             def update(temp: float) -> None:
-                dyn.temp = temp * units.kB
-                dyn.target_kinetic_energy = 0.5 * dyn.temp * dyn.ndof
+                try:
+                    dyn.set_temperature(temperature=temp * units.kB)
+                except AttributeError:
+                    dyn.temp = temp * units.kB
+                    dyn.target_kinetic_energy = 0.5 * dyn.temp * dyn.ndof
                 _rescale_velocities(atoms, temp)
 
             return dyn, update
