@@ -29,33 +29,29 @@ Many software packages and scripts exist for reaction-path exploration, structur
 
 ![Overview of `VPMDK`](fig1.png)
 
-# Software description
+# Major Features
 
-## Architecture
+VPMDK centres on a streamlined Python driver that mirrors the familiar VASP
+workflow while routing all expensive calculations through modern machine
+learning potentials. Run configuration is derived from the standard `INCAR`
+file, augmented by an optional `BCAR` control file that declares the desired
+potential, auxiliary parameters, and runtime switches using an intuitive
+`key=value` syntax. Atomic structures are ingested through pymatgen's robust
+POSCAR/POTCAR parsers and immediately converted to ASE atoms, ensuring
+consistency with existing VASP repositories.
 
-The main entry point (`vpmdk.py`) is a concise driver script that orchestrates
-four stages: parsing run configuration, preparing atomic structures, selecting a
-calculator, and executing the requested simulation mode. Configuration is
-collected from VASP `INCAR` and optional `BCAR` files, the latter using a simple
-`key=value` schema to select the potential, optional parameter files, and
-runtime toggles. Structures are read via pymatgen’s POSCAR and POTCAR handlers
-before being converted to ASE atoms. Depending on `IBRION` and `NSW`, the driver
-performs a single-point evaluation, a BFGS relaxation (optionally with cell
-optimisation via ASE’s `UnitCellFilter`), or a velocity Verlet
-molecular-dynamics trajectory. Outputs are written in standard VASP formats,
-enabling compatibility with downstream tooling for structural analysis or
-provenance tracking.
-
-## Functionality
-
-VPMDK abstracts over several state-of-the-art machine-learning potentials while
-maintaining a uniform interface for end users. Each potential is loaded on
-demand when requested, and informative errors are emitted if a dependency is
-missing. The driver also supports optional conveniences such as automatically
-wrapping fractional coordinates on output, writing per-step energies to CSV, and
-respecting a subset of VASP’s ionic relaxation parameters. The script purposely
-ignores electronic-structure-only settings, warning users about unsupported tags
-so that legacy `INCAR` files can be reused with minimal editing.
+Once configured, the driver dynamically loads the requested potential—CHGNet,
+M3GNet (via MatGL), MACE, or MatterSim—and exposes them through a unified
+interface. The simulation mode is automatically inferred from familiar VASP
+settings: negative `IBRION` triggers single-point evaluations, zero selects
+velocity-Verlet molecular dynamics with thermostatting via `TEBEG` and `POTIM`,
+and positive values launch BFGS relaxations optionally wrapped in ASE's
+`UnitCellFilter` for cell optimisation. Throughout a run the code preserves
+VASP-style artefacts, including `CONTCAR`, `OUTCAR`, and `XDATCAR`, enabling
+seamless hand-off to legacy analysis scripts. Supplementary conveniences such as
+automatic coordinate wrapping, per-step CSV energy dumps, and clear warnings for
+unsupported VASP flags help researchers transition existing workflows to machine
+learning potentials without sacrificing usability or provenance.
 
 # Example usage
 
