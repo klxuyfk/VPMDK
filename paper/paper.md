@@ -61,7 +61,7 @@ A typical workflow begins with a directory containing the familiar VASP files:
 
 ```bash
 $ ls calc_dir
-BCAR  INCAR  POSCAR  POTCAR
+BCAR  INCAR  POSCAR
 ```
 
 The user selects a potential in `BCAR`, e.g. `NNP=CHGNET`, and runs:
