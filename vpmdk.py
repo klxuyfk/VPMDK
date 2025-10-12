@@ -43,6 +43,26 @@ from ase.constraints import UnitCellFilter, StrainFilter
 from ase.md.verlet import VelocityVerlet
 from ase.md import velocitydistribution
 
+try:  # pragma: no cover - optional thermostat dependency
+    from ase.md.andersen import Andersen
+except Exception:  # pragma: no cover - handled dynamically
+    Andersen = None  # type: ignore
+
+try:  # pragma: no cover - optional thermostat dependency
+    from ase.md.langevin import Langevin
+except Exception:  # pragma: no cover - handled dynamically
+    Langevin = None  # type: ignore
+
+try:  # pragma: no cover - optional thermostat dependency
+    from ase.md.bussi import Bussi
+except Exception:  # pragma: no cover - handled dynamically
+    Bussi = None  # type: ignore
+
+try:  # pragma: no cover - optional thermostat dependency
+    from ase.md.nose_hoover_chain import NoseHooverChainNVT
+except Exception:  # pragma: no cover - handled dynamically
+    NoseHooverChainNVT = None  # type: ignore
+
 
 def parse_key_value_file(path: str) -> Dict[str, str]:
     """Parse simple key=value style file."""
@@ -175,14 +195,231 @@ def run_relaxation(
     return target_atoms.get_potential_energy()
 
 
-def run_md(atoms, calculator, steps: int, temperature: float, timestep: float):
+def _rescale_velocities(atoms, target_temperature: float) -> None:
+    """Scale velocities so that kinetic temperature approaches target."""
+
+    if target_temperature <= 0:
+        velocities = atoms.get_velocities()
+        if velocities is None:
+            zeros = [[0.0, 0.0, 0.0] for _ in range(len(atoms))]
+            atoms.set_velocities(zeros)
+        else:
+            atoms.set_velocities(velocities * 0.0)
+        return
+
+    ndof = getattr(atoms, "get_number_of_degrees_of_freedom", lambda: 0)()
+    if ndof <= 0:
+        velocitydistribution.MaxwellBoltzmannDistribution(
+            atoms, temperature_K=target_temperature
+        )
+        return
+
+    kinetic_energy = atoms.get_kinetic_energy()
+    if kinetic_energy <= 0:
+        velocitydistribution.MaxwellBoltzmannDistribution(
+            atoms, temperature_K=target_temperature
+        )
+        return
+
+    current_temperature = 2.0 * kinetic_energy / (ndof * units.kB)
+    if current_temperature <= 0:
+        velocitydistribution.MaxwellBoltzmannDistribution(
+            atoms, temperature_K=target_temperature
+        )
+        return
+
+    scaling = (target_temperature / current_temperature) ** 0.5
+    velocities = atoms.get_velocities()
+    if velocities is None:
+        velocitydistribution.MaxwellBoltzmannDistribution(
+            atoms, temperature_K=target_temperature
+        )
+        return
+    atoms.set_velocities(velocities * scaling)
+
+
+def _estimate_tdamp(smass: float | None, timestep: float) -> float:
+    """Return Nose-Hoover time constant (in fs)."""
+
+    if smass is None or smass == 0:
+        return max(100.0 * timestep, timestep)
+    return abs(smass)
+
+
+def _select_md_dynamics(
+    atoms,
+    mdalgo: int,
+    timestep: float,
+    initial_temperature: float,
+    smass: float | None,
+    thermostat_params: Dict[str, float],
+):
+    """Create ASE molecular dynamics driver and temperature updater."""
+
+    timestep_ase = timestep * units.fs
+
+    def default_update(temp: float) -> None:
+        _rescale_velocities(atoms, temp)
+
+    if mdalgo == 1:
+        if Andersen is None:
+            print(
+                "Warning: Andersen thermostat requested but unavailable; "
+                "falling back to NVE integration."
+            )
+        else:
+            andersen_prob = float(thermostat_params.get("ANDERSEN_PROB", 0.1))
+            dyn = Andersen(
+                atoms,
+                timestep_ase,
+                temperature_K=initial_temperature,
+                andersen_prob=andersen_prob,
+                logfile="OUTCAR",
+            )
+
+            def update(temp: float) -> None:
+                try:
+                    dyn.set_temperature(temperature_K=temp)
+                except TypeError:
+                    dyn.set_temperature(temp)
+                _rescale_velocities(atoms, temp)
+
+            return dyn, update
+
+    if mdalgo in (2, 4) and NoseHooverChainNVT is not None:
+        tdamp_fs = _estimate_tdamp(smass, timestep)
+        if mdalgo == 2:
+            chain_length = int(thermostat_params.get("NHC_NCHAINS", 1))
+        else:
+            chain_length = int(thermostat_params.get("NHC_NCHAINS", 3))
+        dyn = NoseHooverChainNVT(
+            atoms,
+            timestep=timestep_ase,
+            temperature_K=initial_temperature,
+            tdamp=tdamp_fs * units.fs,
+            tchain=chain_length,
+            logfile="OUTCAR",
+        )
+
+        def update(temp: float) -> None:
+            try:
+                dyn.set_temperature(temperature_K=temp)
+            except TypeError:
+                dyn.set_temperature(temp)
+            _rescale_velocities(atoms, temp)
+
+        return dyn, update
+    if mdalgo in (2, 4) and NoseHooverChainNVT is None and mdalgo != 0:
+        print(
+            "Warning: Nose-Hoover thermostat requested but unavailable; "
+            "falling back to NVE integration."
+        )
+
+    if mdalgo == 3:
+        if Langevin is None:
+            print(
+                "Warning: Langevin thermostat requested but unavailable; "
+                "falling back to NVE integration."
+            )
+        else:
+            gamma = thermostat_params.get("LANGEVIN_GAMMA")
+            if gamma is None and smass is not None and smass < 0:
+                gamma = abs(smass)
+            if gamma is None:
+                gamma = 1.0
+            friction = (float(gamma) / 1000.0) / units.fs
+            dyn = Langevin(
+                atoms,
+                timestep_ase,
+                temperature_K=initial_temperature,
+                friction=friction,
+                logfile="OUTCAR",
+            )
+
+            def update(temp: float) -> None:
+                try:
+                    dyn.set_temperature(temperature_K=temp)
+                except TypeError:
+                    dyn.set_temperature(temp)
+                _rescale_velocities(atoms, temp)
+
+            return dyn, update
+
+    if mdalgo == 5:
+        if Bussi is None:
+            print(
+                "Warning: CSVR thermostat requested but unavailable; "
+                "falling back to NVE integration."
+            )
+        else:
+            taut = thermostat_params.get("CSVR_PERIOD")
+            if taut is None:
+                taut = max(100.0 * timestep, timestep)
+            dyn = Bussi(
+                atoms,
+                timestep_ase,
+                temperature_K=initial_temperature,
+                taut=float(taut) * units.fs,
+                logfile="OUTCAR",
+            )
+
+            def update(temp: float) -> None:
+                try:
+                    dyn.set_temperature(temperature_K=temp)
+                except TypeError:
+                    dyn.set_temperature(temp)
+                except AttributeError:
+                    dyn.temp = temp * units.kB
+                    dyn.target_kinetic_energy = 0.5 * dyn.temp * dyn.ndof
+                _rescale_velocities(atoms, temp)
+
+            return dyn, update
+
+    dyn = VelocityVerlet(atoms, timestep_ase, logfile="OUTCAR")
+    return dyn, default_update
+
+
+def run_md(
+    atoms,
+    calculator,
+    steps: int,
+    temperature: float,
+    timestep: float,
+    *,
+    mdalgo: int = 0,
+    teend: float | None = None,
+    smass: float | None = None,
+    thermostat_params: Dict[str, float] | None = None,
+):
     atoms.calc = calculator
-    velocitydistribution.MaxwellBoltzmannDistribution(atoms, temperature_K=temperature)
-    dyn = VelocityVerlet(atoms, timestep * units.fs, logfile="OUTCAR")
+    if temperature <= 0:
+        velocities = atoms.get_velocities()
+        if velocities is None:
+            zeros = [[0.0, 0.0, 0.0] for _ in range(len(atoms))]
+            atoms.set_velocities(zeros)
+        else:
+            atoms.set_velocities(velocities * 0.0)
+    else:
+        velocitydistribution.MaxwellBoltzmannDistribution(
+            atoms, temperature_K=temperature
+        )
+    params = thermostat_params or {}
+    dyn, update_temperature = _select_md_dynamics(
+        atoms,
+        mdalgo,
+        timestep,
+        temperature,
+        smass,
+        params,
+    )
+    target_end = temperature if teend is None else teend
     for i in range(steps):
         dyn.run(1)
         atoms.wrap()
         write("XDATCAR", atoms, direct=True, append=i > 0)
+        if steps > 1 and i + 1 < steps and target_end != temperature:
+            next_temp = temperature + (target_end - temperature) * (i + 1) / (steps - 1)
+            update_temperature(next_temp)
     atoms.wrap()
     write("CONTCAR", atoms, direct=True)
     return atoms.get_potential_energy()
@@ -214,7 +451,21 @@ def main():
     incar = Incar.from_file(incar_path) if os.path.exists(incar_path) else {}
     bcar = parse_key_value_file(bcar_path) if os.path.exists(bcar_path) else {}
 
-    supported = {"ISIF", "IBRION", "NSW", "EDIFFG", "TEBEG", "POTIM"}
+    supported = {
+        "ISIF",
+        "IBRION",
+        "NSW",
+        "EDIFFG",
+        "TEBEG",
+        "TEEND",
+        "POTIM",
+        "MDALGO",
+        "SMASS",
+        "ANDERSEN_PROB",
+        "LANGEVIN_GAMMA",
+        "CSVR_PERIOD",
+        "NHC_NCHAINS",
+    }
     for k in getattr(incar, "keys", lambda: [])():
         if k not in supported:
             print(f"INCAR tag {k} is not supported and will be ignored")
@@ -268,8 +519,33 @@ def main():
         run_single_point(atoms, calculator)
     elif ibrion == 0:
         tebeg = float(incar.get("TEBEG", 300))
+        teend = float(incar.get("TEEND", tebeg))
         potim = float(incar.get("POTIM", 2))
-        run_md(atoms, calculator, nsw, tebeg, potim)
+        mdalgo = int(incar.get("MDALGO", 0))
+        smass = float(incar.get("SMASS")) if "SMASS" in incar else None
+        thermostat_params: Dict[str, float] = {}
+        for key in ("ANDERSEN_PROB", "LANGEVIN_GAMMA", "CSVR_PERIOD", "NHC_NCHAINS"):
+            if key in incar:
+                try:
+                    if key == "NHC_NCHAINS":
+                        thermostat_params[key] = float(int(incar[key]))
+                    else:
+                        thermostat_params[key] = float(incar[key])
+                except (TypeError, ValueError):
+                    print(
+                        f"Warning: Unable to parse {key}; ignoring value {incar[key]}"
+                    )
+        run_md(
+            atoms,
+            calculator,
+            nsw,
+            tebeg,
+            potim,
+            mdalgo=mdalgo,
+            teend=teend,
+            smass=smass,
+            thermostat_params=thermostat_params,
+        )
     else:
         run_relaxation(atoms, calculator, nsw, abs(ediffg), write_energy_csv, isif=isif)
 
