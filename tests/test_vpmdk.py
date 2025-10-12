@@ -393,6 +393,102 @@ def test_relaxation_isif3_applies_pstress(tmp_path: Path):
     assert pytest.approx(captured["scalar_pressure"], rel=1e-12) == expected
 
 
+def test_relaxation_isif4_uses_constant_volume_filter(tmp_path: Path):
+    atoms = load_atoms()
+    initial_constraints = list(atoms.constraints)
+    captured_kwargs: dict[str, object] = {}
+    seen_constraints: list[list[object]] = []
+
+    class DummyUnitCellFilter:
+        def __init__(self, atoms, **kwargs):
+            self.atoms = atoms
+            captured_kwargs.update(kwargs)
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+
+        def attach(self, *args, **kwargs):
+            pass
+
+        def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            seen_constraints.append(list(target.constraints))
+            target.positions += 0.01
+
+    mp = pytest.MonkeyPatch()
+    mp.chdir(tmp_path)
+    mp.setattr(vpmdk, "UnitCellFilter", lambda atoms, **kw: DummyUnitCellFilter(atoms, **kw))
+    mp.setattr(vpmdk, "BFGS", DummyBFGS)
+    mp.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_relaxation(
+            atoms,
+            DummyCalculator(),
+            steps=1,
+            fmax=0.01,
+            isif=4,
+            pstress=7.5,
+        )
+    finally:
+        mp.undo()
+
+    assert captured_kwargs.get("constant_volume") is True
+    expected_pressure = 7.5 * vpmdk.KBAR_TO_EV_PER_A3
+    assert pytest.approx(captured_kwargs.get("scalar_pressure", 0.0), rel=1e-12) == expected_pressure
+    assert captured_kwargs.get("hydrostatic_strain") in (None, False)
+    assert seen_constraints and seen_constraints[0] == initial_constraints
+    assert atoms.constraints == initial_constraints
+
+
+def test_relaxation_isif5_freezes_ions_constant_volume(tmp_path: Path):
+    atoms = load_atoms()
+    initial_constraints = list(atoms.constraints)
+    captured_kwargs: dict[str, object] = {}
+    seen_constraints: list[list[object]] = []
+
+    class DummyUnitCellFilter:
+        def __init__(self, atoms, **kwargs):
+            self.atoms = atoms
+            captured_kwargs.update(kwargs)
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+
+        def attach(self, *args, **kwargs):
+            pass
+
+        def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            seen_constraints.append(list(target.constraints))
+            new_cell = target.cell.array * 1.01
+            target.set_cell(new_cell, scale_atoms=True)
+
+    mp = pytest.MonkeyPatch()
+    mp.chdir(tmp_path)
+    mp.setattr(vpmdk, "UnitCellFilter", lambda atoms, **kw: DummyUnitCellFilter(atoms, **kw))
+    mp.setattr(vpmdk, "BFGS", DummyBFGS)
+    mp.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_relaxation(
+            atoms,
+            DummyCalculator(),
+            steps=1,
+            fmax=0.01,
+            isif=5,
+        )
+    finally:
+        mp.undo()
+
+    assert captured_kwargs.get("constant_volume") is True
+    assert pytest.approx(captured_kwargs.get("scalar_pressure", 0.0), rel=1e-12) == 0.0
+    assert captured_kwargs.get("hydrostatic_strain") in (None, False)
+    assert seen_constraints
+    assert any(isinstance(constraint, vpmdk.FixAtoms) for constraint in seen_constraints[0])
+    assert atoms.constraints == initial_constraints
+
+
 def test_relaxation_isif6_scales_cell_preserving_fractional_positions(tmp_path: Path):
     atoms = load_atoms()
     initial_positions = atoms.get_positions().copy()
@@ -428,6 +524,102 @@ def test_relaxation_isif6_scales_cell_preserving_fractional_positions(tmp_path: 
     assert not arrays_close(atoms.get_positions(), initial_positions)
     assert arrays_close(atoms.get_scaled_positions(), initial_scaled_positions)
     assert not arrays_close(atoms.cell.array, initial_cell)
+
+
+def test_relaxation_isif7_freezes_ions_with_isotropic_cell_changes(tmp_path: Path):
+    atoms = load_atoms()
+    initial_constraints = list(atoms.constraints)
+    captured_kwargs: dict[str, object] = {}
+    seen_constraints: list[list[object]] = []
+
+    class DummyUnitCellFilter:
+        def __init__(self, atoms, **kwargs):
+            self.atoms = atoms
+            captured_kwargs.update(kwargs)
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+
+        def attach(self, *args, **kwargs):
+            pass
+
+        def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            seen_constraints.append(list(target.constraints))
+            new_cell = target.cell.array * 1.02
+            target.set_cell(new_cell, scale_atoms=True)
+
+    mp = pytest.MonkeyPatch()
+    mp.chdir(tmp_path)
+    mp.setattr(vpmdk, "UnitCellFilter", lambda atoms, **kw: DummyUnitCellFilter(atoms, **kw))
+    mp.setattr(vpmdk, "BFGS", DummyBFGS)
+    mp.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_relaxation(
+            atoms,
+            DummyCalculator(),
+            steps=1,
+            fmax=0.01,
+            isif=7,
+        )
+    finally:
+        mp.undo()
+
+    assert captured_kwargs.get("mask") == [1, 1, 1, 0, 0, 0]
+    assert captured_kwargs.get("hydrostatic_strain") is True
+    assert seen_constraints
+    assert any(isinstance(constraint, vpmdk.FixAtoms) for constraint in seen_constraints[0])
+    assert atoms.constraints == initial_constraints
+
+
+def test_relaxation_isif8_relaxes_ions_with_isotropic_volume(tmp_path: Path):
+    atoms = load_atoms()
+    initial_constraints = list(atoms.constraints)
+    initial_positions = atoms.get_positions().copy()
+    captured_kwargs: dict[str, object] = {}
+    seen_constraints: list[list[object]] = []
+
+    class DummyUnitCellFilter:
+        def __init__(self, atoms, **kwargs):
+            self.atoms = atoms
+            captured_kwargs.update(kwargs)
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+
+        def attach(self, *args, **kwargs):
+            pass
+
+        def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            seen_constraints.append(list(target.constraints))
+            target.positions += 0.02
+            new_cell = target.cell.array * 1.01
+            target.set_cell(new_cell, scale_atoms=True)
+
+    mp = pytest.MonkeyPatch()
+    mp.chdir(tmp_path)
+    mp.setattr(vpmdk, "UnitCellFilter", lambda atoms, **kw: DummyUnitCellFilter(atoms, **kw))
+    mp.setattr(vpmdk, "BFGS", DummyBFGS)
+    mp.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_relaxation(
+            atoms,
+            DummyCalculator(),
+            steps=1,
+            fmax=0.01,
+            isif=8,
+        )
+    finally:
+        mp.undo()
+
+    assert captured_kwargs.get("mask") == [1, 1, 1, 0, 0, 0]
+    assert captured_kwargs.get("hydrostatic_strain") is True
+    assert seen_constraints and seen_constraints[0] == initial_constraints
+    assert atoms.constraints == initial_constraints
+    assert not arrays_close(atoms.get_positions(), initial_positions)
 
 
 def test_run_md_executes_multiple_steps(tmp_path: Path):
@@ -495,11 +687,11 @@ def test_run_md_executes_multiple_steps(tmp_path: Path):
         (1, 2, None),
         (2, 2, None),
         (3, 3, None),
-        (4, 3, "ISIF=4"),
-        (5, 3, "ISIF=5"),
+        (4, 4, None),
+        (5, 5, None),
         (6, 6, None),
-        (7, 6, "ISIF=7"),
-        (8, 2, "ISIF=8"),
+        (7, 7, None),
+        (8, 8, None),
     ],
 )
 def test_main_relaxation_respects_isif(

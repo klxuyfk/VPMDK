@@ -37,7 +37,7 @@ The script reads a subset of common VASP `INCAR` settings. Other tags are ignore
 |-----|---------|-----------------|
 | `NSW` | Number of ionic steps. | `0` (single-point calculation). |
 | `IBRION` | Ionic movement algorithm. | `0` runs molecular dynamics, any other value triggers a BFGS geometry optimisation with a fixed cell. Defaults to `-1`. |
-| `ISIF` | Controls whether the cell changes during relaxations. | `2` keeps the cell fixed (default), `3` relaxes both ions and the unit cell. Unsupported values fall back with a warning (`4/5→3`, `7→6`, `8→2`). |
+| `ISIF` | Controls whether the cell changes during relaxations. | `2` keeps the cell fixed (default). `3` relaxes ions and the full cell, `4` keeps the volume constant while optimising ions and the cell shape, `5` optimises the cell shape at constant volume with fixed ions, `6` changes only the cell, `7` enables isotropic cell changes with fixed ions, and `8` couples ionic relaxations to isotropic volume changes. Unsupported values fall back to `2` with a warning. |
 | `EDIFFG` | Convergence threshold for relaxations in eV/Å. | `-0.02`. |
 | `TEBEG` | Initial temperature in kelvin for molecular dynamics (`IBRION=0`). | `300`. |
 | `TEEND` | Final temperature in kelvin when ramping MD runs. | Same as `TEBEG`. Temperature is linearly ramped between `TEBEG` and `TEEND` over the MD steps. |
