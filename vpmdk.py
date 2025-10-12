@@ -8,10 +8,12 @@ and OUTCAR-style energy logs are produced.
 """
 
 import argparse
+import csv
 import os
 import sys
-from typing import Dict, Iterable, List
-import csv
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from typing import Callable, Dict, Iterable, List
 
 from pymatgen.io.vasp import Incar, Poscar, Potcar
 from pymatgen.io.ase import AseAtomsAdaptor
@@ -278,6 +280,172 @@ def run_single_point(atoms, calculator):
 KBAR_TO_EV_PER_A3 = 0.1 / 160.21766208
 
 
+@dataclass(frozen=True)
+class IncarSettings:
+    """Container for the INCAR parameters that drive the simulation."""
+
+    nsw: int = 0
+    ibrion: int = -1
+    ediffg: float = -0.02
+    isif: int = 2
+    pstress: float | None = None
+    tebeg: float = 300.0
+    teend: float = 300.0
+    potim: float = 2.0
+    mdalgo: int = 0
+    smass: float | None = None
+    thermostat_params: Dict[str, float] = field(default_factory=dict)
+
+    @property
+    def energy_tolerance(self) -> float | None:
+        """Energy convergence threshold in eV when EDIFFG>0."""
+
+        return self.ediffg if self.ediffg > 0 else None
+
+    @property
+    def force_limit(self) -> float:
+        """Return ASE ``fmax`` argument derived from EDIFFG semantics."""
+
+        if self.ediffg > 0:
+            return -abs(self.ediffg)
+        if self.ediffg < 0:
+            return abs(self.ediffg)
+        return 0.05
+
+
+SUPPORTED_INCAR_TAGS = {
+    "ISIF",
+    "IBRION",
+    "NSW",
+    "EDIFFG",
+    "PSTRESS",
+    "TEBEG",
+    "TEEND",
+    "POTIM",
+    "MDALGO",
+    "SMASS",
+    "ANDERSEN_PROB",
+    "LANGEVIN_GAMMA",
+    "CSVR_PERIOD",
+    "NHC_NCHAINS",
+    "MAGMOM",
+}
+
+SUPPORTED_ISIF_VALUES = {0, 1, 2, 3, 4, 5, 6, 7, 8}
+
+
+def _load_incar(path: str):
+    """Return ``Incar`` contents when available, falling back to ``{}``."""
+
+    if os.path.exists(path):
+        return Incar.from_file(path)
+    return {}
+
+
+def _warn_for_unsupported_incar_tags(incar) -> None:
+    """Emit warnings for INCAR options that are silently ignored."""
+
+    for key in getattr(incar, "keys", lambda: [])():
+        if key not in SUPPORTED_INCAR_TAGS:
+            print(f"INCAR tag {key} is not supported and will be ignored")
+
+
+def _parse_optional_float(value, *, key: str):
+    """Attempt to convert ``value`` to ``float`` with warning on failure."""
+
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        print(f"Warning: Unable to parse {key}; ignoring value {value}")
+        return None
+
+
+def _normalize_isif(requested: int) -> int:
+    """Map request to supported ISIF behaviour while preserving warnings."""
+
+    if requested not in SUPPORTED_ISIF_VALUES:
+        print(
+            "Warning: ISIF="
+            f"{requested} is not fully supported; defaulting to ISIF=2 behavior."
+        )
+        return 2
+    if requested in (0, 1, 2):
+        return 2
+    return requested
+
+
+def _extract_thermostat_parameters(incar) -> Dict[str, float]:
+    """Collect thermostat keywords from ``incar`` with validation."""
+
+    params: Dict[str, float] = {}
+    keys = ("ANDERSEN_PROB", "LANGEVIN_GAMMA", "CSVR_PERIOD", "NHC_NCHAINS")
+    for key in keys:
+        if hasattr(incar, "__contains__") and key in incar:
+            value = incar[key]
+            if key == "NHC_NCHAINS":
+                try:
+                    coerced = int(float(value))
+                except (TypeError, ValueError):
+                    print(f"Warning: Unable to parse {key}; ignoring value {value}")
+                    parsed = None
+                else:
+                    parsed = _parse_optional_float(coerced, key=key)
+            else:
+                parsed = _parse_optional_float(value, key=key)
+            if parsed is not None:
+                params[key] = float(parsed)
+    return params
+
+
+def _load_incar_settings(incar) -> IncarSettings:
+    """Translate INCAR dictionary-like object into :class:`IncarSettings`."""
+
+    if not hasattr(incar, "get"):
+        return IncarSettings()
+
+    nsw = int(float(incar.get("NSW", 0)))
+    ibrion = int(float(incar.get("IBRION", -1)))
+    ediffg = float(incar.get("EDIFFG", -0.02))
+    pstress = None
+    if "PSTRESS" in incar:
+        pstress = _parse_optional_float(incar.get("PSTRESS", 0.0), key="PSTRESS")
+    tebeg = float(incar.get("TEBEG", 300.0))
+    teend = float(incar.get("TEEND", tebeg))
+    potim = float(incar.get("POTIM", 2.0))
+    mdalgo = int(float(incar.get("MDALGO", 0)))
+    smass = (
+        _parse_optional_float(incar.get("SMASS"), key="SMASS")
+        if "SMASS" in incar
+        else None
+    )
+    thermostat_params = _extract_thermostat_parameters(incar)
+    requested_isif = int(float(incar.get("ISIF", 2)))
+    normalized_isif = _normalize_isif(requested_isif)
+
+    return IncarSettings(
+        nsw=nsw,
+        ibrion=ibrion,
+        ediffg=ediffg,
+        isif=normalized_isif,
+        pstress=pstress,
+        tebeg=tebeg,
+        teend=teend,
+        potim=potim,
+        mdalgo=mdalgo,
+        smass=smass,
+        thermostat_params=thermostat_params,
+    )
+
+
+def _should_write_energy_csv(bcar_tags: Dict[str, str]) -> bool:
+    """Return ``True`` when BCAR requests CSV output of ionic energies."""
+
+    value = str(bcar_tags.get("WRITE_ENERGY_CSV", "0")).lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 class _EnergyConvergenceMonitor:
     """Track ionic step energies and test for convergence."""
 
@@ -298,6 +466,105 @@ class _EnergyConvergenceMonitor:
         return delta <= self._tolerance
 
 
+def _make_relaxation_builder(
+    isif: int,
+    scalar_pressure: float | None,
+    scalar_pressure_kwarg: float,
+) -> tuple[Callable[[object], object], bool]:
+    """Return a factory for the relaxation object and freeze requirement."""
+
+    def build_identity(atoms):
+        return atoms
+
+    if isif == 3:
+        if scalar_pressure is None:
+            return UnitCellFilter, False
+
+        def build_ucf(atoms):
+            return UnitCellFilter(atoms, scalar_pressure=scalar_pressure)
+
+        return build_ucf, False
+
+    if isif == 4:
+
+        def build_constant_volume(atoms):
+            return UnitCellFilter(
+                atoms,
+                constant_volume=True,
+                scalar_pressure=scalar_pressure_kwarg,
+            )
+
+        return build_constant_volume, False
+
+    if isif == 5:
+
+        def build_constant_volume_frozen(atoms):
+            return UnitCellFilter(
+                atoms,
+                constant_volume=True,
+                scalar_pressure=scalar_pressure_kwarg,
+            )
+
+        return build_constant_volume_frozen, True
+
+    if isif == 6:
+        return StrainFilter, False
+
+    if isif == 7:
+
+        def build_hydrostatic_frozen(atoms):
+            return UnitCellFilter(
+                atoms,
+                mask=[1, 1, 1, 0, 0, 0],
+                hydrostatic_strain=True,
+                scalar_pressure=scalar_pressure_kwarg,
+            )
+
+        return build_hydrostatic_frozen, True
+
+    if isif == 8:
+
+        def build_hydrostatic(atoms):
+            return UnitCellFilter(
+                atoms,
+                mask=[1, 1, 1, 0, 0, 0],
+                hydrostatic_strain=True,
+                scalar_pressure=scalar_pressure_kwarg,
+            )
+
+        return build_hydrostatic, False
+
+    return build_identity, False
+
+
+@contextmanager
+def _temporarily_freeze_atoms(atoms, freeze_required: bool):
+    """Temporarily constrain ionic positions when required by ISIF."""
+
+    if not freeze_required:
+        yield
+        return
+
+    current_constraints = getattr(atoms, "constraints", None)
+    if current_constraints is None:
+        original_constraints = None
+        base_constraints: list[object] = []
+    else:
+        try:
+            base_constraints = list(current_constraints)
+        except TypeError:
+            base_constraints = [current_constraints]
+        original_constraints = base_constraints
+
+    frozen = FixAtoms(indices=list(range(len(atoms))))
+    atoms.set_constraint(base_constraints + [frozen])
+    try:
+        yield
+    finally:
+        if original_constraints is None:
+            atoms.set_constraint()
+        else:
+            atoms.set_constraint(original_constraints)
 def run_relaxation(
     atoms,
     calculator,
@@ -309,72 +576,16 @@ def run_relaxation(
     energy_tolerance: float | None = None,
 ):
     atoms.calc = calculator
-    energies = []
-    relax_object = atoms
-    scalar_pressure = None
-    if pstress is not None:
-        scalar_pressure = pstress * KBAR_TO_EV_PER_A3
+    energies: List[float] = []
+    scalar_pressure = pstress * KBAR_TO_EV_PER_A3 if pstress is not None else None
     scalar_pressure_kwarg = scalar_pressure if scalar_pressure is not None else 0.0
 
-    original_constraints = None
-    constraints_added = False
+    builder, freeze_required = _make_relaxation_builder(
+        isif, scalar_pressure, scalar_pressure_kwarg
+    )
 
-    def _freeze_ionic_positions() -> None:
-        nonlocal original_constraints, constraints_added
-        if constraints_added:
-            return
-        current_constraints = getattr(atoms, "constraints", None)
-        if current_constraints is None:
-            original_constraints = None
-            base_constraints: list[object] = []
-        else:
-            try:
-                base_constraints = list(current_constraints)
-            except TypeError:
-                base_constraints = [current_constraints]
-            original_constraints = base_constraints
-        new_constraints = base_constraints + [FixAtoms(indices=list(range(len(atoms))))]
-        atoms.set_constraint(new_constraints)
-        constraints_added = True
-
-    try:
-        if isif == 3:
-            if scalar_pressure is None:
-                relax_object = UnitCellFilter(atoms)
-            else:
-                relax_object = UnitCellFilter(
-                    atoms, scalar_pressure=scalar_pressure
-                )
-        elif isif == 4:
-            relax_object = UnitCellFilter(
-                atoms,
-                constant_volume=True,
-                scalar_pressure=scalar_pressure_kwarg,
-            )
-        elif isif == 5:
-            _freeze_ionic_positions()
-            relax_object = UnitCellFilter(
-                atoms,
-                constant_volume=True,
-                scalar_pressure=scalar_pressure_kwarg,
-            )
-        elif isif == 6:
-            relax_object = StrainFilter(atoms)
-        elif isif == 7:
-            _freeze_ionic_positions()
-            relax_object = UnitCellFilter(
-                atoms,
-                mask=[1, 1, 1, 0, 0, 0],
-                hydrostatic_strain=True,
-                scalar_pressure=scalar_pressure_kwarg,
-            )
-        elif isif == 8:
-            relax_object = UnitCellFilter(
-                atoms,
-                mask=[1, 1, 1, 0, 0, 0],
-                hydrostatic_strain=True,
-                scalar_pressure=scalar_pressure_kwarg,
-            )
+    with _temporarily_freeze_atoms(atoms, freeze_required):
+        relax_object = builder(atoms)
         dyn = BFGS(relax_object, logfile="OUTCAR")
         if write_energy_csv:
             dyn.attach(lambda: energies.append(atoms.get_potential_energy()))
@@ -387,12 +598,7 @@ def run_relaxation(
                 energy_converged = monitor.update()
                 if energy_converged or force_converged:
                     break
-    finally:
-        if constraints_added:
-            if original_constraints is None:
-                atoms.set_constraint()
-            else:
-                atoms.set_constraint(original_constraints)
+
     target_atoms = getattr(relax_object, "atoms", atoms)
     target_atoms.wrap()
     write("CONTCAR", target_atoms, direct=True)
@@ -470,6 +676,21 @@ def _select_md_dynamics(
     def default_update(temp: float) -> None:
         _rescale_velocities(atoms, temp)
 
+    def make_update(dyn, *, allow_attribute_update: bool = False):
+        def update(temp: float) -> None:
+            try:
+                dyn.set_temperature(temperature_K=temp)
+            except TypeError:
+                dyn.set_temperature(temp)
+            except AttributeError:
+                if not allow_attribute_update:
+                    raise
+                dyn.temp = temp * units.kB
+                dyn.target_kinetic_energy = 0.5 * dyn.temp * dyn.ndof
+            _rescale_velocities(atoms, temp)
+
+        return update
+
     if mdalgo == 1:
         if Andersen is None:
             raise RuntimeError(
@@ -486,14 +707,7 @@ def _select_md_dynamics(
             logfile="OUTCAR",
         )
 
-        def update(temp: float) -> None:
-            try:
-                dyn.set_temperature(temperature_K=temp)
-            except TypeError:
-                dyn.set_temperature(temp)
-            _rescale_velocities(atoms, temp)
-
-        return dyn, update
+        return dyn, make_update(dyn)
 
     if mdalgo in (2, 4) and NoseHooverChainNVT is not None:
         tdamp_fs = _estimate_tdamp(smass, timestep)
@@ -510,14 +724,7 @@ def _select_md_dynamics(
             logfile="OUTCAR",
         )
 
-        def update(temp: float) -> None:
-            try:
-                dyn.set_temperature(temperature_K=temp)
-            except TypeError:
-                dyn.set_temperature(temp)
-            _rescale_velocities(atoms, temp)
-
-        return dyn, update
+        return dyn, make_update(dyn)
     if mdalgo in (2, 4) and NoseHooverChainNVT is None and mdalgo != 0:
         raise RuntimeError(
             "Nose-Hoover thermostat requested but ase.md.nose_hoover_chain.NoseHooverChainNVT "
@@ -546,14 +753,7 @@ def _select_md_dynamics(
             logfile="OUTCAR",
         )
 
-        def update(temp: float) -> None:
-            try:
-                dyn.set_temperature(temperature_K=temp)
-            except TypeError:
-                dyn.set_temperature(temp)
-            _rescale_velocities(atoms, temp)
-
-        return dyn, update
+        return dyn, make_update(dyn)
 
     if mdalgo == 5:
         if Bussi is None:
@@ -573,17 +773,7 @@ def _select_md_dynamics(
             logfile="OUTCAR",
         )
 
-        def update(temp: float) -> None:
-            try:
-                dyn.set_temperature(temperature_K=temp)
-            except TypeError:
-                dyn.set_temperature(temp)
-            except AttributeError:
-                dyn.temp = temp * units.kB
-                dyn.target_kinetic_energy = 0.5 * dyn.temp * dyn.ndof
-            _rescale_velocities(atoms, temp)
-
-        return dyn, update
+        return dyn, make_update(dyn, allow_attribute_update=True)
 
     dyn = VelocityVerlet(atoms, timestep_ase, logfile="OUTCAR")
     return dyn, default_update
@@ -658,108 +848,40 @@ def main():
     atoms = AseAtomsAdaptor.get_atoms(structure)
     atoms.wrap()
 
-    incar = Incar.from_file(incar_path) if os.path.exists(incar_path) else {}
+    incar = _load_incar(incar_path)
     _apply_initial_magnetization(atoms, incar)
     bcar = parse_key_value_file(bcar_path) if os.path.exists(bcar_path) else {}
 
-    supported = {
-        "ISIF",
-        "IBRION",
-        "NSW",
-        "EDIFFG",
-        "PSTRESS",
-        "TEBEG",
-        "TEEND",
-        "POTIM",
-        "MDALGO",
-        "SMASS",
-        "ANDERSEN_PROB",
-        "LANGEVIN_GAMMA",
-        "CSVR_PERIOD",
-        "NHC_NCHAINS",
-        "MAGMOM",
-    }
-    for k in getattr(incar, "keys", lambda: [])():
-        if k not in supported:
-            print(f"INCAR tag {k} is not supported and will be ignored")
+    _warn_for_unsupported_incar_tags(incar)
+    settings = _load_incar_settings(incar)
 
     calculator = get_calculator(bcar)
-    write_energy_csv = str(bcar.get("WRITE_ENERGY_CSV", "0")).lower() in ("1", "true", "yes", "on")
+    write_energy_csv = _should_write_energy_csv(bcar)
 
-    nsw = int(incar.get("NSW", 0)) if hasattr(incar, "get") else 0
-    ibrion = int(incar.get("IBRION", -1)) if hasattr(incar, "get") else -1
-    ediffg = float(incar.get("EDIFFG", -0.02)) if hasattr(incar, "get") else -0.02
-    requested_isif = int(incar.get("ISIF", 2)) if hasattr(incar, "get") else 2
-    pstress = None
-    if hasattr(incar, "get") and "PSTRESS" in incar:
-        try:
-            pstress = float(incar.get("PSTRESS", 0.0))
-        except (TypeError, ValueError):
-            print(
-                f"Warning: Unable to parse PSTRESS; ignoring value {incar.get('PSTRESS')}"
-            )
-            pstress = None
-
-    supported_isif = {0, 1, 2, 3, 4, 5, 6, 7, 8}
-    if requested_isif not in supported_isif:
-        print(
-            "Warning: ISIF="
-            f"{requested_isif} is not fully supported; defaulting to ISIF=2 behavior."
-        )
-        isif = 2
-    elif requested_isif in (0, 1, 2):
-        isif = 2
-    else:
-        isif = requested_isif
-
-    if nsw <= 0 or ibrion < 0:
+    if settings.nsw <= 0 or settings.ibrion < 0:
         run_single_point(atoms, calculator)
-    elif ibrion == 0:
-        tebeg = float(incar.get("TEBEG", 300))
-        teend = float(incar.get("TEEND", tebeg))
-        potim = float(incar.get("POTIM", 2))
-        mdalgo = int(incar.get("MDALGO", 0))
-        smass = float(incar.get("SMASS")) if "SMASS" in incar else None
-        thermostat_params: Dict[str, float] = {}
-        for key in ("ANDERSEN_PROB", "LANGEVIN_GAMMA", "CSVR_PERIOD", "NHC_NCHAINS"):
-            if key in incar:
-                try:
-                    if key == "NHC_NCHAINS":
-                        thermostat_params[key] = float(int(incar[key]))
-                    else:
-                        thermostat_params[key] = float(incar[key])
-                except (TypeError, ValueError):
-                    print(
-                        f"Warning: Unable to parse {key}; ignoring value {incar[key]}"
-                    )
+    elif settings.ibrion == 0:
         run_md(
             atoms,
             calculator,
-            nsw,
-            tebeg,
-            potim,
-            mdalgo=mdalgo,
-            teend=teend,
-            smass=smass,
-            thermostat_params=thermostat_params,
+            settings.nsw,
+            settings.tebeg,
+            settings.potim,
+            mdalgo=settings.mdalgo,
+            teend=settings.teend,
+            smass=settings.smass,
+            thermostat_params=settings.thermostat_params,
         )
     else:
-        energy_tolerance = ediffg if ediffg > 0 else None
-        if ediffg > 0:
-            force_limit = -abs(ediffg)
-        elif ediffg < 0:
-            force_limit = abs(ediffg)
-        else:
-            force_limit = 0.05
         run_relaxation(
             atoms,
             calculator,
-            nsw,
-            force_limit,
+            settings.nsw,
+            settings.force_limit,
             write_energy_csv,
-            isif=isif,
-            pstress=pstress,
-            energy_tolerance=energy_tolerance,
+            isif=settings.isif,
+            pstress=settings.pstress,
+            energy_tolerance=settings.energy_tolerance,
         )
 
     print("Calculation completed.")
