@@ -102,7 +102,10 @@ if "pymatgen" not in sys.modules:
             data = cls()
             with open(path) as f:
                 for line in f:
-                    line = line.split("#")[0].strip()
+                    for comment in ("#", "!"):
+                        if comment in line:
+                            line = line.split(comment, 1)[0]
+                    line = line.strip()
                     if not line or "=" not in line:
                         continue
                     key, value = line.split("=", 1)
@@ -165,6 +168,39 @@ class DummyCalculator(Calculator):
             "forces": forces,
             "stress": [0.0] * 6,
         }
+
+
+def test_incar_parsing_handles_case_whitespace_and_comments(tmp_path: Path):
+    incar_content = """
+    ! leading comment
+    nsw = 5   ! ionic steps
+      IBrIoN = 2 # relaxation mode
+    """
+    path = tmp_path / "INCAR"
+    path.write_text(incar_content)
+
+    incar = Incar.from_file(path)
+
+    assert "NSW" in incar
+    assert str(incar.get("NSW")) == "5"
+    assert str(incar.get("IBRION")) == "2"
+
+
+def test_bcar_parsing_handles_case_whitespace_and_comments(tmp_path: Path):
+    bcar_content = """
+    # initial comment
+      nnp = mace   # inline comment
+    Model = /path/to/model.nn  ! trailing comment
+    WRITE_energy_csv = On
+    """
+    path = tmp_path / "BCAR"
+    path.write_text(bcar_content)
+
+    tags = vpmdk.parse_key_value_file(str(path))
+
+    assert tags["NNP"] == "mace"
+    assert tags["MODEL"] == "/path/to/model.nn"
+    assert tags["WRITE_ENERGY_CSV"] == "On"
 
 
 def prepare_inputs(
