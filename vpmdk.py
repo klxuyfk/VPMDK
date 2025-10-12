@@ -39,7 +39,7 @@ except Exception:  # pragma: no cover - optional dependency
 from ase import units
 from ase.io import write
 from ase.optimize import BFGS
-from ase.constraints import UnitCellFilter, StrainFilter
+from ase.constraints import UnitCellFilter, StrainFilter, FixAtoms
 from ase.md.verlet import VelocityVerlet
 from ase.md import velocitydistribution
 
@@ -183,17 +183,77 @@ def run_relaxation(
     scalar_pressure = None
     if pstress is not None:
         scalar_pressure = pstress * KBAR_TO_EV_PER_A3
-    if isif == 3:
-        if scalar_pressure is None:
-            relax_object = UnitCellFilter(atoms)
+    scalar_pressure_kwarg = scalar_pressure if scalar_pressure is not None else 0.0
+
+    original_constraints = None
+    constraints_added = False
+
+    def _freeze_ionic_positions() -> None:
+        nonlocal original_constraints, constraints_added
+        if constraints_added:
+            return
+        current_constraints = getattr(atoms, "constraints", None)
+        if current_constraints is None:
+            original_constraints = None
+            base_constraints: list[object] = []
         else:
-            relax_object = UnitCellFilter(atoms, scalar_pressure=scalar_pressure)
-    elif isif == 6:
-        relax_object = StrainFilter(atoms)
-    dyn = BFGS(relax_object, logfile="OUTCAR")
-    if write_energy_csv:
-        dyn.attach(lambda: energies.append(atoms.get_potential_energy()))
-    dyn.run(fmax=fmax, steps=steps)
+            try:
+                base_constraints = list(current_constraints)
+            except TypeError:
+                base_constraints = [current_constraints]
+            original_constraints = base_constraints
+        new_constraints = base_constraints + [FixAtoms(indices=list(range(len(atoms))))]
+        atoms.set_constraint(new_constraints)
+        constraints_added = True
+
+    try:
+        if isif == 3:
+            if scalar_pressure is None:
+                relax_object = UnitCellFilter(atoms)
+            else:
+                relax_object = UnitCellFilter(
+                    atoms, scalar_pressure=scalar_pressure
+                )
+        elif isif == 4:
+            relax_object = UnitCellFilter(
+                atoms,
+                constant_volume=True,
+                scalar_pressure=scalar_pressure_kwarg,
+            )
+        elif isif == 5:
+            _freeze_ionic_positions()
+            relax_object = UnitCellFilter(
+                atoms,
+                constant_volume=True,
+                scalar_pressure=scalar_pressure_kwarg,
+            )
+        elif isif == 6:
+            relax_object = StrainFilter(atoms)
+        elif isif == 7:
+            _freeze_ionic_positions()
+            relax_object = UnitCellFilter(
+                atoms,
+                mask=[1, 1, 1, 0, 0, 0],
+                hydrostatic_strain=True,
+                scalar_pressure=scalar_pressure_kwarg,
+            )
+        elif isif == 8:
+            relax_object = UnitCellFilter(
+                atoms,
+                mask=[1, 1, 1, 0, 0, 0],
+                hydrostatic_strain=True,
+                scalar_pressure=scalar_pressure_kwarg,
+            )
+        dyn = BFGS(relax_object, logfile="OUTCAR")
+        if write_energy_csv:
+            dyn.attach(lambda: energies.append(atoms.get_potential_energy()))
+        dyn.run(fmax=fmax, steps=steps)
+    finally:
+        if constraints_added:
+            if original_constraints is None:
+                atoms.set_constraint()
+            else:
+                atoms.set_constraint(original_constraints)
     target_atoms = getattr(relax_object, "atoms", atoms)
     target_atoms.wrap()
     write("CONTCAR", target_atoms, direct=True)
@@ -498,42 +558,17 @@ def main():
             )
             pstress = None
 
-    fallback_targets = {4: 3, 5: 3, 7: 6, 8: 2}
-    fallback_messages = {
-        4: (
-            "Warning: ISIF=4 requires coupled stress constraints; "
-            "falling back to combined ionic and cell relaxation (ISIF=3)."
-        ),
-        5: (
-            "Warning: ISIF=5 fixes the cell shape while changing the volume; "
-            "falling back to combined ionic and cell relaxation (ISIF=3)."
-        ),
-        7: (
-            "Warning: ISIF=7 is not supported; falling back to cell-only relaxation (ISIF=6)."
-        ),
-        8: (
-            "Warning: ISIF=8 enforces constant volume; "
-            "falling back to ionic relaxation (ISIF=2)."
-        ),
-    }
-
-    if requested_isif in fallback_targets:
-        print(fallback_messages[requested_isif])
-        effective_isif = fallback_targets[requested_isif]
-    else:
-        effective_isif = requested_isif
-
-    if effective_isif in (0, 1, 2):
+    supported_isif = {0, 1, 2, 3, 4, 5, 6, 7, 8}
+    if requested_isif not in supported_isif:
+        print(
+            "Warning: ISIF="
+            f"{requested_isif} is not fully supported; defaulting to ISIF=2 behavior."
+        )
         isif = 2
-    elif effective_isif in (3, 6):
-        isif = effective_isif
-    else:
-        if requested_isif not in fallback_targets:
-            print(
-                "Warning: ISIF="
-                f"{requested_isif} is not fully supported; defaulting to ISIF=2 behavior."
-            )
+    elif requested_isif in (0, 1, 2):
         isif = 2
+    else:
+        isif = requested_isif
 
     if nsw <= 0:
         run_single_point(atoms, calculator)
