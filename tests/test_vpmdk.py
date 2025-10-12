@@ -386,25 +386,50 @@ def test_relaxation_isif6_scales_cell_preserving_fractional_positions(tmp_path: 
 def test_run_md_executes_multiple_steps(tmp_path: Path):
     atoms = load_atoms()
 
-    class DummyVerlet:
-        def __init__(self, atoms, timestep, logfile=None):
-            self.atoms = atoms
-            self.timestep = timestep
-            self.steps = []
+    class DummyDynamics:
+        def __init__(self):
+            self.steps: list[int] = []
 
         def run(self, n):
             self.steps.append(n)
-            self.atoms.positions += 0.01
+            atoms.positions += 0.01
 
-    written = []
+    written: list[tuple[str, bool]] = []
+    updates: list[float] = []
+    captured: dict[str, DummyDynamics] = {}
+
+    def fake_selector(atoms_arg, mdalgo, timestep, initial_temperature, smass, params):
+        dyn = DummyDynamics()
+        captured["dyn"] = dyn
+
+        def updater(temp: float) -> None:
+            updates.append(temp)
+
+        return dyn, updater
 
     mp = pytest.MonkeyPatch()
     mp.chdir(tmp_path)
-    mp.setattr(vpmdk, "VelocityVerlet", DummyVerlet)
-    mp.setattr(vpmdk.velocitydistribution, "MaxwellBoltzmannDistribution", lambda *a, **k: None)
-    mp.setattr(vpmdk, "write", lambda filename, atoms, direct=True, append=False: written.append((filename, append)))
+    mp.setattr(vpmdk, "_select_md_dynamics", fake_selector)
+    mp.setattr(
+        vpmdk.velocitydistribution,
+        "MaxwellBoltzmannDistribution",
+        lambda *a, **k: None,
+    )
+    mp.setattr(
+        vpmdk,
+        "write",
+        lambda filename, atoms, direct=True, append=False: written.append((filename, append)),
+    )
     try:
-        energy = vpmdk.run_md(atoms, DummyCalculator(), steps=3, temperature=300, timestep=1.0)
+        energy = vpmdk.run_md(
+            atoms,
+            DummyCalculator(),
+            steps=3,
+            temperature=300,
+            timestep=1.0,
+            mdalgo=0,
+            teend=600,
+        )
     finally:
         mp.undo()
 
@@ -412,6 +437,8 @@ def test_run_md_executes_multiple_steps(tmp_path: Path):
     assert written.count(("XDATCAR", False)) == 1
     assert written.count(("XDATCAR", True)) == 2
     assert ("CONTCAR", False) in written
+    assert captured["dyn"].steps == [1, 1, 1]
+    assert updates == [450.0, 600.0]
 
 
 @pytest.mark.parametrize(
@@ -461,3 +488,152 @@ def test_main_relaxation_respects_isif(
         assert not any("Warning: ISIF=" in message for message in messages)
     else:
         assert any(warning_fragment in message for message in messages)
+
+
+def test_main_passes_md_parameters_to_run_md(tmp_path: Path):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={
+            "NSW": "3",
+            "IBRION": "0",
+            "TEBEG": "200",
+            "TEEND": "400",
+            "POTIM": "1.5",
+            "MDALGO": "3",
+            "SMASS": "-2.5",
+            "LANGEVIN_GAMMA": "15.0",
+        },
+    )
+
+    seen: dict[str, object] = {}
+
+    def fake_run_md(
+        atoms,
+        calculator,
+        steps,
+        temperature,
+        timestep,
+        *,
+        mdalgo,
+        teend,
+        smass,
+        thermostat_params,
+    ):
+        seen.update(
+            {
+                "steps": steps,
+                "temperature": temperature,
+                "timestep": timestep,
+                "mdalgo": mdalgo,
+                "teend": teend,
+                "smass": smass,
+                "thermostat": thermostat_params,
+            }
+        )
+        return 0.0
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(vpmdk, "get_calculator", lambda *_: DummyCalculator())
+    mp.setattr(vpmdk, "run_md", fake_run_md)
+    mp.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        mp.undo()
+
+    assert seen["steps"] == 3
+    assert seen["temperature"] == 200
+    assert seen["timestep"] == 1.5
+    assert seen["mdalgo"] == 3
+    assert seen["teend"] == 400
+    assert seen["smass"] == -2.5
+    assert seen["thermostat"].get("LANGEVIN_GAMMA") == 15.0
+
+
+def test_select_md_dynamics_andersen_uses_probability(monkeypatch):
+    atoms = load_atoms()
+    created: dict[str, object] = {}
+
+    class DummyAndersen:
+        def __init__(self, atoms, timestep, temperature_K, andersen_prob, logfile=None):
+            created.update(
+                {
+                    "timestep": timestep,
+                    "temperature": temperature_K,
+                    "prob": andersen_prob,
+                    "logfile": logfile,
+                }
+            )
+
+        def set_temperature(self, value):
+            created.setdefault("updates", []).append(value)
+
+    rescaled: list[float] = []
+
+    monkeypatch.setattr(vpmdk, "Andersen", DummyAndersen)
+    monkeypatch.setattr(vpmdk, "_rescale_velocities", lambda atoms, temp: rescaled.append(temp))
+
+    dyn, updater = vpmdk._select_md_dynamics(
+        atoms,
+        mdalgo=1,
+        timestep=1.5,
+        initial_temperature=350.0,
+        smass=None,
+        thermostat_params={"ANDERSEN_PROB": 0.2},
+    )
+
+    assert isinstance(dyn, DummyAndersen)
+    assert created["prob"] == 0.2
+
+    updater(360.0)
+    assert created["updates"] == [360.0]
+    assert rescaled == [360.0]
+
+
+def test_select_md_dynamics_langevin_converts_gamma(monkeypatch):
+    atoms = load_atoms()
+    captured: dict[str, object] = {}
+
+    class DummyLangevin:
+        def __init__(
+            self,
+            atoms,
+            timestep,
+            temperature_K=None,
+            friction=None,
+            logfile=None,
+        ):
+            captured.update(
+                {
+                    "timestep": timestep,
+                    "temperature": temperature_K,
+                    "friction": friction,
+                    "logfile": logfile,
+                }
+            )
+
+        def set_temperature(self, *, temperature_K=None, **kwargs):
+            captured.setdefault("updates", []).append(temperature_K)
+
+    rescaled: list[float] = []
+
+    monkeypatch.setattr(vpmdk, "Langevin", DummyLangevin)
+    monkeypatch.setattr(vpmdk, "_rescale_velocities", lambda atoms, temp: rescaled.append(temp))
+
+    dyn, updater = vpmdk._select_md_dynamics(
+        atoms,
+        mdalgo=3,
+        timestep=2.0,
+        initial_temperature=300.0,
+        smass=None,
+        thermostat_params={"LANGEVIN_GAMMA": 10.0},
+    )
+
+    assert isinstance(dyn, DummyLangevin)
+    expected_friction = (10.0 / 1000.0) / vpmdk.units.fs
+    assert captured["friction"] == pytest.approx(expected_friction)
+
+    updater(325.0)
+    assert captured["updates"] == [325.0]
+    assert rescaled == [325.0]
