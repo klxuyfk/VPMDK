@@ -310,9 +310,10 @@ def test_relaxation_isif3_moves_ions_and_cell(tmp_path: Path):
     assert not arrays_close(atoms.cell.array, initial_cell)
 
 
-def test_relaxation_isif6_changes_cell_without_moving_ions(tmp_path: Path):
+def test_relaxation_isif6_scales_cell_preserving_fractional_positions(tmp_path: Path):
     atoms = load_atoms()
     initial_positions = atoms.get_positions().copy()
+    initial_scaled_positions = atoms.get_scaled_positions().copy()
     initial_cell = atoms.cell.array.copy()
 
     class DummyBFGS:
@@ -325,7 +326,7 @@ def test_relaxation_isif6_changes_cell_without_moving_ions(tmp_path: Path):
         def run(self, *args, **kwargs):
             target = getattr(self.obj, "atoms", self.obj)
             new_cell = target.cell.array * 1.02
-            target.set_cell(new_cell, scale_atoms=False)
+            target.set_cell(new_cell, scale_atoms=True)
 
     class DummyStrainFilter:
         def __init__(self, atoms):
@@ -341,7 +342,8 @@ def test_relaxation_isif6_changes_cell_without_moving_ions(tmp_path: Path):
     finally:
         mp.undo()
 
-    assert arrays_close(atoms.get_positions(), initial_positions)
+    assert not arrays_close(atoms.get_positions(), initial_positions)
+    assert arrays_close(atoms.get_scaled_positions(), initial_scaled_positions)
     assert not arrays_close(atoms.cell.array, initial_cell)
 
 
