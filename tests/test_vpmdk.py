@@ -4,7 +4,10 @@ from pathlib import Path
 import sys
 import types
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover - exercised when numpy missing
+    np = None
 import pytest
 from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
@@ -19,10 +22,29 @@ if "pymatgen" not in sys.modules:
     ase_module = types.ModuleType("pymatgen.io.ase")
     sys.modules["pymatgen.io.ase"] = ase_module
 
+    def _coerce_array(values, *, scale: float | None = None):
+        if np is not None:
+            arr = np.array(values, dtype=float)
+            if scale is not None:
+                arr = arr * scale
+            return arr
+
+        def _convert(val):
+            if isinstance(val, (list, tuple)):
+                return [_convert(item) for item in val]
+            return float(val)
+
+        converted = _convert(values)
+        if scale is not None:
+            if isinstance(converted[0], list):
+                return [[scale * item for item in row] for row in converted]
+            return [scale * item for item in converted]
+        return converted
+
     class _Structure:
         def __init__(self, lattice, frac_coords, species):
-            self.lattice = np.array(lattice, dtype=float)
-            self.frac_coords = np.array(frac_coords, dtype=float)
+            self.lattice = _coerce_array(lattice)
+            self.frac_coords = _coerce_array(frac_coords)
             self.species = list(species)
 
     class Poscar:
@@ -48,7 +70,7 @@ if "pymatgen" not in sys.modules:
                 raw_lines = [line.strip() for line in f if line.strip()]
             scale = float(raw_lines[1])
             lattice = [list(map(float, raw_lines[i].split())) for i in range(2, 5)]
-            lattice = np.array(lattice) * scale
+            lattice = _coerce_array(lattice, scale=scale)
             species_names = raw_lines[5].split()
             counts = list(map(int, raw_lines[6].split()))
             coord_start = 8
@@ -209,7 +231,18 @@ def load_atoms():
 
 
 def arrays_close(a, b, tol: float = 1e-8) -> bool:
-    return float(((a - b) ** 2).sum()) <= tol
+    if np is not None:
+        return float(((a - b) ** 2).sum()) <= tol
+
+    def _flatten(seq):
+        if isinstance(seq, (list, tuple)):
+            for item in seq:
+                yield from _flatten(item)
+        else:
+            yield float(seq)
+
+    diff = sum((x - y) ** 2 for x, y in zip(_flatten(a), _flatten(b)))
+    return diff <= tol
 
 
 def test_relaxation_isif2_moves_ions_without_changing_cell(tmp_path: Path):
