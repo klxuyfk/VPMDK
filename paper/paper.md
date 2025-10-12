@@ -1,22 +1,20 @@
 ---
 title: 'VPMDK: VASP-protocol machine-learning dynamics kit'
 tags:
+  - Python
   - atomistic simulations
   - machine-learning potentials
   - molecular dynamics
   - materials science
-  - VASP
 authors:
-  - name: TODO: First Author
-    orcid: 0000-0000-0000-0000
-    affiliation: 1
-  - name: TODO: Second Author
-    orcid: 0000-0000-0000-0000
+  - name: Kagami Aso
+    orcid: 0009-0005-8266-3557
+    equal-contrib: true
     affiliation: 1
 affiliations:
-  - name: TODO: Institution Name
-    index: 1
-date: 2024-08-09
+ - name: Corteo LLC, Japan
+   index: 1
+date: 12 October 2025
 bibliography: paper.bib
 ---
 
