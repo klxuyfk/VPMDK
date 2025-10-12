@@ -346,6 +346,53 @@ def test_relaxation_isif3_moves_ions_and_cell(tmp_path: Path):
     assert not arrays_close(atoms.cell.array, initial_cell)
 
 
+def test_relaxation_isif3_applies_pstress(tmp_path: Path):
+    atoms = load_atoms()
+
+    class DummyUnitCellFilter:
+        def __init__(self, atoms, scalar_pressure=0.0):
+            self.atoms = atoms
+            self.scalar_pressure = scalar_pressure
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+
+        def attach(self, *args, **kwargs):
+            pass
+
+        def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            target.positions += 0.01
+
+    mp = pytest.MonkeyPatch()
+    mp.chdir(tmp_path)
+    captured: dict[str, float] = {}
+
+    def capture_ucf(atoms, scalar_pressure=0.0):
+        captured["scalar_pressure"] = scalar_pressure
+        return DummyUnitCellFilter(atoms, scalar_pressure=scalar_pressure)
+
+    mp.setattr(vpmdk, "UnitCellFilter", capture_ucf)
+    mp.setattr(vpmdk, "BFGS", DummyBFGS)
+    mp.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_relaxation(
+            atoms,
+            DummyCalculator(),
+            steps=1,
+            fmax=0.01,
+            isif=3,
+            pstress=12.5,
+        )
+    finally:
+        mp.undo()
+
+    expected = 12.5 * vpmdk.KBAR_TO_EV_PER_A3
+    assert "scalar_pressure" in captured
+    assert pytest.approx(captured["scalar_pressure"], rel=1e-12) == expected
+
+
 def test_relaxation_isif6_scales_cell_preserving_fractional_positions(tmp_path: Path):
     atoms = load_atoms()
     initial_positions = atoms.get_positions().copy()
@@ -462,8 +509,17 @@ def test_main_relaxation_respects_isif(
 
     seen = {}
 
-    def fake_run_relaxation(atoms, calculator, steps, fmax, write_energy_csv=False, isif=2):
+    def fake_run_relaxation(
+        atoms,
+        calculator,
+        steps,
+        fmax,
+        write_energy_csv=False,
+        isif=2,
+        pstress=None,
+    ):
         seen["isif"] = isif
+        seen["pstress"] = pstress
         return 0.0
 
     mp = pytest.MonkeyPatch()
