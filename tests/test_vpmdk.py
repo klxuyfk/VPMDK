@@ -260,6 +260,37 @@ def test_single_point_energy_for_all_potentials(tmp_path: Path, potential: str):
     assert created[-1][1].called == 1
 
 
+def test_main_negative_ibrion_forces_single_point(tmp_path: Path):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "5", "IBRION": "-1"},
+    )
+
+    seen: dict[str, int] = {}
+
+    def fake_single_point(atoms, calculator):
+        seen["single_point"] = seen.get("single_point", 0) + 1
+        return 0.5
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(vpmdk, "get_calculator", lambda *_: DummyCalculator())
+    mp.setattr(vpmdk, "run_single_point", fake_single_point)
+
+    def fail(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("Should not run MD or relaxation when IBRION<0")
+
+    mp.setattr(vpmdk, "run_md", fail)
+    mp.setattr(vpmdk, "run_relaxation", fail)
+    mp.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        mp.undo()
+
+    assert seen.get("single_point") == 1
+
+
 def load_atoms():
     structure = Poscar.from_file(DATA_DIR / "POSCAR").structure
     atoms = AseAtomsAdaptor.get_atoms(structure)

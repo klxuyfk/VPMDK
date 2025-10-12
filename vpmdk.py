@@ -570,7 +570,7 @@ def main():
     else:
         isif = requested_isif
 
-    if nsw <= 0:
+    if nsw <= 0 or ibrion < 0:
         run_single_point(atoms, calculator)
     elif ibrion == 0:
         tebeg = float(incar.get("TEBEG", 300))
