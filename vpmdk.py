@@ -472,28 +472,28 @@ def _select_md_dynamics(
 
     if mdalgo == 1:
         if Andersen is None:
-            print(
-                "Warning: Andersen thermostat requested but unavailable; "
-                "falling back to NVE integration."
+            raise RuntimeError(
+                "Andersen thermostat requested but ase.md.andersen.Andersen "
+                "is unavailable. Install the optional ASE thermostat "
+                "dependencies or choose a supported MDALGO value."
             )
-        else:
-            andersen_prob = float(thermostat_params.get("ANDERSEN_PROB", 0.1))
-            dyn = Andersen(
-                atoms,
-                timestep_ase,
-                temperature_K=initial_temperature,
-                andersen_prob=andersen_prob,
-                logfile="OUTCAR",
-            )
+        andersen_prob = float(thermostat_params.get("ANDERSEN_PROB", 0.1))
+        dyn = Andersen(
+            atoms,
+            timestep_ase,
+            temperature_K=initial_temperature,
+            andersen_prob=andersen_prob,
+            logfile="OUTCAR",
+        )
 
-            def update(temp: float) -> None:
-                try:
-                    dyn.set_temperature(temperature_K=temp)
-                except TypeError:
-                    dyn.set_temperature(temp)
-                _rescale_velocities(atoms, temp)
+        def update(temp: float) -> None:
+            try:
+                dyn.set_temperature(temperature_K=temp)
+            except TypeError:
+                dyn.set_temperature(temp)
+            _rescale_velocities(atoms, temp)
 
-            return dyn, update
+        return dyn, update
 
     if mdalgo in (2, 4) and NoseHooverChainNVT is not None:
         tdamp_fs = _estimate_tdamp(smass, timestep)
@@ -519,70 +519,71 @@ def _select_md_dynamics(
 
         return dyn, update
     if mdalgo in (2, 4) and NoseHooverChainNVT is None and mdalgo != 0:
-        print(
-            "Warning: Nose-Hoover thermostat requested but unavailable; "
-            "falling back to NVE integration."
+        raise RuntimeError(
+            "Nose-Hoover thermostat requested but ase.md.nose_hoover_chain.NoseHooverChainNVT "
+            "is unavailable. Install the optional ASE thermostat dependencies or choose "
+            "a supported MDALGO value."
         )
 
     if mdalgo == 3:
         if Langevin is None:
-            print(
-                "Warning: Langevin thermostat requested but unavailable; "
-                "falling back to NVE integration."
+            raise RuntimeError(
+                "Langevin thermostat requested but ase.md.langevin.Langevin "
+                "is unavailable. Install the optional ASE thermostat dependencies or "
+                "choose a supported MDALGO value."
             )
-        else:
-            gamma = thermostat_params.get("LANGEVIN_GAMMA")
-            if gamma is None and smass is not None and smass < 0:
-                gamma = abs(smass)
-            if gamma is None:
-                gamma = 1.0
-            friction = (float(gamma) / 1000.0) / units.fs
-            dyn = Langevin(
-                atoms,
-                timestep_ase,
-                temperature_K=initial_temperature,
-                friction=friction,
-                logfile="OUTCAR",
-            )
+        gamma = thermostat_params.get("LANGEVIN_GAMMA")
+        if gamma is None and smass is not None and smass < 0:
+            gamma = abs(smass)
+        if gamma is None:
+            gamma = 1.0
+        friction = (float(gamma) / 1000.0) / units.fs
+        dyn = Langevin(
+            atoms,
+            timestep_ase,
+            temperature_K=initial_temperature,
+            friction=friction,
+            logfile="OUTCAR",
+        )
 
-            def update(temp: float) -> None:
-                try:
-                    dyn.set_temperature(temperature_K=temp)
-                except TypeError:
-                    dyn.set_temperature(temp)
-                _rescale_velocities(atoms, temp)
+        def update(temp: float) -> None:
+            try:
+                dyn.set_temperature(temperature_K=temp)
+            except TypeError:
+                dyn.set_temperature(temp)
+            _rescale_velocities(atoms, temp)
 
-            return dyn, update
+        return dyn, update
 
     if mdalgo == 5:
         if Bussi is None:
-            print(
-                "Warning: CSVR thermostat requested but unavailable; "
-                "falling back to NVE integration."
+            raise RuntimeError(
+                "CSVR thermostat requested but ase.md.bussi.Bussi is unavailable. "
+                "Install the optional ASE thermostat dependencies or choose a supported "
+                "MDALGO value."
             )
-        else:
-            taut = thermostat_params.get("CSVR_PERIOD")
-            if taut is None:
-                taut = max(100.0 * timestep, timestep)
-            dyn = Bussi(
-                atoms,
-                timestep_ase,
-                temperature_K=initial_temperature,
-                taut=float(taut) * units.fs,
-                logfile="OUTCAR",
-            )
+        taut = thermostat_params.get("CSVR_PERIOD")
+        if taut is None:
+            taut = max(100.0 * timestep, timestep)
+        dyn = Bussi(
+            atoms,
+            timestep_ase,
+            temperature_K=initial_temperature,
+            taut=float(taut) * units.fs,
+            logfile="OUTCAR",
+        )
 
-            def update(temp: float) -> None:
-                try:
-                    dyn.set_temperature(temperature_K=temp)
-                except TypeError:
-                    dyn.set_temperature(temp)
-                except AttributeError:
-                    dyn.temp = temp * units.kB
-                    dyn.target_kinetic_energy = 0.5 * dyn.temp * dyn.ndof
-                _rescale_velocities(atoms, temp)
+        def update(temp: float) -> None:
+            try:
+                dyn.set_temperature(temperature_K=temp)
+            except TypeError:
+                dyn.set_temperature(temp)
+            except AttributeError:
+                dyn.temp = temp * units.kB
+                dyn.target_kinetic_energy = 0.5 * dyn.temp * dyn.ndof
+            _rescale_velocities(atoms, temp)
 
-            return dyn, update
+        return dyn, update
 
     dyn = VelocityVerlet(atoms, timestep_ase, logfile="OUTCAR")
     return dyn, default_update
