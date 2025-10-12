@@ -27,6 +27,8 @@ The project currently supports CHGNet [@Deng2023CHGNet], M3GNet via MatGL [@Chen
 
 Many software packages and scripts exist for reaction-path exploration, structure optimization, and stability analysis in crystalline materials, but most are designed on the premise of calling density-functional-theory (DFT) codes—VASP [@Kresse1996Efficient] in particular. Recently, however, machine-learning potentials (MLPs) have emerged as powerful surrogate models for DFT, enabling much faster execution of these tasks. In practice, using MLPs typically requires ASE-based Python programming, and researchers often face a mismatch with their established workflows. VPMDK bridges this gap by providing a minimal command-line driver that accepts VASP-format inputs, performs fast computations with an MLP, and then produces VASP-format outputs. This allows researchers to reuse their existing workflows and infrastructure while substituting DFT with an MLP, thereby enabling high-throughput materials evaluation.
 
+![Overview of `VPMDK`](fig1.png)
+
 # Software description
 
 ## Architecture
