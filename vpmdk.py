@@ -10,7 +10,7 @@ and OUTCAR-style energy logs are produced.
 import argparse
 import os
 import sys
-from typing import Dict
+from typing import Dict, Iterable, List
 import csv
 
 from pymatgen.io.vasp import Incar, Poscar, Potcar
@@ -78,6 +78,116 @@ def parse_key_value_file(path: str) -> Dict[str, str]:
             k, v = line.split('=', 1)
             data[k.strip().upper()] = v.strip()
     return data
+
+
+def _flatten(values: Iterable[object]) -> List[float]:
+    """Return flattened list of floats from nested sequences."""
+
+    flattened: List[float] = []
+    for item in values:
+        if isinstance(item, (list, tuple)):
+            flattened.extend(_flatten(item))
+        else:
+            try:
+                flattened.append(float(item))
+            except (TypeError, ValueError):
+                continue
+    return flattened
+
+
+def _parse_magmom_values(value) -> List[float]:
+    """Parse VASP-style MAGMOM definition into a list of floats."""
+
+    if value is None:
+        return []
+    if isinstance(value, (int, float)):
+        return [float(value)]
+    if isinstance(value, (list, tuple)):
+        return _flatten(value)
+
+    text = str(value).strip()
+    if not text:
+        return []
+
+    tokens = text.replace(",", " ").split()
+    result: List[float] = []
+    for token in tokens:
+        if not token:
+            continue
+        if "*" in token:
+            count_str, moment_str = token.split("*", 1)
+            try:
+                count = int(float(count_str))
+            except (TypeError, ValueError):
+                continue
+            nested = _parse_magmom_values(moment_str)
+            if not nested:
+                try:
+                    nested = [float(moment_str)]
+                except (TypeError, ValueError):
+                    continue
+            if len(nested) == 1:
+                result.extend(nested * count)
+            else:
+                for _ in range(count):
+                    result.extend(nested)
+            continue
+        try:
+            result.append(float(token))
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
+def _expand_magmom_to_atoms(magmoms: List[float], atoms) -> List[float] | None:
+    """Expand species MAGMOM values to per-atom list when necessary."""
+
+    if not magmoms:
+        return None
+
+    num_atoms = len(atoms)
+    if len(magmoms) == num_atoms:
+        return magmoms
+
+    symbols = atoms.get_chemical_symbols()
+    species_counts: List[int] = []
+    previous_symbol: str | None = None
+    for symbol in symbols:
+        if symbol == previous_symbol:
+            species_counts[-1] += 1
+        else:
+            species_counts.append(1)
+            previous_symbol = symbol
+
+    if len(magmoms) == len(species_counts):
+        expanded: List[float] = []
+        for moment, count in zip(magmoms, species_counts):
+            expanded.extend([moment] * count)
+        return expanded
+
+    return None
+
+
+def _apply_initial_magnetization(atoms, incar) -> None:
+    """Populate initial magnetic moments from INCAR when available."""
+
+    if not hasattr(incar, "get"):
+        return
+    if "MAGMOM" not in incar:
+        return
+
+    raw = incar.get("MAGMOM")
+    magmoms = _parse_magmom_values(raw)
+    if not magmoms:
+        return
+    expanded = _expand_magmom_to_atoms(magmoms, atoms)
+    if expanded is None or len(expanded) != len(atoms):
+        print(
+            "Warning: Unable to reconcile MAGMOM values with number of atoms; "
+            "initial magnetic moments will not be set."
+        )
+        return
+    atoms.set_initial_magnetic_moments(expanded)
 
 
 def read_structure(poscar_path: str, potcar_path: str | None = None):
@@ -548,6 +658,7 @@ def main():
     atoms.wrap()
 
     incar = Incar.from_file(incar_path) if os.path.exists(incar_path) else {}
+    _apply_initial_magnetization(atoms, incar)
     bcar = parse_key_value_file(bcar_path) if os.path.exists(bcar_path) else {}
 
     supported = {
@@ -565,6 +676,7 @@ def main():
         "LANGEVIN_GAMMA",
         "CSVR_PERIOD",
         "NHC_NCHAINS",
+        "MAGMOM",
     }
     for k in getattr(incar, "keys", lambda: [])():
         if k not in supported:
