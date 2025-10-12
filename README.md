@@ -9,7 +9,8 @@ VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is 
 ## Usage
 
 1. Prepare a directory containing at least `POSCAR`. Optional files are
-   `INCAR`, `POTCAR`, and `BCAR`.
+   `INCAR`, `POTCAR`, and `BCAR`. `KPOINTS`, `WAVECAR`, and `CHGCAR` are
+   recognised but ignored (a note is printed if they are present).
 2. Install requirements: `ase`, `pymatgen` and, depending on the potential you
    wish to use, `chgnet`, `mattersim`, `mace-torch` or `matgl`.
 3. Run:
@@ -27,7 +28,8 @@ Calculation directories may contain the following files:
 - `POSCAR` *(required)* – atomic positions and cell.
 - `INCAR` – VASP-style run parameters; only a subset of tags is supported.
 - `BCAR` – simple `key=value` file selecting the machine-learning potential.
-- `POTCAR` – accepted for compatibility but ignored.
+- `POTCAR` – accepted for compatibility but ignored except for aligning species
+  names.
 
 ### Supported INCAR tags
 
@@ -43,11 +45,13 @@ The script reads a subset of common VASP `INCAR` settings. Other tags are ignore
 | `TEEND` | Final temperature in kelvin when ramping MD runs. | Same as `TEBEG`. Temperature is linearly ramped between `TEBEG` and `TEEND` over the MD steps. |
 | `POTIM` | Time step in femtoseconds for molecular dynamics (`IBRION=0`). | `2`. |
 | `MDALGO` | Selects the MD integrator / thermostat. | `0` (NVE). See [MD algorithms](#md-algorithms) for details. |
-| `SMASS` | Thermostat-specific mass parameter. | Used for Nose–Hoover time constant (`|SMASS|` fs) or as a fallback to set `LANGEVIN_GAMMA` when negative. |
+| `SMASS` | Thermostat-specific mass parameter. | Used for Nose–Hoover time constant (`abs(SMASS)` fs) or as a fallback to set `LANGEVIN_GAMMA` when negative. |
 | `ANDERSEN_PROB` | Collision probability for the Andersen thermostat. | `0.1`. Only used with `MDALGO=1`. |
-| `LANGEVIN_GAMMA` | Friction coefficient (1/ps) for Langevin dynamics. | `1.0`. Only used with `MDALGO=3`; falls back to `|SMASS|` when `SMASS<0`. |
+| `LANGEVIN_GAMMA` | Friction coefficient (1/ps) for Langevin dynamics. | `1.0`. Only used with `MDALGO=3`; falls back to `abs(SMASS)` when `SMASS<0`. |
 | `CSVR_PERIOD` | Relaxation time (fs) for the canonical sampling velocity rescaling thermostat. | `max(100×POTIM, POTIM)`. Only used with `MDALGO=5`. |
 | `NHC_NCHAINS` | Nose–Hoover chain length. | `1` for `MDALGO=2`, `3` for `MDALGO=4`. |
+| `PSTRESS` | External pressure in kBar applied during relaxations. | Converts to scalar pressure in the ASE optimiser when `ISIF` allows cell changes. |
+| `MAGMOM` | Initial magnetic moments. | Parsed like VASP; supports shorthand such as `2*1.0`. |
 
 ### MD algorithms
 
@@ -58,13 +62,13 @@ The script reads a subset of common VASP `INCAR` settings. Other tags are ignore
 | `0` | Velocity-Verlet (NVE) | No thermostat. |
 | `1` | Andersen thermostat | Controlled by `ANDERSEN_PROB`. |
 | `2` | Nose–Hoover chain (single thermostat) | Uses `SMASS`/`NHC_NCHAINS` to configure the chain. |
-| `3` | Langevin thermostat | Uses `LANGEVIN_GAMMA` (or `|SMASS|` if negative). |
+| `3` | Langevin thermostat | Uses `LANGEVIN_GAMMA` (or `abs(SMASS)` if negative). |
 | `4` | Nose–Hoover chain (three thermostats) | Chain length defaults to 3 unless overridden. |
 | `5` | Bussi (canonical sampling velocity rescaling) thermostat | Uses `CSVR_PERIOD`. |
 
 ### BCAR tags
 
-`BCAR` configures the machine-learning potential:
+`BCAR` configures the machine-learning potential and optional outputs:
 
 ```
 NNP=CHGNET            # Name of the potential
@@ -92,6 +96,13 @@ Depending on the calculation type, VPMDK produces the following files in VASP fo
 | `OUTCAR` | Relaxations and MD | Step-by-step potential, kinetic, and total energies along with temperature. |
 | `XDATCAR` | MD only (`IBRION=0`) | Atomic positions at each MD step (trajectory). |
 | `energy.csv` | Relaxations with `WRITE_ENERGY_CSV=1` | Potential energy at each relaxation step. |
+
+Relaxations terminate when either the maximum force drops below the value set
+by `EDIFFG` (default `0.02` eV/Å) or, when `EDIFFG` is positive, when the
+change in energy between ionic steps falls below the specified threshold.
+
+Initial magnetic moments from `MAGMOM` are propagated to ASE when the value can
+be matched with the number of atoms or species counts in the POSCAR.
 
 Final energies are also printed to the console for single-point calculations.
 
