@@ -39,7 +39,7 @@ except Exception:  # pragma: no cover - optional dependency
 from ase import units
 from ase.io import write
 from ase.optimize import BFGS
-from ase.constraints import UnitCellFilter
+from ase.constraints import UnitCellFilter, StrainFilter
 from ase.md.verlet import VelocityVerlet
 from ase.md import velocitydistribution
 
@@ -155,6 +155,8 @@ def run_relaxation(
     relax_object = atoms
     if isif == 3:
         relax_object = UnitCellFilter(atoms)
+    elif isif == 6:
+        relax_object = StrainFilter(atoms)
     dyn = BFGS(relax_object, logfile="OUTCAR")
     if write_energy_csv:
         dyn.attach(lambda: energies.append(atoms.get_potential_energy()))
@@ -220,12 +222,43 @@ def main():
     nsw = int(incar.get("NSW", 0)) if hasattr(incar, "get") else 0
     ibrion = int(incar.get("IBRION", -1)) if hasattr(incar, "get") else -1
     ediffg = float(incar.get("EDIFFG", -0.02)) if hasattr(incar, "get") else -0.02
-    isif = int(incar.get("ISIF", 2)) if hasattr(incar, "get") else 2
+    requested_isif = int(incar.get("ISIF", 2)) if hasattr(incar, "get") else 2
 
-    if isif not in (2, 3):
-        print(
-            f"Warning: ISIF={isif} is not fully supported; defaulting to ISIF=2 behavior."
-        )
+    fallback_targets = {4: 3, 5: 3, 7: 6, 8: 2}
+    fallback_messages = {
+        4: (
+            "Warning: ISIF=4 requires coupled stress constraints; "
+            "falling back to combined ionic and cell relaxation (ISIF=3)."
+        ),
+        5: (
+            "Warning: ISIF=5 fixes the cell shape while changing the volume; "
+            "falling back to combined ionic and cell relaxation (ISIF=3)."
+        ),
+        7: (
+            "Warning: ISIF=7 is not supported; falling back to cell-only relaxation (ISIF=6)."
+        ),
+        8: (
+            "Warning: ISIF=8 enforces constant volume; "
+            "falling back to ionic relaxation (ISIF=2)."
+        ),
+    }
+
+    if requested_isif in fallback_targets:
+        print(fallback_messages[requested_isif])
+        effective_isif = fallback_targets[requested_isif]
+    else:
+        effective_isif = requested_isif
+
+    if effective_isif in (0, 1, 2):
+        isif = 2
+    elif effective_isif in (3, 6):
+        isif = effective_isif
+    else:
+        if requested_isif not in fallback_targets:
+            print(
+                "Warning: ISIF="
+                f"{requested_isif} is not fully supported; defaulting to ISIF=2 behavior."
+            )
         isif = 2
 
     if nsw <= 0:

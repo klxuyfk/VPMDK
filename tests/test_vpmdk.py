@@ -310,6 +310,43 @@ def test_relaxation_isif3_moves_ions_and_cell(tmp_path: Path):
     assert not arrays_close(atoms.cell.array, initial_cell)
 
 
+def test_relaxation_isif6_scales_cell_preserving_fractional_positions(tmp_path: Path):
+    atoms = load_atoms()
+    initial_positions = atoms.get_positions().copy()
+    initial_scaled_positions = atoms.get_scaled_positions().copy()
+    initial_cell = atoms.cell.array.copy()
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+
+        def attach(self, *args, **kwargs):
+            pass
+
+        def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            new_cell = target.cell.array * 1.02
+            target.set_cell(new_cell, scale_atoms=True)
+
+    class DummyStrainFilter:
+        def __init__(self, atoms):
+            self.atoms = atoms
+
+    mp = pytest.MonkeyPatch()
+    mp.chdir(tmp_path)
+    mp.setattr(vpmdk, "BFGS", DummyBFGS)
+    mp.setattr(vpmdk, "StrainFilter", DummyStrainFilter)
+    mp.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_relaxation(atoms, DummyCalculator(), steps=2, fmax=0.01, isif=6)
+    finally:
+        mp.undo()
+
+    assert not arrays_close(atoms.get_positions(), initial_positions)
+    assert arrays_close(atoms.get_scaled_positions(), initial_scaled_positions)
+    assert not arrays_close(atoms.cell.array, initial_cell)
+
+
 def test_run_md_executes_multiple_steps(tmp_path: Path):
     atoms = load_atoms()
 
@@ -341,8 +378,23 @@ def test_run_md_executes_multiple_steps(tmp_path: Path):
     assert ("CONTCAR", False) in written
 
 
-@pytest.mark.parametrize("isif, expected", [(2, 2), (3, 3)])
-def test_main_relaxation_respects_isif(tmp_path: Path, isif: int, expected: int):
+@pytest.mark.parametrize(
+    "isif, expected, warning_fragment",
+    [
+        (0, 2, None),
+        (1, 2, None),
+        (2, 2, None),
+        (3, 3, None),
+        (4, 3, "ISIF=4"),
+        (5, 3, "ISIF=5"),
+        (6, 6, None),
+        (7, 6, "ISIF=7"),
+        (8, 2, "ISIF=8"),
+    ],
+)
+def test_main_relaxation_respects_isif(
+    tmp_path: Path, isif: int, expected: int, warning_fragment: str | None
+):
     prepare_inputs(tmp_path, potential="CHGNET", incar_overrides={"NSW": "2", "ISIF": str(isif)})
 
     seen = {}
@@ -355,9 +407,21 @@ def test_main_relaxation_respects_isif(tmp_path: Path, isif: int, expected: int)
     mp.setattr(vpmdk, "get_calculator", lambda *_: DummyCalculator())
     mp.setattr(vpmdk, "run_relaxation", fake_run_relaxation)
     mp.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    messages: list[str] = []
+
+    def fake_print(*args, **kwargs):
+        sep = kwargs.get("sep", " ")
+        end = kwargs.get("end", "\n")
+        messages.append(sep.join(str(a) for a in args) + end)
+
+    mp.setattr("builtins.print", fake_print)
     try:
         vpmdk.main()
     finally:
         mp.undo()
 
     assert seen["isif"] == expected
+    if warning_fragment is None:
+        assert not any("Warning: ISIF=" in message for message in messages)
+    else:
+        assert any(warning_fragment in message for message in messages)
