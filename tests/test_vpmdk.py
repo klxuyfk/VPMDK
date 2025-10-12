@@ -34,12 +34,13 @@ if "pymatgen" not in sys.modules:
                 return [_convert(item) for item in val]
             return float(val)
 
+        def _apply_scale(val):
+            if isinstance(val, list):
+                return [_apply_scale(item) for item in val]
+            return val * scale if scale is not None else val
+
         converted = _convert(values)
-        if scale is not None:
-            if isinstance(converted[0], list):
-                return [[scale * item for item in row] for row in converted]
-            return [scale * item for item in converted]
-        return converted
+        return _apply_scale(converted)
 
     class _Structure:
         def __init__(self, lattice, frac_coords, species):
@@ -241,7 +242,11 @@ def arrays_close(a, b, tol: float = 1e-8) -> bool:
         else:
             yield float(seq)
 
-    diff = sum((x - y) ** 2 for x, y in zip(_flatten(a), _flatten(b)))
+    flat_a = list(_flatten(a))
+    flat_b = list(_flatten(b))
+    if len(flat_a) != len(flat_b):
+        return False
+    diff = sum((x - y) ** 2 for x, y in zip(flat_a, flat_b))
     return diff <= tol
 
 
