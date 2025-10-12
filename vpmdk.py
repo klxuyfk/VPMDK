@@ -1,8 +1,10 @@
 """vpmdk: Run machine-learning potentials using VASP style inputs.
 
-This script reads POSCAR, INCAR, POTCAR and BCAR files from a directory,
-performs calculations using an ML potential (currently CHGNet support),
-and writes VASP style outputs such as CONTCAR and energy logs.
+The utility consumes VASP-style inputs (POSCAR, INCAR, POTCAR, BCAR) and
+executes single-point, relaxation, or molecular dynamics runs with the selected
+neural-network potential.  Multiple ASE calculators are supported (CHGNet,
+M3GNet/MatGL, MACE, MatterSim) and the expected VASP outputs such as CONTCAR
+and OUTCAR-style energy logs are produced.
 """
 
 import argparse
