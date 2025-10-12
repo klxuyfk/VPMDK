@@ -165,6 +165,9 @@ def run_single_point(atoms, calculator):
     return e
 
 
+KBAR_TO_EV_PER_A3 = 0.1 / 160.21766208
+
+
 def run_relaxation(
     atoms,
     calculator,
@@ -172,12 +175,19 @@ def run_relaxation(
     fmax: float,
     write_energy_csv: bool = False,
     isif: int = 2,
+    pstress: float | None = None,
 ):
     atoms.calc = calculator
     energies = []
     relax_object = atoms
+    scalar_pressure = None
+    if pstress is not None:
+        scalar_pressure = pstress * KBAR_TO_EV_PER_A3
     if isif == 3:
-        relax_object = UnitCellFilter(atoms)
+        if scalar_pressure is None:
+            relax_object = UnitCellFilter(atoms)
+        else:
+            relax_object = UnitCellFilter(atoms, scalar_pressure=scalar_pressure)
     elif isif == 6:
         relax_object = StrainFilter(atoms)
     dyn = BFGS(relax_object, logfile="OUTCAR")
@@ -456,6 +466,7 @@ def main():
         "IBRION",
         "NSW",
         "EDIFFG",
+        "PSTRESS",
         "TEBEG",
         "TEEND",
         "POTIM",
@@ -477,6 +488,15 @@ def main():
     ibrion = int(incar.get("IBRION", -1)) if hasattr(incar, "get") else -1
     ediffg = float(incar.get("EDIFFG", -0.02)) if hasattr(incar, "get") else -0.02
     requested_isif = int(incar.get("ISIF", 2)) if hasattr(incar, "get") else 2
+    pstress = None
+    if hasattr(incar, "get") and "PSTRESS" in incar:
+        try:
+            pstress = float(incar.get("PSTRESS", 0.0))
+        except (TypeError, ValueError):
+            print(
+                f"Warning: Unable to parse PSTRESS; ignoring value {incar.get('PSTRESS')}"
+            )
+            pstress = None
 
     fallback_targets = {4: 3, 5: 3, 7: 6, 8: 2}
     fallback_messages = {
@@ -547,7 +567,15 @@ def main():
             thermostat_params=thermostat_params,
         )
     else:
-        run_relaxation(atoms, calculator, nsw, abs(ediffg), write_energy_csv, isif=isif)
+        run_relaxation(
+            atoms,
+            calculator,
+            nsw,
+            abs(ediffg),
+            write_energy_csv,
+            isif=isif,
+            pstress=pstress,
+        )
 
     print("Calculation completed.")
 
