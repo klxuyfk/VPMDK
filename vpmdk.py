@@ -302,6 +302,10 @@ def _select_md_dynamics(
         )
 
         def update(temp: float) -> None:
+            try:
+                dyn.set_temperature(temp)
+            except TypeError:
+                dyn.set_temperature(temperature_K=temp)
             _rescale_velocities(atoms, temp)
 
         return dyn, update
