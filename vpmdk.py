@@ -224,15 +224,15 @@ def main():
     ediffg = float(incar.get("EDIFFG", -0.02)) if hasattr(incar, "get") else -0.02
     requested_isif = int(incar.get("ISIF", 2)) if hasattr(incar, "get") else 2
 
-    fallback_targets = {4: 3, 5: 6, 7: 6, 8: 2}
+    fallback_targets = {4: 3, 5: 3, 7: 6, 8: 2}
     fallback_messages = {
         4: (
             "Warning: ISIF=4 requires coupled stress constraints; "
             "falling back to combined ionic and cell relaxation (ISIF=3)."
         ),
         5: (
-            "Warning: ISIF=5 requires selective strain handling; "
-            "falling back to cell-only relaxation (ISIF=6)."
+            "Warning: ISIF=5 fixes the cell shape while changing the volume; "
+            "falling back to combined ionic and cell relaxation (ISIF=3)."
         ),
         7: (
             "Warning: ISIF=7 is not supported; falling back to cell-only relaxation (ISIF=6)."

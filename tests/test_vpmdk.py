@@ -386,7 +386,7 @@ def test_run_md_executes_multiple_steps(tmp_path: Path):
         (2, 2, None),
         (3, 3, None),
         (4, 3, "ISIF=4"),
-        (5, 6, "ISIF=5"),
+        (5, 3, "ISIF=5"),
         (6, 6, None),
         (7, 6, "ISIF=7"),
         (8, 2, "ISIF=8"),
