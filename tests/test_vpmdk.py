@@ -653,6 +653,68 @@ def test_relaxation_isif8_relaxes_ions_with_isotropic_volume(tmp_path: Path):
     assert not arrays_close(atoms.get_positions(), initial_positions)
 
 
+def test_relaxation_stops_when_energy_change_below_tolerance(tmp_path: Path):
+    atoms = load_atoms()
+
+    class DummyBFGS:
+        last_instance = None
+
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+            self.logfile = logfile
+            self.observers: list[object] = []
+            self.nsteps = 0
+            self.fmax = None
+            DummyBFGS.last_instance = self
+
+        def attach(self, func):
+            self.observers.append(func)
+
+        def irun(self, steps):
+            yield False
+            while self.nsteps < steps:
+                self.nsteps += 1
+                target = getattr(self.obj, "atoms", self.obj)
+                target.positions += 0.01
+                for func in list(self.observers):
+                    func()
+                yield False
+
+        def run(self, *args, **kwargs):  # pragma: no cover - defensive
+            raise AssertionError("Energy convergence should use irun")
+
+    energy_values = [1.0, 0.8, 0.7, 0.69, 0.68]
+    index = {"value": 0}
+
+    def fake_energy():
+        idx = index["value"]
+        if idx >= len(energy_values):
+            return energy_values[-1]
+        value = energy_values[idx]
+        index["value"] += 1
+        return value
+
+    mp = pytest.MonkeyPatch()
+    mp.chdir(tmp_path)
+    mp.setattr(vpmdk, "BFGS", DummyBFGS)
+    mp.setattr(vpmdk, "write", lambda *a, **k: None)
+    mp.setattr(atoms, "get_potential_energy", fake_energy)
+    try:
+        vpmdk.run_relaxation(
+            atoms,
+            DummyCalculator(),
+            steps=10,
+            fmax=-0.01,
+            energy_tolerance=0.015,
+        )
+    finally:
+        instance = DummyBFGS.last_instance
+        mp.undo()
+
+    assert instance is not None
+    assert instance.nsteps == 3
+
+
 def test_run_md_executes_multiple_steps(tmp_path: Path):
     atoms = load_atoms()
 
@@ -740,6 +802,7 @@ def test_main_relaxation_respects_isif(
         write_energy_csv=False,
         isif=2,
         pstress=None,
+        energy_tolerance=None,
     ):
         seen["isif"] = isif
         seen["pstress"] = pstress
@@ -767,6 +830,42 @@ def test_main_relaxation_respects_isif(
         assert not any("Warning: ISIF=" in message for message in messages)
     else:
         assert any(warning_fragment in message for message in messages)
+
+
+def test_main_relaxation_uses_energy_tolerance_for_positive_ediffg(tmp_path: Path):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "4", "EDIFFG": "0.01"},
+    )
+
+    seen: dict[str, object] = {}
+
+    def fake_run_relaxation(
+        atoms,
+        calculator,
+        steps,
+        fmax,
+        write_energy_csv=False,
+        isif=2,
+        pstress=None,
+        energy_tolerance=None,
+    ):
+        seen["fmax"] = fmax
+        seen["energy_tolerance"] = energy_tolerance
+        return 0.0
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(vpmdk, "get_calculator", lambda *_: DummyCalculator())
+    mp.setattr(vpmdk, "run_relaxation", fake_run_relaxation)
+    mp.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        mp.undo()
+
+    assert seen.get("energy_tolerance") == pytest.approx(0.01)
+    assert seen.get("fmax") == pytest.approx(-0.01)
 
 
 def test_main_passes_md_parameters_to_run_md(tmp_path: Path):

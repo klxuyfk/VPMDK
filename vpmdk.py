@@ -168,6 +168,26 @@ def run_single_point(atoms, calculator):
 KBAR_TO_EV_PER_A3 = 0.1 / 160.21766208
 
 
+class _EnergyConvergenceMonitor:
+    """Track ionic step energies and test for convergence."""
+
+    def __init__(self, atoms, tolerance: float):
+        self._atoms = atoms
+        self._tolerance = tolerance
+        self._previous: float | None = None
+
+    def update(self) -> bool:
+        """Return True when the total energy change falls below the tolerance."""
+
+        energy = self._atoms.get_potential_energy()
+        if self._previous is None:
+            self._previous = energy
+            return False
+        delta = abs(energy - self._previous)
+        self._previous = energy
+        return delta <= self._tolerance
+
+
 def run_relaxation(
     atoms,
     calculator,
@@ -176,6 +196,7 @@ def run_relaxation(
     write_energy_csv: bool = False,
     isif: int = 2,
     pstress: float | None = None,
+    energy_tolerance: float | None = None,
 ):
     atoms.calc = calculator
     energies = []
@@ -247,7 +268,15 @@ def run_relaxation(
         dyn = BFGS(relax_object, logfile="OUTCAR")
         if write_energy_csv:
             dyn.attach(lambda: energies.append(atoms.get_potential_energy()))
-        dyn.run(fmax=fmax, steps=steps)
+        if energy_tolerance is None:
+            dyn.run(fmax=fmax, steps=steps)
+        else:
+            monitor = _EnergyConvergenceMonitor(atoms, energy_tolerance)
+            dyn.fmax = fmax
+            for force_converged in dyn.irun(steps=steps):
+                energy_converged = monitor.update()
+                if energy_converged or force_converged:
+                    break
     finally:
         if constraints_added:
             if original_constraints is None:
@@ -602,14 +631,22 @@ def main():
             thermostat_params=thermostat_params,
         )
     else:
+        energy_tolerance = ediffg if ediffg > 0 else None
+        if ediffg > 0:
+            force_limit = -abs(ediffg)
+        elif ediffg < 0:
+            force_limit = abs(ediffg)
+        else:
+            force_limit = 0.05
         run_relaxation(
             atoms,
             calculator,
             nsw,
-            abs(ediffg),
+            force_limit,
             write_energy_csv,
             isif=isif,
             pstress=pstress,
+            energy_tolerance=energy_tolerance,
         )
 
     print("Calculation completed.")
