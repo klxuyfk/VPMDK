@@ -27,7 +27,7 @@ Calculation directories may contain the following files:
 - `POSCAR` *(required)* – atomic positions and cell.
 - `INCAR` – VASP-style run parameters; only a subset of tags is supported.
 - `BCAR` – simple `key=value` file selecting the machine-learning potential.
-- `POTCAR` – optional; used only to reconcile species names with `POSCAR` when present (potential data are not consumed).
+- `POTCAR` – accepted for compatibility but ignored.
 
 ### Supported INCAR tags
 
@@ -37,19 +37,17 @@ The script reads a subset of common VASP `INCAR` settings. Other tags are ignore
 |-----|---------|-----------------|
 | `NSW` | Number of ionic steps. | `0` (single-point calculation). |
 | `IBRION` | Ionic movement algorithm. | `<0` performs a single-point calculation without moving ions, `0` runs molecular dynamics, positive values trigger a BFGS geometry optimisation with a fixed cell. Defaults to `-1`. |
-| `ISIF` | Controls whether the cell changes during relaxations. | `2` keeps the cell fixed (default). `3` relaxes ions and the full cell, `4` keeps the volume constant while optimising ions and the cell shape, `5` optimises the cell shape at constant volume with ions frozen, `6` changes only the cell, `7` enables isotropic cell changes with ions frozen, and `8` couples ionic relaxation to isotropic volume changes. Unsupported values fall back to `2` with a warning. |
+| `ISIF` | Controls whether the cell changes during relaxations. | `2` keeps the cell fixed (default). `3` relaxes ions and the full cell, `4` keeps the volume constant while optimising ions and the cell shape, `5` optimises the cell shape at constant volume with fixed ions, `6` changes only the cell, `7` enables isotropic cell changes with fixed ions, and `8` couples ionic relaxations to isotropic volume changes. Unsupported values fall back to `2` with a warning. |
 | `EDIFFG` | Convergence threshold for relaxations in eV/Å. | `-0.02`. |
-| `PSTRESS` | External pressure in kBar for cell relaxations when `ISIF` allows cell updates. | Not set (no external pressure). |
 | `TEBEG` | Initial temperature in kelvin for molecular dynamics (`IBRION=0`). | `300`. |
 | `TEEND` | Final temperature in kelvin when ramping MD runs. | Same as `TEBEG`. Temperature is linearly ramped between `TEBEG` and `TEEND` over the MD steps. |
 | `POTIM` | Time step in femtoseconds for molecular dynamics (`IBRION=0`). | `2`. |
 | `MDALGO` | Selects the MD integrator / thermostat. | `0` (NVE). See [MD algorithms](#md-algorithms) for details. |
-| `SMASS` | Thermostat-specific mass parameter. | Used for Nose–Hoover time constant (<code>|SMASS|</code> fs) or as a fallback to set `LANGEVIN_GAMMA` when negative. |
+| `SMASS` | Thermostat-specific mass parameter. | Used for Nose–Hoover time constant (`|SMASS|` fs) or as a fallback to set `LANGEVIN_GAMMA` when negative. |
 | `ANDERSEN_PROB` | Collision probability for the Andersen thermostat. | `0.1`. Only used with `MDALGO=1`. |
-| `LANGEVIN_GAMMA` | Friction coefficient (1/ps) for Langevin dynamics. | `1.0`. Only used with `MDALGO=3`; falls back to <code>|SMASS|</code> when `SMASS<0`. |
+| `LANGEVIN_GAMMA` | Friction coefficient (1/ps) for Langevin dynamics. | `1.0`. Only used with `MDALGO=3`; falls back to `|SMASS|` when `SMASS<0`. |
 | `CSVR_PERIOD` | Relaxation time (fs) for the canonical sampling velocity rescaling thermostat. | `max(100×POTIM, POTIM)`. Only used with `MDALGO=5`. |
 | `NHC_NCHAINS` | Nose–Hoover chain length. | `1` for `MDALGO=2`, `3` for `MDALGO=4`. |
-| `MAGMOM` | Initial magnetic moments. | Applied to ASE atoms if the number of moments matches the atomic species or atoms. |
 
 ### MD algorithms
 
@@ -60,7 +58,7 @@ The script reads a subset of common VASP `INCAR` settings. Other tags are ignore
 | `0` | Velocity-Verlet (NVE) | No thermostat. |
 | `1` | Andersen thermostat | Controlled by `ANDERSEN_PROB`. |
 | `2` | Nose–Hoover chain (single thermostat) | Uses `SMASS`/`NHC_NCHAINS` to configure the chain. |
-| `3` | Langevin thermostat | Uses `LANGEVIN_GAMMA` (or <code>|SMASS|</code> when negative). |
+| `3` | Langevin thermostat | Uses `LANGEVIN_GAMMA` (or `|SMASS|` if negative). |
 | `4` | Nose–Hoover chain (three thermostats) | Chain length defaults to 3 unless overridden. |
 | `5` | Bussi (canonical sampling velocity rescaling) thermostat | Uses `CSVR_PERIOD`. |
 
