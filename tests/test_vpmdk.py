@@ -109,7 +109,13 @@ if "pymatgen" not in sys.modules:
                     if not line or "=" not in line:
                         continue
                     key, value = line.split("=", 1)
-                    data[key.strip().upper()] = value.strip().split()[0]
+                    key = key.strip().upper()
+                    cleaned = value.strip()
+                    if key == "MAGMOM":
+                        data[key] = cleaned
+                    else:
+                        parts = cleaned.split()
+                        data[key] = parts[0] if parts else ""
             return data
 
     class Potcar:
@@ -203,6 +209,11 @@ def test_bcar_parsing_handles_case_whitespace_and_comments(tmp_path: Path):
     assert tags["WRITE_ENERGY_CSV"] == "On"
 
 
+def test_parse_magmom_values_supports_repetition_syntax():
+    parsed = vpmdk._parse_magmom_values("2*1.5 0.25")
+    assert arrays_close(parsed, [1.5, 1.5, 0.25])
+
+
 def prepare_inputs(
     tmp_path: Path,
     *,
@@ -260,6 +271,32 @@ def test_single_point_energy_for_all_potentials(tmp_path: Path, potential: str):
     assert created[-1][1].called == 1
 
 
+def test_main_transfers_magmom_to_atoms(tmp_path: Path):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0", "MAGMOM": "1.25 -0.75"},
+    )
+
+    captured: dict[str, list[float]] = {}
+
+    def capture_magmoms(atoms, calculator):
+        captured["moments"] = list(atoms.get_initial_magnetic_moments())
+        return 0.5
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(vpmdk, "get_calculator", lambda *_: DummyCalculator())
+    mp.setattr(vpmdk, "run_single_point", capture_magmoms)
+    mp.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        mp.undo()
+
+    assert "moments" in captured
+    assert arrays_close(captured["moments"], [1.25, -0.75])
+
+
 def test_main_negative_ibrion_forces_single_point(tmp_path: Path):
     prepare_inputs(
         tmp_path,
@@ -300,7 +337,11 @@ def load_atoms():
 
 def arrays_close(a, b, tol: float = 1e-8) -> bool:
     if np is not None:
-        return float(((a - b) ** 2).sum()) <= tol
+        arr_a = np.array(a, dtype=float)
+        arr_b = np.array(b, dtype=float)
+        if arr_a.shape != arr_b.shape:
+            return False
+        return float(((arr_a - arr_b) ** 2).sum()) <= tol
 
     def _flatten(seq):
         if isinstance(seq, (list, tuple)):
