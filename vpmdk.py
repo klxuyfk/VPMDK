@@ -49,7 +49,10 @@ def parse_key_value_file(path: str) -> Dict[str, str]:
     data: Dict[str, str] = {}
     with open(path) as f:
         for line in f:
-            line = line.split('#')[0].strip()
+            for comment in ("#", "!"):
+                if comment in line:
+                    line = line.split(comment, 1)[0]
+            line = line.strip()
             if not line or '=' not in line:
                 continue
             k, v = line.split('=', 1)
