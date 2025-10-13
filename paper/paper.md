@@ -49,7 +49,7 @@ VPMDK addresses this gap with a minimal driver that speaks the VASP dialect on d
 Place `POSCAR` (and optionally `INCAR`, `POTCAR`, `BCAR`) in a directory and run:
 
 ```bash
-python vpmdk.py --dir calc_dir
+python vpmdk.py [--dir calc_dir]
 ```
 
 `INCAR` chooses mode and control parameters; `BCAR` selects the potential and optional `MODEL`. Results appear as `CONTCAR`, `OUTCAR`, and, for MD, `XDATCAR`.
