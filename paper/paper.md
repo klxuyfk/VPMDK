@@ -20,61 +20,36 @@ bibliography: paper.bib
 
 # Summary
 
-VPMDK (the *Vasp-Protocol Machine-learning Dynamics Kit*) is a lightweight driver enabling atomic-level simulations using machine-learning potentials while maintaining the familiar Vienna Ab initio Simulation Package (VASP) style workflow. This toolkit reads and writes VASP-format artifacts (`POSCAR`, `INCAR`, `CONTCAR`, `OUTCAR`, `XDATCAR`, and related files), but redirects computationally intensive processing to machine learning potentials provided through the Atomic Simulation Environment (ASE) interface [@Larsen2017ASE]. This offers a lightweight surrogate model for many tools that traditionally relied on VASP.
-The project currently supports CHGNet [@Deng2023CHGNet], M3GNet via MatGL [@Chen2022M3GNet], MACE [@Batatia2022MACE], and MatterSim [@Mattersim2023] calculators. Users can switch between the latest neural network potentials without abandoning their VASP-based data management.
+VPMDK (the *Vasp‑Protocol Machine‑learning Dynamics Kit*) is a lightweight command‑line driver that preserves the familiar Vienna *Ab initio* Simulation Package (VASP) workflow while executing atomistic simulations with modern machine‑learning interatomic potentials (MLPs). The tool reads VASP‑style inputs (`POSCAR`, `INCAR`, optional `POTCAR` and `BCAR`) and emits VASP‑style outputs (`CONTCAR`, `OUTCAR`, `XDATCAR`), but routes energy/force/stress evaluation to ASE‑compatible calculators, currently including CHGNet, M3GNet (via MatGL), MACE, and MatterSim [@Larsen2017ASE; @Deng2023CHGNet; @Chen2022M3GNet; @Batatia2022MACE; @Mattersim2024]. By acting as a thin shim rather than a full re‑implementation of VASP, VPMDK makes it possible to swap DFT with an MLP surrogate in existing VASP‑centric data and workflow ecosystems without rewriting pipelines or abandoning well‑understood artefacts.
 
 # Statement of need
 
-Many software packages and scripts exist for reaction-path exploration, structure optimization, and stability analysis in crystalline materials, but most are designed on the premise of calling density-functional-theory (DFT) codes—VASP [@Kresse1996Efficient] in particular. Recently, however, machine-learning potentials (MLPs) have emerged as powerful surrogate models for DFT, enabling much faster execution of these tasks. In practice, using MLPs typically requires ASE-based Python programming, and researchers often face a mismatch with their established workflows. VPMDK bridges this gap by providing a minimal command-line driver that accepts VASP-format inputs, performs fast computations with an MLP, and then produces VASP-format outputs. This allows researchers to reuse their existing workflows and infrastructure while substituting DFT with an MLP, thereby enabling high-throughput materials evaluation.
+High‑throughput screening, structure relaxation, and molecular dynamics in crystalline materials are frequently orchestrated around VASP’s I/O conventions. Meanwhile, MLPs have matured into practical surrogates trained on large DFT corpora, offering orders‑of‑magnitude speedups for many tasks while retaining useful accuracy across broad chemistries [@Deng2023CHGNet; @Chen2022M3GNet; @Batatia2022MACE; @Mattersim2024]. In practice, however, deploying MLPs often requires ASE‑based Python scripts and data layouts that diverge from VASP‑style workflows, creating friction for users who rely on legacy post‑processing and workflow managers.
+
+VPMDK addresses this gap with a minimal driver that speaks the VASP dialect on disk yet computes with an MLP under the hood. Researchers can therefore (i) reuse existing input repositories and provenance policies, (ii) keep downstream analysis that expects `OUTCAR`/`XDATCAR`, and (iii) rapidly switch among state‑of‑the‑art neural potentials for pre‑screening, initial relaxations, finite‑temperature MD, or dataset generation—often as a drop‑in substitute for expensive DFT calls.
 
 ![Overview of `VPMDK`](fig1.png)
 
-# Major Features
+# Design and implementation
 
-VPMDK centres on a streamlined Python driver that mirrors the familiar VASP
-workflow while routing all expensive calculations through modern machine
-learning potentials. Run configuration is derived from the standard `INCAR`
-file, augmented by an optional `BCAR` control file that declares the desired
-potential, auxiliary parameters, and runtime switches using an intuitive
-`key=value` syntax. Atomic structures are ingested through pymatgen's robust
-POSCAR/POTCAR parsers and immediately converted to ASE atoms, ensuring
-consistency with existing VASP repositories.
+**I/O compatibility.** Structures are loaded from `POSCAR` via *pymatgen* and converted to ASE `Atoms`. If present, `POTCAR` is used only to reconcile species ordering; wavefunctions or charge densities (`WAVECAR`, `CHGCAR`) are detected but intentionally ignored. Initial magnetic moments are parsed from `INCAR`’s `MAGMOM` (including VASP shorthand such as `2*1.0`) and propagated to ASE when counts match [@Larsen2017ASE; @Ong2013pymatgen].
 
-Once configured, the driver dynamically loads the requested potential—CHGNet,
-M3GNet (via MatGL), MACE, or MatterSim—and exposes them through a unified
-interface. The simulation mode is automatically inferred from familiar VASP
-settings: negative `IBRION` triggers single-point evaluations, zero selects
-velocity-Verlet molecular dynamics with thermostatting via `TEBEG` and `POTIM`,
-and positive values launch BFGS relaxations optionally wrapped in ASE's
-`UnitCellFilter` for cell optimisation. Throughout a run the code preserves
-VASP-style artefacts, including `CONTCAR`, `OUTCAR`, and `XDATCAR`, enabling
-seamless hand-off to legacy analysis scripts. Supplementary conveniences such as
-automatic coordinate wrapping, per-step CSV energy dumps, and clear warnings for
-unsupported VASP flags help researchers transition existing workflows to machine
-learning potentials without sacrificing usability or provenance.
+**Configuration model.** Runtime behavior is driven primarily by a subset of VASP’s `INCAR` keys: `NSW` and `IBRION` choose single‑point (<0), MD (=0), or relaxation (>0). `TEBEG`/`TEEND` (K) and `POTIM` (fs) control MD, and `EDIFFG` follows VASP semantics: negative values set a force threshold (eV/Å) for relaxations, whereas positive values request convergence by total‑energy change between ionic steps. Crystal degrees of freedom are governed by `ISIF`; when cell updates are requested, relaxation wraps ASE’s filters (e.g., `UnitCellFilter`) and converts `PSTRESS` from kBar to eV/Å³. Unsupported tags are warned but safely ignored.
 
-# Example usage
+**MLP backends.** The optional `BCAR` control file (simple `key=value`) selects the calculator (`NNP=CHGNET|MATGL|MACE|MATTERSIM`) and, if needed, `MODEL=/path/to/parameters`. CHGNet and MatGL/M3GNet ship with default models; MACE and MatterSim can load user‑trained weights. Where available, GPU usage is delegated to the backend (e.g., auto‑select for MACE).
 
-A typical workflow begins with a directory containing the familiar VASP files:
+**Dynamics and thermostats.** For MD (`IBRION=0`), VPMDK uses velocity‑Verlet integration and supports common thermostats via ASE: Andersen (`MDALGO=1`), Nose–Hoover chains (`2` and `4`), Langevin (`3`), and canonical sampling velocity rescaling (Bussi; `5`). Temperatures are optionally ramped linearly from `TEBEG` to `TEEND`. Trajectories are written to `XDATCAR` incrementally, while `OUTCAR` records stepwise energies and temperature.
 
-```bash
-$ ls calc_dir
-BCAR  INCAR  POSCAR
-```
+**Relaxation behavior.** Geometry optimizations use BFGS, printing to `OUTCAR` and writing `CONTCAR` on completion. If requested via `BCAR`, a per‑step `energy.csv` is emitted for quick inspection. Cell updates (e.g., `ISIF=3,4,6–8`) map to ASE’s filters, with temporary ionic freezing when VASP semantics require cell‑only steps.
 
-The user selects a potential in `BCAR`, e.g. `NNP=CHGNET`, and runs:
+**Outputs and provenance.** VPMDK intentionally mirrors VASP artefacts—`CONTCAR` for the final structure, `OUTCAR` for a human‑readable log, and `XDATCAR` for MD trajectories—so that downstream tools expecting VASP I/O continue to work with MLP‑generated results. The tool does **not** attempt to emulate electronic‑structure features (k‑points, smearing, or charge densities); such files are recognized only to aid mixed DFT/MLP pipelines.
+
+# Usage
+
+Place `POSCAR` (and optionally `INCAR`, `POTCAR`, `BCAR`) in a directory and run:
 
 ```bash
 python vpmdk.py --dir calc_dir
-```
-
-If the `INCAR` sets `IBRION<0`, the script performs a single-point evaluation
-without moving ions, matching VASP's behaviour even when `NSW>0`. When
-`IBRION=0`, it carries out molecular dynamics for `NSW` steps at the
-temperature and timestep specified by `TEBEG` and `POTIM`. Positive `IBRION`
-values trigger a geometry optimisation until the requested force convergence
-(`EDIFFG`) or step limit is reached, producing updated VASP outputs for further
-processing or submission to downstream workflows.
 
 # Acknowledgements
 
