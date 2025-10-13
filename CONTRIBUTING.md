@@ -1,72 +1,21 @@
 # Contributing to VPMDK
 
-Thanks for your interest in improving VPMDK! We welcome bug reports, feature proposals, documentation updates, and other contributions. This guide explains how to get started.
+First off: thank you! Every idea, bug report, and pull request helps keep this little project moving forward. If you take the time to contribute, we want it to feel easy and friendly.
 
-## Code of conduct
+## Found a problem?
 
-Please be respectful and constructive when interacting with the community. Be kind, assume good intent, and keep discussions focused on the technical topic at hand.
+Please open an Issue and let us know what you ran into. A short summary is great, but adding details (what version/commit you used, how to reproduce it, any error messages, screenshots, etc.) helps us fix things faster.
 
-## Getting started
+## Fixed or improved something?
 
-1. Fork the repository and clone your fork:
-   ```bash
-   git clone https://github.com/<your-username>/vpmdk.git
-   cd vpmdk
-   ```
-2. Create and activate a virtual environment (optional but recommended):
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # On Windows use `.venv\\Scripts\\activate`
-   ```
-3. Install the core dependencies listed in the README:
-   ```bash
-   pip install ase pymatgen
-   # Install optional back-ends such as chgnet, mattersim, mace-torch, or matgl as needed
-   ```
+Pull requests are the best way to share your improvements. Before you hit "Create PR", please:
 
-## Development workflow
+- Make sure the tests you touched still pass (for example, run `pytest`).
+- Double-check anything else your change depends on (linters, formatters, docs) so reviewers don’t have to chase small fixes.
+- Confirm you’re happy to contribute your work under the repository’s BSD 3-Clause License.
 
-1. Create a branch for your work:
-   ```bash
-   git checkout -b feature/my-change
-   ```
-2. Make your changes in small, focused commits. Include clear commit messages that describe the intent of each change.
-3. Add tests whenever you fix a bug or implement a new feature.
-4. Ensure the existing tests continue to pass:
-   ```bash
-   pytest
-   ```
-5. Run static analysis tools you rely on (e.g. `ruff`, `black`, `mypy`) and ensure your code follows PEP 8 style. Keep imports sorted and add type hints when they improve readability.
-6. Update documentation (README, docstrings, comments) to reflect behavioural changes or new features.
+When you open the PR, add a quick note about what changed and why, and mention any related Issues if they exist. We’ll review it as soon as we can.
 
-## Writing good bug reports
+## Thanks again
 
-When filing an issue, please include:
-
-- The VPMDK version or commit hash.
-- Your operating system and Python version.
-- The potential and calculator you used (CHGNet, MACE, MatGL, MatterSim, etc.).
-- Steps to reproduce the problem, along with sample input files if possible.
-- The full error message or unexpected output.
-
-## Submitting a pull request
-
-Before opening a pull request (PR):
-
-- Rebase your branch onto the latest `main` branch.
-- Double-check that tests pass (`pytest`) and that you ran code formatters/linters.
-- Confirm that any new dependencies are documented and optional.
-- If your change affects user-facing behaviour, add or update documentation and examples.
-
-When you open the PR:
-
-- Provide a clear description of the change and its motivation.
-- Reference any related issues (e.g. "Fixes #123").
-- Include screenshots or logs when they help reviewers understand the change.
-- Be ready to respond to review feedback and iterate on your branch.
-
-## Licensing
-
-By contributing to VPMDK you agree that your contributions will be licensed under the repository's BSD 3-Clause License.
-
-We appreciate your help in making VPMDK better!
+Whether you’re reporting a typo or building a new feature, we appreciate you sharing your time and energy with VPMDK.
