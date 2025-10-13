@@ -52,10 +52,15 @@ Place `POSCAR` (and optionally `INCAR`, `POTCAR`, `BCAR`) in a directory and run
 python vpmdk.py --dir calc_dir
 ```
 
+`INCAR` chooses mode and control parameters; `BCAR` selects the potential and optional `MODEL`. Results appear as `CONTCAR`, `OUTCAR`, and, for MD, `XDATCAR`.
+
+# Limitations and scope
+
+VPMDK is not affiliated with, endorsed by, or a drop‑in replacement for VASP; it only mimics VASP I/O for convenience. Only a subset of `INCAR` keys are honored, and electronic‑structure quantities (k‑point meshes, wavefunctions, charge densities) are out of scope. Accuracy and transferability are those of the chosen MLP and its training regime; users should verify applicability for their chemistry and conditions [@Deng2023CHGNet; @Chen2022M3GNet; @Batatia2022MACE; @Mattersim2024].
+
 # Acknowledgements
 
-VPMDK builds upon the open-source efforts of the ASE, pymatgen, CHGNet, MatGL,
-MACE, and MatterSim communities.
+We thank the developers and maintainers of ASE and pymatgen for foundational infrastructure, and the authors of CHGNet, M3GNet/MatGL, MACE, and MatterSim for making high‑quality MLPs broadly available.
 
 # References
 
