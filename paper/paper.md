@@ -50,6 +50,7 @@ Place `POSCAR` (and optionally `INCAR`, `POTCAR`, `BCAR`) in a directory and run
 
 ```bash
 python vpmdk.py --dir calc_dir
+```
 
 # Acknowledgements
 
