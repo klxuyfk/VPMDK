@@ -16,7 +16,7 @@ VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is 
 3. Run:
 
    ```bash
-   python vpmdk.py --dir PATH_TO_INPUT
+   python vpmdk.py [--dir PATH_TO_INPUT]
    ```
 
 If `--dir` is omitted, the current directory (`.`) is used.
