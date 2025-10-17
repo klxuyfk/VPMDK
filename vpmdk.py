@@ -40,6 +40,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 from ase import units
 from ase.io import write
+from ase.io.vasp import write_vasp_xdatcar
 from ase.optimize import BFGS
 from ase.constraints import UnitCellFilter, StrainFilter, FixAtoms
 from ase.md.verlet import VelocityVerlet
@@ -190,6 +191,62 @@ def _apply_initial_magnetization(atoms, incar) -> None:
         )
         return
     atoms.set_initial_magnetic_moments(expanded)
+
+
+def _append_xdatcar_configuration(path: str, atoms, frame_number: int) -> None:
+    """Append a single XDATCAR configuration block for ``atoms``."""
+
+    scaled_positions = atoms.get_scaled_positions()
+    float_string = "{:11.8f}"
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(f"Direct configuration={frame_number:6d}\n")
+        for row in scaled_positions:
+            handle.write(" ")
+            handle.write(" ".join(float_string.format(value) for value in row))
+            handle.write("\n")
+
+
+def _rewrite_first_xdatcar_frame(path: str, atoms) -> None:
+    """Ensure the first XDATCAR frame uses direct (fractional) coordinates."""
+
+    scaled_positions = atoms.get_scaled_positions()
+    float_string = "{:11.8f}"
+    with open(path, "r", encoding="utf-8") as handle:
+        lines = handle.readlines()
+
+    configuration_index: int | None = None
+    for index, line in enumerate(lines):
+        if "configuration=" in line.lower():
+            configuration_index = index
+            break
+
+    if configuration_index is None:
+        return
+
+    lines[configuration_index] = f"Direct configuration={1:6d}\n"
+    start = configuration_index + 1
+    formatted_positions = [
+        " " + " ".join(float_string.format(value) for value in row) + "\n"
+        for row in scaled_positions
+    ]
+    end = start + len(formatted_positions)
+    lines[start:end] = formatted_positions
+
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.writelines(lines)
+
+
+def _write_xdatcar_step(path: str, atoms, step_index: int) -> None:
+    """Write or append an XDATCAR snapshot for the given MD ``step_index``."""
+
+    frame_number = step_index + 1
+    if step_index == 0:
+        with open(path, "w", encoding="utf-8") as handle:
+            write_vasp_xdatcar(handle, [atoms])
+        _rewrite_first_xdatcar_frame(path, atoms)
+        return
+
+    _append_xdatcar_configuration(path, atoms, frame_number)
 
 
 def read_structure(poscar_path: str, potcar_path: str | None = None):
@@ -816,7 +873,7 @@ def run_md(
     for i in range(steps):
         dyn.run(1)
         atoms.wrap()
-        write("XDATCAR", atoms, direct=True, append=i > 0)
+        _write_xdatcar_step("XDATCAR", atoms, i)
         if steps > 1 and i + 1 < steps and target_end != temperature:
             next_temp = temperature + (target_end - temperature) * (i + 1) / (steps - 1)
             update_temperature(next_temp)
