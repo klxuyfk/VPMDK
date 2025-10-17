@@ -17,7 +17,8 @@ def test_run_md_executes_multiple_steps(tmp_path, load_atoms):
             self.steps.append(n)
             atoms.positions += 0.01
 
-    written: list[tuple[str, bool]] = []
+    written: list[str] = []
+    xdat_steps: list[int] = []
     updates: list[float] = []
     captured: dict[str, DummyDynamics] = {}
 
@@ -38,10 +39,11 @@ def test_run_md_executes_multiple_steps(tmp_path, load_atoms):
         "MaxwellBoltzmannDistribution",
         lambda *a, **k: None,
     )
+    monkeypatch.setattr(vpmdk, "_write_xdatcar_step", lambda filename, atoms, step: xdat_steps.append(step))
     monkeypatch.setattr(
         vpmdk,
         "write",
-        lambda filename, atoms, direct=True, append=False: written.append((filename, append)),
+        lambda filename, atoms, direct=True: written.append(filename),
     )
     try:
         energy = vpmdk.run_md(
@@ -57,9 +59,8 @@ def test_run_md_executes_multiple_steps(tmp_path, load_atoms):
         monkeypatch.undo()
 
     assert isinstance(energy, float)
-    assert written.count(("XDATCAR", False)) == 1
-    assert written.count(("XDATCAR", True)) == 2
-    assert ("CONTCAR", False) in written
+    assert xdat_steps == [0, 1, 2]
+    assert "CONTCAR" in written
     assert captured["dyn"].steps == [1, 1, 1]
     assert updates == [525.0, 600.0]
 
