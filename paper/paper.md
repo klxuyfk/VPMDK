@@ -14,7 +14,7 @@ authors:
 affiliations:
  - name: Corteo LLC, Japan
    index: 1
-date: 12 October 2025
+date: 17 October 2025
 bibliography: paper.bib
 ---
 
