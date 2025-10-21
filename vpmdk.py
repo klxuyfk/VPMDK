@@ -3,8 +3,8 @@
 The utility consumes VASP-style inputs (POSCAR, INCAR, POTCAR, BCAR) and
 executes single-point, relaxation, or molecular dynamics runs with the selected
 neural-network potential.  Multiple ASE calculators are supported (CHGNet,
-M3GNet/MatGL, MACE, MatterSim) and the expected VASP outputs such as CONTCAR
-and OUTCAR-style energy logs are produced.
+M3GNet/MatGL, MACE, MatterSim, Matlantis) and the expected VASP outputs such as
+CONTCAR and OUTCAR-style energy logs are produced.
 """
 
 import argparse
@@ -13,7 +13,7 @@ import os
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Iterable, List
+from typing import Any, Callable, Dict, Iterable, List
 
 from pymatgen.io.vasp import Incar, Poscar, Potcar
 from pymatgen.io.ase import AseAtomsAdaptor
@@ -37,6 +37,17 @@ try:
     from mattersim.forcefield import MatterSimCalculator
 except Exception:  # pragma: no cover - optional dependency
     MatterSimCalculator = None  # type: ignore
+
+try:
+    from pfp_api_client.pfp.estimator import Estimator as MatlantisEstimator
+    from pfp_api_client.pfp.estimator import EstimatorCalcMode
+    from pfp_api_client.pfp.calculators.ase_calculator import (
+        ASECalculator as MatlantisASECalculator,
+    )
+except Exception:  # pragma: no cover - optional dependency
+    MatlantisEstimator = None  # type: ignore
+    MatlantisASECalculator = None  # type: ignore
+    EstimatorCalcMode = None  # type: ignore
 
 from ase import units
 from ase.io import write
@@ -278,6 +289,97 @@ def read_structure(poscar_path: str, potcar_path: str | None = None):
     return structure
 
 
+def _coerce_int_tag(value: str, tag_name: str) -> int:
+    """Parse integer BCAR tag values with a descriptive error message."""
+
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        raise ValueError(f"Invalid {tag_name} value: {value!r}") from None
+
+
+def _list_matlantis_calc_modes() -> str:
+    """Return comma-separated list of available Matlantis calc modes."""
+
+    if EstimatorCalcMode is None:
+        return ""
+    members = getattr(EstimatorCalcMode, "__members__", None)
+    if isinstance(members, dict) and members:
+        return ", ".join(sorted(members))
+    candidates = [name for name in dir(EstimatorCalcMode) if name.isupper()]
+    if candidates:
+        return ", ".join(sorted(candidates))
+    return ""
+
+
+def _resolve_matlantis_calc_mode(name: str):
+    """Map ``MATLANTIS_CALC_MODE`` to ``EstimatorCalcMode`` entry."""
+
+    if EstimatorCalcMode is None:
+        raise RuntimeError(
+            "Matlantis EstimatorCalcMode not available. Install pfp-api-client."
+        )
+
+    normalized = name.upper()
+    candidate = getattr(EstimatorCalcMode, normalized, None)
+    if candidate is not None:
+        return candidate
+
+    members = getattr(EstimatorCalcMode, "__members__", None)
+    if isinstance(members, dict) and normalized in members:
+        return members[normalized]
+
+    try:
+        return EstimatorCalcMode[normalized]  # type: ignore[index]
+    except Exception:
+        pass
+
+    try:
+        return EstimatorCalcMode(normalized)  # type: ignore[call-arg]
+    except Exception:
+        pass
+
+    options = _list_matlantis_calc_modes()
+    if options:
+        raise ValueError(
+            f"Unsupported MATLANTIS_CALC_MODE value {name!r}. "
+            f"Valid options: {options}"
+        )
+    raise ValueError(
+        f"Unsupported MATLANTIS_CALC_MODE value {name!r}. "
+        "Refer to the Matlantis documentation for valid options."
+    )
+
+
+def _build_matlantis_calculator(bcar_tags: Dict[str, str]):
+    """Create the Matlantis ASE calculator configured from BCAR tags."""
+
+    if MatlantisEstimator is None or MatlantisASECalculator is None or EstimatorCalcMode is None:
+        raise RuntimeError(
+            "Matlantis calculator not available. Install pfp-api-client and dependencies."
+        )
+
+    model_version = (
+        bcar_tags.get("MATLANTIS_MODEL_VERSION")
+        or bcar_tags.get("MODEL_VERSION")
+        or bcar_tags.get("MODEL")
+        or "v7.0.0"
+    )
+    priority_raw = bcar_tags.get("MATLANTIS_PRIORITY") or bcar_tags.get("PRIORITY")
+    priority = 50 if priority_raw is None else _coerce_int_tag(priority_raw, "MATLANTIS_PRIORITY")
+
+    calc_mode_value = bcar_tags.get("MATLANTIS_CALC_MODE") or bcar_tags.get("CALC_MODE")
+    calc_mode = _resolve_matlantis_calc_mode(calc_mode_value or "CRYSTAL")
+
+    estimator_kwargs: Dict[str, Any] = {
+        "model_version": model_version,
+        "priority": priority,
+        "calc_mode": calc_mode,
+    }
+
+    return MatlantisASECalculator(MatlantisEstimator(**estimator_kwargs))
+
+
 def get_calculator(bcar_tags: Dict[str, str]):
     """Return ASE calculator based on BCAR tags."""
     nnp = bcar_tags.get("NNP", "CHGNET").upper()
@@ -324,6 +426,8 @@ def get_calculator(bcar_tags: Dict[str, str]):
         if model_path and os.path.exists(model_path):
             return MatterSimCalculator(model_path)
         return MatterSimCalculator()
+    if nnp == "MATLANTIS":
+        return _build_matlantis_calculator(bcar_tags)
     raise ValueError(f"Unsupported NNP type: {nnp}")
 
 

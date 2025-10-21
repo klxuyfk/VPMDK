@@ -2,7 +2,7 @@
 
 VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is a lightweight engine that **reads and writes VASP-style inputs/outputs** and performs **molecular dynamics and structure relaxations** using **machine-learning interatomic potentials**. Keep familiar VASP workflows and artifacts while computations run through ASE-compatible ML calculators. A simple driver script, `vpmdk.py`, is provided.
 
-**Supported calculators (via ASE):** **CHGNet**, **MatterSim**, **MACE**, and **MatGL** (via the M3GNet model). Availability depends on the corresponding Python packages being installed.
+**Supported calculators (via ASE):** **CHGNet**, **MatterSim**, **MACE**, **Matlantis**, and **MatGL** (via the M3GNet model). Availability depends on the corresponding Python packages being installed.
 
 *Not affiliated with, endorsed by, or a replacement for VASP; “VASP” is a trademark of its respective owner. VPMDK only mimics VASP I/O conventions for compatibility.*
 
@@ -83,8 +83,15 @@ Available `BCAR` tags and defaults:
 |-----|---------|---------|
 | `NNP` | Name of the potential | `CHGNET` |
 | `MODEL` | Path to a trained parameter set | potential's built-in model |
+| `MATLANTIS_MODEL_VERSION` | Matlantis estimator version identifier | `v7.0.0` |
+| `MATLANTIS_PRIORITY` | Matlantis job priority passed to the estimator | `50` |
+| `MATLANTIS_CALC_MODE` | Matlantis calculation mode (`CRYSTAL`, `MOLECULE`, …) | `CRYSTAL` |
 | `DEVICE` | Device for MACE (`cuda` or `cpu`) | auto-detect (`cuda` if available, else `cpu`) |
 | `WRITE_ENERGY_CSV` | Write `energy.csv` during relaxation (`1` to enable) | `0` (disabled) |
+
+Matlantis calculations rely on the [Matlantis API](https://matlantis.com) via
+`pfp-api-client`; ensure your environment is configured with the required API
+credentials before running VPMDK with `NNP=MATLANTIS`.
 
 ## Output files
 
@@ -116,6 +123,7 @@ selected potential or thermostat:
 | CHGNet potential | `chgnet` (uses PyTorch) | Bundled with a default model; specify `MODEL` to use another |
 | MatGL (M3GNet) potential | `matgl` (uses JAX) | Bundled with a default model; specify `MODEL` to use another |
 | MACE potential | `mace-torch` (PyTorch) | Set `MODEL` to a trained `.model` file |
+| Matlantis potential | `pfp-api-client` (plus `matlantis-features`) | Uses the Matlantis estimator service; configure with `MATLANTIS_*` BCAR tags |
 | MatterSim potential | `mattersim` (PyTorch) | Set `MODEL` to the trained parameters |
 | Andersen thermostat | `ase.md.andersen` (part of ASE extras) | Install ASE with MD extras to enable |
 | Langevin thermostat | `ase.md.langevin` | Ships with ASE; ensure ASE is up to date |
