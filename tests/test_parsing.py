@@ -54,3 +54,28 @@ def test_bcar_parsing_handles_case_whitespace_and_comments(tmp_path: Path):
 def test_parse_magmom_values(definition, expected, arrays_close):
     parsed = vpmdk._parse_magmom_values(definition)
     assert arrays_close(parsed, expected)
+
+
+def test_read_structure_normalizes_potcar_species(tmp_path: Path):
+    poscar_content = """Test structure
+1.0
+1 0 0
+0 1 0
+0 0 1
+Y_sv O_h_GW
+1 1
+Direct
+0.0 0.0 0.0
+0.5 0.5 0.5
+"""
+    potcar_content = """Y_sv
+O_h_GW
+"""
+    poscar_path = tmp_path / "POSCAR"
+    potcar_path = tmp_path / "POTCAR"
+    poscar_path.write_text(poscar_content)
+    potcar_path.write_text(potcar_content)
+
+    structure = vpmdk.read_structure(str(poscar_path), str(potcar_path))
+
+    assert getattr(structure, "species", []) == ["Y", "O"]
