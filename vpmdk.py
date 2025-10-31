@@ -153,6 +153,21 @@ def _parse_magmom_values(value) -> List[float]:
     return result
 
 
+def _normalize_species_labels(symbols: Iterable[object]) -> List[str]:
+    """Return species labels with POTCAR-style suffixes removed."""
+
+    normalized: List[str] = []
+    for symbol in symbols:
+        if not isinstance(symbol, str):
+            continue
+        text = symbol.strip()
+        if not text:
+            continue
+        base = text.split("_", 1)[0].strip()
+        normalized.append(base or text)
+    return normalized
+
+
 def _expand_magmom_to_atoms(magmoms: List[float], atoms) -> List[float] | None:
     """Expand species MAGMOM values to per-atom list when necessary."""
 
@@ -267,21 +282,26 @@ def read_structure(poscar_path: str, potcar_path: str | None = None):
     if potcar_path and os.path.exists(potcar_path):
         try:
             potcar = Potcar.from_file(potcar_path)
-            potcar_symbols = potcar.symbols
+            potcar_symbols = getattr(potcar, "symbols", [])
         except Exception:
             potcar_symbols = []
-        if potcar_symbols:
+        normalized_potcar_symbols = _normalize_species_labels(potcar_symbols)
+        if normalized_potcar_symbols:
             # check consistency
-            if poscar.site_symbols and len(poscar.site_symbols) == len(potcar_symbols):
-                if list(poscar.site_symbols) != potcar_symbols:
+            if poscar.site_symbols and len(poscar.site_symbols) == len(normalized_potcar_symbols):
+                normalized_poscar_symbols = _normalize_species_labels(poscar.site_symbols)
+                if normalized_poscar_symbols != normalized_potcar_symbols:
                     print(
                         "Warning: species in POSCAR and POTCAR differ. "
-                        f"Using POTCAR order: {potcar_symbols}"
+                        f"Using POTCAR order: {normalized_potcar_symbols}"
                     )
-                    poscar.site_symbols = potcar_symbols
+                    poscar.site_symbols = normalized_potcar_symbols
+                    structure = poscar.structure
+                elif list(poscar.site_symbols) != normalized_potcar_symbols:
+                    poscar.site_symbols = normalized_potcar_symbols
                     structure = poscar.structure
             elif not poscar.site_symbols:
-                poscar.site_symbols = potcar_symbols
+                poscar.site_symbols = normalized_potcar_symbols
                 structure = poscar.structure
     else:
         if not poscar.site_symbols:

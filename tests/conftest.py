@@ -65,9 +65,10 @@ def _install_pymatgen_stubs() -> None:
             self.species = list(species)
 
     class Poscar:
-        def __init__(self, structure, site_symbols):
+        def __init__(self, structure, site_symbols, counts):
             self._structure = structure
             self._site_symbols = list(site_symbols)
+            self._counts = list(counts)
 
         @property
         def structure(self):  # pragma: no cover - tiny accessor
@@ -80,6 +81,13 @@ def _install_pymatgen_stubs() -> None:
         @site_symbols.setter
         def site_symbols(self, symbols):
             self._site_symbols = list(symbols)
+            if not self._counts:
+                return
+            expanded: list[str] = []
+            for symbol, count in zip(self._site_symbols, self._counts):
+                expanded.extend([symbol] * count)
+            if len(expanded) == len(getattr(self._structure, "species", [])):
+                self._structure.species = expanded
 
         @classmethod
         def from_file(cls, path):
@@ -103,7 +111,7 @@ def _install_pymatgen_stubs() -> None:
                     species.append(name)
 
             structure = _Structure(lattice, frac_coords, species)
-            return cls(structure, species_names)
+            return cls(structure, species_names, counts)
 
         @classmethod
         def from_str(cls, content):  # pragma: no cover - convenience
@@ -144,7 +152,12 @@ def _install_pymatgen_stubs() -> None:
         def from_file(cls, path):
             with open(path) as f:
                 lines = [line.strip() for line in f if line.strip()]
-            symbols = [line for line in lines if line.isalpha()]
+            symbols = []
+            for line in lines:
+                token = line.split()[0]
+                candidate = token.replace("_", "")
+                if candidate.isalpha():
+                    symbols.append(token)
             return cls(symbols)
 
     class AseAtomsAdaptor:
