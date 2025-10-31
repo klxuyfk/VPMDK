@@ -383,13 +383,13 @@ def _build_matlantis_calculator(bcar_tags: Dict[str, str]):
         bcar_tags.get("MATLANTIS_MODEL_VERSION")
         or bcar_tags.get("MODEL_VERSION")
         or bcar_tags.get("MODEL")
-        or "v7.0.0"
+        or "v8.0.0"
     )
     priority_raw = bcar_tags.get("MATLANTIS_PRIORITY") or bcar_tags.get("PRIORITY")
     priority = 50 if priority_raw is None else _coerce_int_tag(priority_raw, "MATLANTIS_PRIORITY")
 
     calc_mode_value = bcar_tags.get("MATLANTIS_CALC_MODE") or bcar_tags.get("CALC_MODE")
-    calc_mode = _resolve_matlantis_calc_mode(calc_mode_value or "CRYSTAL")
+    calc_mode = _resolve_matlantis_calc_mode(calc_mode_value or "PBE")
 
     estimator_kwargs: Dict[str, Any] = {
         "model_version": model_version,
