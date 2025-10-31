@@ -332,15 +332,23 @@ def _list_matlantis_calc_modes() -> str:
     return ""
 
 
-def _resolve_matlantis_calc_mode(name: str):
-    """Map ``MATLANTIS_CALC_MODE`` to ``EstimatorCalcMode`` entry."""
+def _resolve_matlantis_calc_mode(name):
+    """Return ``EstimatorCalcMode`` or passthrough string for Matlantis calc mode."""
 
     if EstimatorCalcMode is None:
         raise RuntimeError(
             "Matlantis EstimatorCalcMode not available. Install pfp-api-client."
         )
 
-    normalized = name.upper()
+    if isinstance(name, EstimatorCalcMode):
+        return name
+
+    if name is None:
+        raise ValueError("MATLANTIS_CALC_MODE must not be None")
+
+    text = str(name)
+    normalized = text.upper()
+
     candidate = getattr(EstimatorCalcMode, normalized, None)
     if candidate is not None:
         return candidate
@@ -359,16 +367,7 @@ def _resolve_matlantis_calc_mode(name: str):
     except Exception:
         pass
 
-    options = _list_matlantis_calc_modes()
-    if options:
-        raise ValueError(
-            f"Unsupported MATLANTIS_CALC_MODE value {name!r}. "
-            f"Valid options: {options}"
-        )
-    raise ValueError(
-        f"Unsupported MATLANTIS_CALC_MODE value {name!r}. "
-        "Refer to the Matlantis documentation for valid options."
-    )
+    return text
 
 
 def _build_matlantis_calculator(bcar_tags: Dict[str, str]):
