@@ -332,15 +332,23 @@ def _list_matlantis_calc_modes() -> str:
     return ""
 
 
-def _resolve_matlantis_calc_mode(name: str):
-    """Map ``MATLANTIS_CALC_MODE`` to ``EstimatorCalcMode`` entry."""
+def _resolve_matlantis_calc_mode(name):
+    """Return ``EstimatorCalcMode`` or passthrough string for Matlantis calc mode."""
 
     if EstimatorCalcMode is None:
         raise RuntimeError(
             "Matlantis EstimatorCalcMode not available. Install pfp-api-client."
         )
 
-    normalized = name.upper()
+    if isinstance(name, EstimatorCalcMode):
+        return name
+
+    if name is None:
+        raise ValueError("MATLANTIS_CALC_MODE must not be None")
+
+    text = str(name)
+    normalized = text.upper()
+
     candidate = getattr(EstimatorCalcMode, normalized, None)
     if candidate is not None:
         return candidate
@@ -359,16 +367,7 @@ def _resolve_matlantis_calc_mode(name: str):
     except Exception:
         pass
 
-    options = _list_matlantis_calc_modes()
-    if options:
-        raise ValueError(
-            f"Unsupported MATLANTIS_CALC_MODE value {name!r}. "
-            f"Valid options: {options}"
-        )
-    raise ValueError(
-        f"Unsupported MATLANTIS_CALC_MODE value {name!r}. "
-        "Refer to the Matlantis documentation for valid options."
-    )
+    return text
 
 
 def _build_matlantis_calculator(bcar_tags: Dict[str, str]):
@@ -383,13 +382,13 @@ def _build_matlantis_calculator(bcar_tags: Dict[str, str]):
         bcar_tags.get("MATLANTIS_MODEL_VERSION")
         or bcar_tags.get("MODEL_VERSION")
         or bcar_tags.get("MODEL")
-        or "v7.0.0"
+        or "v8.0.0"
     )
     priority_raw = bcar_tags.get("MATLANTIS_PRIORITY") or bcar_tags.get("PRIORITY")
     priority = 50 if priority_raw is None else _coerce_int_tag(priority_raw, "MATLANTIS_PRIORITY")
 
     calc_mode_value = bcar_tags.get("MATLANTIS_CALC_MODE") or bcar_tags.get("CALC_MODE")
-    calc_mode = _resolve_matlantis_calc_mode(calc_mode_value or "CRYSTAL")
+    calc_mode = _resolve_matlantis_calc_mode(calc_mode_value or "PBE")
 
     estimator_kwargs: Dict[str, Any] = {
         "model_version": model_version,

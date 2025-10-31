@@ -83,9 +83,9 @@ Available `BCAR` tags and defaults:
 |-----|---------|---------|
 | `NNP` | Name of the potential | `CHGNET` |
 | `MODEL` | Path to a trained parameter set | potential's built-in model |
-| `MATLANTIS_MODEL_VERSION` | Matlantis estimator version identifier | `v7.0.0` |
+| `MATLANTIS_MODEL_VERSION` | Matlantis estimator version identifier | `v8.0.0` |
 | `MATLANTIS_PRIORITY` | Matlantis job priority passed to the estimator | `50` |
-| `MATLANTIS_CALC_MODE` | Matlantis calculation mode (`CRYSTAL`, `MOLECULE`, …) | `CRYSTAL` |
+| `MATLANTIS_CALC_MODE` | Matlantis calculation mode (`CRYSTAL`, `MOLECULE`, …) | `PBE` |
 | `DEVICE` | Device for MACE (`cuda` or `cpu`) | auto-detect (`cuda` if available, else `cpu`) |
 | `WRITE_ENERGY_CSV` | Write `energy.csv` during relaxation (`1` to enable) | `0` (disabled) |
 
