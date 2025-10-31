@@ -10,6 +10,7 @@ CONTCAR and OUTCAR-style energy logs are produced.
 import argparse
 import csv
 import os
+import re
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -514,6 +515,9 @@ SUPPORTED_INCAR_TAGS = {
 SUPPORTED_ISIF_VALUES = {0, 1, 2, 3, 4, 5, 6, 7, 8}
 
 
+_NUMERIC_RE = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
+
+
 def _load_incar(path: str):
     """Return ``Incar`` contents when available, falling back to ``{}``."""
 
@@ -535,8 +539,15 @@ def _parse_optional_float(value, *, key: str):
 
     if value is None:
         return None
+    candidate = value
+    if isinstance(value, str):
+        match = _NUMERIC_RE.search(value)
+        if match is not None:
+            candidate = match.group(0)
+        else:
+            candidate = value.strip()
     try:
-        return float(value)
+        return float(candidate)
     except (TypeError, ValueError):
         print(f"Warning: Unable to parse {key}; ignoring value {value}")
         return None
@@ -591,8 +602,14 @@ def _load_incar_settings(incar) -> IncarSettings:
     pstress = None
     if "PSTRESS" in incar:
         pstress = _parse_optional_float(incar.get("PSTRESS", 0.0), key="PSTRESS")
-    tebeg = float(incar.get("TEBEG", 300.0))
-    teend = float(incar.get("TEEND", tebeg))
+    tebeg_default = 300.0
+    tebeg_value = incar.get("TEBEG", tebeg_default)
+    parsed_tebeg = _parse_optional_float(tebeg_value, key="TEBEG")
+    tebeg = parsed_tebeg if parsed_tebeg is not None else tebeg_default
+
+    teend_value = incar.get("TEEND", tebeg)
+    parsed_teend = _parse_optional_float(teend_value, key="TEEND")
+    teend = parsed_teend if parsed_teend is not None else tebeg
     potim = float(incar.get("POTIM", 2.0))
     mdalgo = int(float(incar.get("MDALGO", 0)))
     smass = (
