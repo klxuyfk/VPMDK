@@ -60,7 +60,7 @@ VPMDK is not affiliated with, endorsed by, or a drop‑in replacement for VASP; 
 
 # Acknowledgements
 
-We thank the developers and maintainers of ASE and pymatgen for foundational infrastructure, and the authors of CHGNet, M3GNet/MatGL, MACE, and MatterSim for making high‑quality MLPs broadly available.
+I thank the developers and maintainers of ASE and pymatgen for foundational infrastructure, and the authors of CHGNet, M3GNet/MatGL, MACE, and MatterSim for making high‑quality MLPs broadly available.
 
 # References
 
