@@ -2,7 +2,7 @@
 
 VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is a lightweight engine that **reads and writes VASP-style inputs/outputs** and performs **molecular dynamics and structure relaxations** using **machine-learning interatomic potentials**. Keep familiar VASP workflows and artifacts while computations run through ASE-compatible ML calculators. A simple driver script, `vpmdk.py`, is provided.
 
-**Supported calculators (via ASE):** **CHGNet**, **MatterSim**, **MACE**, **Matlantis**, **NequIP**, **Allegro**, and **MatGL** (via the M3GNet model). Availability depends on the corresponding Python packages being installed.
+**Supported calculators (via ASE):** **CHGNet**, **MatterSim**, **MACE**, **Matlantis**, **NequIP**, **Allegro**, **ORB**, and **MatGL** (via the M3GNet model). Availability depends on the corresponding Python packages being installed.
 
 *Not affiliated with, endorsed by, or a replacement for VASP; “VASP” is a trademark of its respective owner. VPMDK only mimics VASP I/O conventions for compatibility.*
 
@@ -82,16 +82,23 @@ Available `BCAR` tags and defaults:
 | Tag | Meaning | Default |
 |-----|---------|---------|
 | `NNP` | Name of the potential | `CHGNET` |
-| `MODEL` | Path to a trained parameter set | potential's built-in model |
+| `MODEL` | Path to a trained parameter set (ORB uses it for weight checkpoints) | potential's built-in model |
 | `MATLANTIS_MODEL_VERSION` | Matlantis estimator version identifier | `v8.0.0` |
 | `MATLANTIS_PRIORITY` | Matlantis job priority passed to the estimator | `50` |
 | `MATLANTIS_CALC_MODE` | Matlantis calculation mode (`CRYSTAL`, `MOLECULE`, …) | `PBE` |
-| `DEVICE` | Device for MACE (`cuda` or `cpu`) | auto-detect (`cuda` if available, else `cpu`) |
+| `DEVICE` | Device for MACE (`cuda` or `cpu`) and ORB (`cpu`, `cuda`, `cuda:N`) | auto-detect (`cuda` if available, else `cpu`) |
 | `WRITE_ENERGY_CSV` | Write `energy.csv` during relaxation (`1` to enable) | `0` (disabled) |
+| `ORB_MODEL` | Pretrained ORB architecture key recognised by `orb_models` | `orb-v3-conservative-20-omat` |
+| `ORB_PRECISION` | Floating-point precision string forwarded to orb-models loaders | `float32-high` |
+| `ORB_COMPILE` | Whether to `torch.compile` the ORB model (`0/1`, `true/false`, …) | library default |
 
 Matlantis calculations rely on the [Matlantis API](https://matlantis.com) via
 `pfp-api-client`; ensure your environment is configured with the required API
 credentials before running VPMDK with `NNP=MATLANTIS`.
+
+ORB calculations rely on the [orb-models](https://github.com/orbital-materials/orb-models)
+package. When `MODEL` is omitted, VPMDK downloads the pretrained weights specified by
+`ORB_MODEL` using orb-models; set `MODEL=/path/to/checkpoint.ckpt` to run with local weights.
 
 ## Output files
 
@@ -126,6 +133,7 @@ selected potential or thermostat:
 | MatGL (M3GNet) potential | `matgl` (uses JAX) | Bundled with a default model; specify `MODEL` to use another |
 | MACE potential | `mace-torch` (PyTorch) | Set `MODEL` to a trained `.model` file |
 | Matlantis potential | `pfp-api-client` (plus `matlantis-features`) | Uses the Matlantis estimator service; configure with `MATLANTIS_*` BCAR tags |
+| ORB potential | `orb-models` (PyTorch) | Downloads pretrained weights unless `MODEL` points to a checkpoint |
 | MatterSim potential | `mattersim` (PyTorch) | Set `MODEL` to the trained parameters |
 | Andersen thermostat | `ase.md.andersen` (part of ASE extras) | Install ASE with MD extras to enable |
 | Langevin thermostat | `ase.md.langevin` | Ships with ASE; ensure ASE is up to date |
