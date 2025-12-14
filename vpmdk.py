@@ -278,9 +278,16 @@ def _normalize_species_labels(symbols: Iterable[object]) -> List[str]:
 
     normalized: List[str] = []
     for symbol in symbols:
-        if not isinstance(symbol, str):
-            continue
-        text = symbol.strip()
+        text: str = ""
+        if isinstance(symbol, str):
+            text = symbol.strip()
+        elif hasattr(symbol, "symbol"):
+            text = str(getattr(symbol, "symbol", "")).strip()
+        else:
+            try:
+                text = str(symbol).strip()
+            except Exception:
+                continue
         if not text:
             continue
         base = text.split("_", 1)[0].strip()
