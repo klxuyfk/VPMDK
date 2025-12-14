@@ -79,3 +79,36 @@ O_h_GW
     structure = vpmdk.read_structure(str(poscar_path), str(potcar_path))
 
     assert getattr(structure, "species", []) == ["Y", "O"]
+
+
+def test_build_orb_calculator_uses_bcar_tags(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    def fake_model(**kwargs):
+        captured.update(kwargs)
+        return "model"
+
+    class DummyCalculator:
+        def __init__(self, model, device=None):
+            self.model = model
+            self.device = device
+
+    monkeypatch.setattr(vpmdk, "ORBCalculator", DummyCalculator)
+    monkeypatch.setattr(vpmdk, "ORB_PRETRAINED_MODELS", {"custom": fake_model})
+
+    calculator = vpmdk._build_orb_calculator(
+        {
+            "NNP": "ORB",
+            "MODEL": "weights.ckpt",
+            "DEVICE": "cuda:1",
+            "ORB_MODEL": "custom",
+            "ORB_PRECISION": "float64",
+            "ORB_COMPILE": "false",
+        }
+    )
+
+    assert isinstance(calculator, DummyCalculator)
+    assert calculator.device == "cuda:1"
+    assert captured["weights_path"] == "weights.ckpt"
+    assert captured["precision"] == "float64"
+    assert captured["compile"] is False

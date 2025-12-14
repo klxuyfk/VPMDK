@@ -12,7 +12,17 @@ from tests.conftest import DummyCalculator
 
 @pytest.mark.parametrize(
     "potential",
-    ["CHGNET", "MATGL", "M3GNET", "MACE", "MATTERSIM", "MATLANTIS", "ALLEGRO", "NEQUIP"],
+    [
+        "CHGNET",
+        "MATGL",
+        "M3GNET",
+        "MACE",
+        "MATTERSIM",
+        "MATLANTIS",
+        "ALLEGRO",
+        "NEQUIP",
+        "ORB",
+    ],
 )
 def test_single_point_energy_for_all_potentials(
     tmp_path: Path,
@@ -49,6 +59,8 @@ def test_single_point_energy_for_all_potentials(
     monkeypatch.setattr(vpmdk, "MatlantisEstimator", lambda *a, **k: object())
     monkeypatch.setattr(vpmdk, "MatlantisASECalculator", lambda *a, **k: factory("MATLANTIS"))
     monkeypatch.setattr(vpmdk, "_build_allegro_calculator", lambda *a, **k: factory("ALLEGRO"))
+    monkeypatch.setattr(vpmdk, "ORBCalculator", lambda *a, **k: factory("ORB"))
+    monkeypatch.setattr(vpmdk, "ORB_PRETRAINED_MODELS", {vpmdk.DEFAULT_ORB_MODEL: lambda **_: "orb"})
 
     class DummyEstimatorMode:
         CRYSTAL = "CRYSTAL"

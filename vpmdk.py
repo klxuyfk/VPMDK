@@ -66,6 +66,13 @@ except Exception:  # pragma: no cover - optional dependency
     MatlantisASECalculator = None  # type: ignore
     EstimatorCalcMode = None  # type: ignore
 
+try:
+    from orb_models.forcefield.calculator import ORBCalculator
+    from orb_models.forcefield.pretrained import ORB_PRETRAINED_MODELS
+except Exception:  # pragma: no cover - optional dependency
+    ORBCalculator = None  # type: ignore
+    ORB_PRETRAINED_MODELS = None  # type: ignore
+
 from ase import units
 from ase.io import write
 from ase.io.vasp import write_vasp_xdatcar
@@ -100,6 +107,8 @@ if _nequip_ase_spec is not None:  # pragma: no cover - optional dependency
     from nequip.ase import NequIPCalculator
 else:  # pragma: no cover - optional dependency
     NequIPCalculator = None  # type: ignore
+
+DEFAULT_ORB_MODEL = "orb-v3-conservative-20-omat"
 
 
 def _build_allegro_calculator(model_path: str, device: str | None = None):
@@ -394,6 +403,17 @@ def _coerce_int_tag(value: str, tag_name: str) -> int:
         raise ValueError(f"Invalid {tag_name} value: {value!r}") from None
 
 
+def _coerce_bool_tag(value: str, tag_name: str) -> bool:
+    """Parse boolean-like BCAR tags with descriptive errors."""
+
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"Invalid {tag_name} value: {value!r}")
+
+
 def _list_matlantis_calc_modes() -> str:
     """Return comma-separated list of available Matlantis calc modes."""
 
@@ -475,6 +495,35 @@ def _build_matlantis_calculator(bcar_tags: Dict[str, str]):
     return MatlantisASECalculator(MatlantisEstimator(**estimator_kwargs))
 
 
+def _build_orb_calculator(bcar_tags: Dict[str, str]):
+    """Create the ORB ASE calculator configured from BCAR tags."""
+
+    if ORBCalculator is None or ORB_PRETRAINED_MODELS is None:
+        raise RuntimeError("ORB calculator not available. Install orb-models and dependencies.")
+
+    model_name = bcar_tags.get("ORB_MODEL") or DEFAULT_ORB_MODEL
+    model_factory = ORB_PRETRAINED_MODELS.get(model_name)
+    if model_factory is None:
+        supported = ", ".join(sorted(ORB_PRETRAINED_MODELS))
+        raise ValueError(f"Unsupported ORB model '{model_name}'. Available: {supported}")
+
+    device = bcar_tags.get("DEVICE")
+    precision = bcar_tags.get("ORB_PRECISION") or "float32-high"
+    compile_value = bcar_tags.get("ORB_COMPILE")
+    compile_flag = None if compile_value is None else _coerce_bool_tag(compile_value, "ORB_COMPILE")
+    weights_path = bcar_tags.get("MODEL")
+
+    model = model_factory(
+        weights_path=weights_path or None,
+        device=device,
+        precision=precision,
+        compile=compile_flag,
+        train=False,
+    )
+
+    return ORBCalculator(model, device=device)
+
+
 def get_calculator(bcar_tags: Dict[str, str]):
     """Return ASE calculator based on BCAR tags."""
     nnp = bcar_tags.get("NNP", "CHGNET").upper()
@@ -537,6 +586,8 @@ def get_calculator(bcar_tags: Dict[str, str]):
         return NequIPCalculator.from_deployed_model(model_path)
     if nnp == "MATLANTIS":
         return _build_matlantis_calculator(bcar_tags)
+    if nnp == "ORB":
+        return _build_orb_calculator(bcar_tags)
     raise ValueError(f"Unsupported NNP type: {nnp}")
 
 
