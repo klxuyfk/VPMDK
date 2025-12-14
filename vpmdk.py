@@ -92,6 +92,11 @@ except Exception:  # pragma: no cover - optional dependency
     GRACE_MODEL_NAMES: List[str] = []
     grace_fm = None  # type: ignore
 
+try:
+    from deepmd.calculator import DP as DeePMDCalculator
+except Exception:  # pragma: no cover - optional dependency
+    DeePMDCalculator = None  # type: ignore
+
 _sevennet_spec = importlib.util.find_spec("sevennet")
 if _sevennet_spec is not None:  # pragma: no cover - optional dependency
     try:
@@ -273,14 +278,40 @@ def _normalize_species_labels(symbols: Iterable[object]) -> List[str]:
 
     normalized: List[str] = []
     for symbol in symbols:
-        if not isinstance(symbol, str):
-            continue
-        text = symbol.strip()
+        text: str = ""
+        if isinstance(symbol, str):
+            text = symbol.strip()
+        elif hasattr(symbol, "symbol"):
+            text = str(getattr(symbol, "symbol", "")).strip()
+        else:
+            try:
+                text = str(symbol).strip()
+            except Exception:
+                continue
         if not text:
             continue
         base = text.split("_", 1)[0].strip()
         normalized.append(base or text)
     return normalized
+
+
+def _infer_type_map(structure) -> List[str]:
+    """Infer a DeePMD type map from the provided structure when possible."""
+
+    labels: List[str] = []
+    for attr in ("site_symbols", "species"):
+        symbols = getattr(structure, attr, None)
+        if symbols:
+            labels = _normalize_species_labels(symbols)
+            if labels:
+                break
+
+    unique: List[str] = []
+    for label in labels:
+        if label and label not in unique:
+            unique.append(label)
+
+    return unique
 
 
 def _expand_magmom_to_atoms(magmoms: List[float], atoms) -> List[float] | None:
@@ -635,7 +666,35 @@ def _build_grace_calculator(bcar_tags: Dict[str, str]):
     )
 
 
-def get_calculator(bcar_tags: Dict[str, str]):
+def _build_deepmd_calculator(bcar_tags: Dict[str, str], structure=None):
+    """Create a DeePMD-kit calculator configured from BCAR tags."""
+
+    if DeePMDCalculator is None:
+        raise RuntimeError(
+            "DeePMD-kit calculator not available. Install deepmd-kit and dependencies."
+        )
+
+    model_path = bcar_tags.get("MODEL")
+    if not model_path:
+        raise ValueError("DeePMD-kit requires MODEL pointing to a frozen model file.")
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"DeePMD-kit model not found: {model_path}")
+
+    type_map_value = bcar_tags.get("DEEPMD_TYPE_MAP")
+    type_map: List[str] = []
+    if type_map_value:
+        type_map = [item for item in re.split(r"[\s,]+", type_map_value.strip()) if item]
+    elif structure is not None:
+        type_map = _infer_type_map(structure)
+
+    kwargs: Dict[str, Any] = {}
+    if type_map:
+        kwargs["type_map"] = type_map
+
+    return DeePMDCalculator(model=model_path, **kwargs)
+
+
+def get_calculator(bcar_tags: Dict[str, str], *, structure=None):
     """Return ASE calculator based on BCAR tags."""
     nnp = bcar_tags.get("NNP", "CHGNET").upper()
     if nnp == "CHGNET":
@@ -710,6 +769,8 @@ def get_calculator(bcar_tags: Dict[str, str]):
         return _build_fairchem_calculator(bcar_tags)
     if nnp == "GRACE":
         return _build_grace_calculator(bcar_tags)
+    if nnp == "DEEPMD":
+        return _build_deepmd_calculator(bcar_tags, structure=structure)
     raise ValueError(f"Unsupported NNP type: {nnp}")
 
 
@@ -1413,7 +1474,7 @@ def main():
     _warn_for_unsupported_incar_tags(incar)
     settings = _load_incar_settings(incar)
 
-    calculator = get_calculator(bcar)
+    calculator = get_calculator(bcar, structure=structure)
     write_energy_csv = _should_write_energy_csv(bcar)
 
     if settings.nsw <= 0 or settings.ibrion < 0:

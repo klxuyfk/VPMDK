@@ -2,7 +2,7 @@
 
 VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is a lightweight engine that **reads and writes VASP-style inputs/outputs** and performs **molecular dynamics and structure relaxations** using **machine-learning interatomic potentials**. Keep familiar VASP workflows and artifacts while computations run through ASE-compatible ML calculators. A simple driver script, `vpmdk.py`, is provided.
 
-**Supported calculators (via ASE):** **CHGNet**, **SevenNet**, **MatterSim**, **MACE**, **Matlantis**, **NequIP**, **Allegro**, **ORB**, **MatGL** (via the M3GNet model), **FAIRChem** (including eSEN checkpoints), and **GRACE** (TensorPotential foundation models or checkpoints). Availability depends on the corresponding Python packages being installed.
+**Supported calculators (via ASE):** **CHGNet**, **SevenNet**, **MatterSim**, **MACE**, **Matlantis**, **NequIP**, **Allegro**, **ORB**, **MatGL** (via the M3GNet model), **FAIRChem** (including eSEN checkpoints), **GRACE** (TensorPotential foundation models or checkpoints), and **DeePMD-kit**. Availability depends on the corresponding Python packages being installed.
 
 *Not affiliated with, endorsed by, or a replacement for VASP; “VASP” is a trademark of its respective owner. VPMDK only mimics VASP I/O conventions for compatibility.*
 
@@ -98,6 +98,7 @@ Available `BCAR` tags and defaults:
 | `GRACE_MAX_RECOMPILATION` | Max recompilations triggered by padding reduction | library default (typically `2`) |
 | `GRACE_MIN_DIST` | Minimum allowed interatomic distance | unset (no extra validation) |
 | `GRACE_FLOAT_DTYPE` | Floating-point dtype passed to TensorPotential | `float64` |
+| `DEEPMD_TYPE_MAP` | Optional comma/space separated list of species mapped to the DeePMD model | inferred from `POSCAR` species order |
 
 Matlantis calculations rely on the [Matlantis API](https://matlantis.com) via
 `pfp-api-client`; ensure your environment is configured with the required API
@@ -140,6 +141,7 @@ selected potential or thermostat:
 | Allegro potential | `allegro` (uses PyTorch and depends on `nequip`) | Requires `MODEL` pointing to a deployed model file |
 | MatGL (M3GNet) potential | `matgl` (uses JAX) | Bundled with a default model; specify `MODEL` to use another |
 | MACE potential | `mace-torch` (PyTorch) | Set `MODEL` to a trained `.model` file |
+| DeePMD-kit potential | `deepmd-kit` | Set `MODEL` to the frozen graph (`.pb`) and optionally `DEEPMD_TYPE_MAP` |
 | Matlantis potential | `pfp-api-client` (plus `matlantis-features`) | Uses the Matlantis estimator service; configure with `MATLANTIS_*` BCAR tags |
 | ORB potential | `orb-models` (PyTorch) | Downloads pretrained weights unless `MODEL` points to a checkpoint |
 | MatterSim potential | `mattersim` (PyTorch) | Set `MODEL` to the trained parameters |

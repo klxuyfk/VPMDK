@@ -112,3 +112,27 @@ def test_build_orb_calculator_uses_bcar_tags(monkeypatch: pytest.MonkeyPatch):
     assert captured["weights_path"] == "weights.ckpt"
     assert captured["precision"] == "float64"
     assert captured["compile"] is False
+
+
+def test_build_deepmd_calculator_infers_type_map(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    model_path = tmp_path / "graph.pb"
+    model_path.write_text("dummy")
+
+    captured: dict[str, object] = {}
+
+    class DummyDeePMD:
+        def __init__(self, model=None, **kwargs):
+            captured["model"] = model
+            captured["kwargs"] = kwargs
+
+    structure = type("S", (), {"species": ["Si", "Si"], "site_symbols": ["Si"]})()
+
+    monkeypatch.setattr(vpmdk, "DeePMDCalculator", DummyDeePMD)
+
+    calculator = vpmdk._build_deepmd_calculator(
+        {"NNP": "DEEPMD", "MODEL": str(model_path)}, structure=structure
+    )
+
+    assert isinstance(calculator, DummyDeePMD)
+    assert captured["model"] == str(model_path)
+    assert captured["kwargs"].get("type_map") == ["Si"]
