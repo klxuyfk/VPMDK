@@ -451,11 +451,50 @@ def get_calculator(bcar_tags: Dict[str, str]):
     raise ValueError(f"Unsupported NNP type: {nnp}")
 
 
+def _format_energy_value(value: float) -> str:
+    """Return energy in VASP-like ``E`` notation with mantissa < 1."""
+
+    if value == 0:
+        return "+.00000000E+00"
+
+    mantissa_str, exponent_str = f"{value:.8e}".split("e")
+    mantissa = float(mantissa_str) / 10.0
+    exponent = int(exponent_str) + 1
+    formatted = f"{mantissa:+.8f}".replace("+0.", "+.").replace("-0.", "-.")
+    return f"{formatted}E{exponent:+03d}"
+
+
+def _extract_numeric_attribute(obj, names: Iterable[str]) -> float:
+    """Return first numeric attribute or method result from ``names``."""
+
+    for name in names:
+        value = getattr(obj, name, None)
+        if callable(value):
+            try:
+                result = value()
+            except Exception:
+                continue
+            try:
+                return float(result)
+            except (TypeError, ValueError):
+                continue
+        else:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+    return 0.0
+
+
 def run_single_point(atoms, calculator):
     atoms.calc = calculator
-    e = atoms.get_potential_energy()
-    print(f"  energy  without entropy=     {e:10.6f} eV")
-    return e
+    energy = atoms.get_potential_energy()
+    delta = 0.0
+    print(
+        f"{1:4d} F= {_format_energy_value(energy)} "
+        f"E0= {_format_energy_value(energy)}  d E ={_format_energy_value(delta)}"
+    )
+    return energy
 
 
 KBAR_TO_EV_PER_A3 = 0.1 / 160.21766208
@@ -774,6 +813,8 @@ def run_relaxation(
 ):
     atoms.calc = calculator
     energies: List[float] = []
+    previous_energy: float | None = None
+    step_counter = 0
     scalar_pressure = pstress * KBAR_TO_EV_PER_A3 if pstress is not None else None
     scalar_pressure_kwarg = scalar_pressure if scalar_pressure is not None else 0.0
 
@@ -784,8 +825,22 @@ def run_relaxation(
     with _temporarily_freeze_atoms(atoms, freeze_required):
         relax_object = builder(atoms)
         dyn = BFGS(relax_object, logfile="OUTCAR")
+
+        def _log_relaxation_energy() -> None:
+            nonlocal previous_energy, step_counter
+            target = getattr(relax_object, "atoms", atoms)
+            energy = target.get_potential_energy()
+            delta = 0.0 if previous_energy is None else energy - previous_energy
+            previous_energy = energy
+            step_counter += 1
+            print(
+                f"{step_counter:4d} F= {_format_energy_value(energy)} "
+                f"E0= {_format_energy_value(energy)}  d E ={_format_energy_value(delta)}"
+            )
+
         if write_energy_csv:
             dyn.attach(lambda: energies.append(atoms.get_potential_energy()))
+        dyn.attach(_log_relaxation_energy)
         if energy_tolerance is None:
             dyn.run(fmax=fmax, steps=steps)
         else:
@@ -1010,9 +1065,53 @@ def run_md(
         params,
     )
     target_end = temperature if teend is None else teend
+    md_step = 0
+
+    def _log_md_state() -> None:
+        nonlocal md_step
+        md_step += 1
+        potential_energy = atoms.get_potential_energy()
+        try:
+            kinetic_energy = atoms.get_kinetic_energy()
+        except Exception:
+            kinetic_energy = 0.0
+        thermostat_potential = _extract_numeric_attribute(
+            dyn,
+            (
+                "thermostat_potential_energy",
+                "thermostat_potential",
+                "nose_potential_energy",
+                "nhc_potential_energy",
+            ),
+        )
+        thermostat_kinetic = _extract_numeric_attribute(
+            dyn,
+            (
+                "thermostat_kinetic_energy",
+                "thermostat_kinetic",
+                "nose_kinetic_energy",
+                "nhc_kinetic_energy",
+            ),
+        )
+        total_energy = potential_energy + kinetic_energy + thermostat_potential + thermostat_kinetic
+        try:
+            temperature_inst = atoms.get_temperature()
+        except Exception:
+            temperature_inst = 0.0
+        print(
+            f"{md_step:7d} T={temperature_inst:7.1f} "
+            f"E= {_format_energy_value(total_energy)} "
+            f"F= {_format_energy_value(potential_energy)} "
+            f"E0= {_format_energy_value(potential_energy)}  "
+            f"EK= {_format_energy_value(kinetic_energy)} "
+            f"SP= {_format_energy_value(thermostat_potential)} "
+            f"SK= {_format_energy_value(thermostat_kinetic)}"
+        )
+
     for i in range(steps):
         dyn.run(1)
         atoms.wrap()
+        _log_md_state()
         _write_xdatcar_step("XDATCAR", atoms, i)
         if steps > 1 and i + 1 < steps and target_end != temperature:
             next_temp = temperature + (target_end - temperature) * (i + 1) / (steps - 1)
