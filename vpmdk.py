@@ -25,10 +25,25 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     CHGNetCalculator = None  # type: ignore
 
+LegacyM3GNet = None
+LegacyM3GNetPotential = None
+
 try:
-    from matgl.ext.ase import M3GNetCalculator
+    from matgl.ext.ase import M3GNetCalculator  # type: ignore
+
+    _USING_LEGACY_M3GNET = False
 except Exception:  # pragma: no cover - optional dependency
-    M3GNetCalculator = None  # type: ignore
+    try:
+        from m3gnet.models import M3GNet as LegacyM3GNet  # type: ignore
+        from m3gnet.models import M3GNetCalculator  # type: ignore
+        from m3gnet.models import Potential as LegacyM3GNetPotential  # type: ignore
+
+        _USING_LEGACY_M3GNET = True
+    except Exception:  # pragma: no cover - optional dependency
+        M3GNetCalculator = None  # type: ignore
+        LegacyM3GNet = None  # type: ignore
+        LegacyM3GNetPotential = None  # type: ignore
+        _USING_LEGACY_M3GNET = False
 
 try:
     from mace.calculators import MACECalculator
@@ -98,6 +113,45 @@ def _build_allegro_calculator(model_path: str, device: str | None = None):
     if device:
         return NequIPCalculator.from_deployed_model(model_path, device=device)
     return NequIPCalculator.from_deployed_model(model_path)
+
+
+def _build_m3gnet_calculator(bcar_tags: Dict[str, str]):
+    """Create a MatGL or legacy M3GNet calculator based on availability."""
+
+    if M3GNetCalculator is None:
+        raise RuntimeError("M3GNetCalculator not available. Install matgl or m3gnet.")
+
+    model_path = bcar_tags.get("MODEL")
+
+    if not _USING_LEGACY_M3GNET:
+        if model_path and os.path.exists(model_path):
+            return M3GNetCalculator(model_path)
+        return M3GNetCalculator()
+
+    potential = None
+    if model_path and os.path.exists(model_path) and LegacyM3GNetPotential is not None:
+        try:
+            potential = LegacyM3GNetPotential.from_checkpoint(model_path)
+        except Exception:
+            try:
+                if LegacyM3GNet is not None:
+                    potential = LegacyM3GNetPotential(
+                        LegacyM3GNet.load(model_path)  # type: ignore[arg-type]
+                    )
+            except Exception:
+                potential = None
+
+    if (
+        potential is None
+        and LegacyM3GNetPotential is not None
+        and LegacyM3GNet is not None
+    ):
+        potential = LegacyM3GNetPotential(LegacyM3GNet.load())
+
+    if potential is None:
+        raise RuntimeError("Legacy M3GNet calculator could not be initialized from available models.")
+
+    return M3GNetCalculator(potential=potential)
 
 
 def parse_key_value_file(path: str) -> Dict[str, str]:
@@ -431,15 +485,8 @@ def get_calculator(bcar_tags: Dict[str, str]):
         if model_path and os.path.exists(model_path):
             return CHGNetCalculator(model_path)
         return CHGNetCalculator()
-    if nnp == "MATGL":
-        if M3GNetCalculator is None:
-            raise RuntimeError(
-                "M3GNetCalculator not available. Install matgl and dependencies."
-            )
-        model_path = bcar_tags.get("MODEL")
-        if model_path and os.path.exists(model_path):
-            return M3GNetCalculator(model_path)
-        return M3GNetCalculator()
+    if nnp in {"MATGL", "M3GNET"}:
+        return _build_m3gnet_calculator(bcar_tags)
     if nnp == "MACE":
         if MACECalculator is None:
             raise RuntimeError(

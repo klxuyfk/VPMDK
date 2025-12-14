@@ -11,7 +11,8 @@ from tests.conftest import DummyCalculator
 
 
 @pytest.mark.parametrize(
-    "potential", ["CHGNET", "MATGL", "MACE", "MATTERSIM", "MATLANTIS", "ALLEGRO", "NEQUIP"]
+    "potential",
+    ["CHGNET", "MATGL", "M3GNET", "MACE", "MATTERSIM", "MATLANTIS", "ALLEGRO", "NEQUIP"],
 )
 def test_single_point_energy_for_all_potentials(
     tmp_path: Path,
@@ -40,7 +41,9 @@ def test_single_point_energy_for_all_potentials(
 
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(vpmdk, "CHGNetCalculator", lambda *a, **k: factory("CHGNET"))
-    monkeypatch.setattr(vpmdk, "M3GNetCalculator", lambda *a, **k: factory("MATGL"))
+    monkeypatch.setattr(
+        vpmdk, "_build_m3gnet_calculator", lambda tags: factory(tags.get("NNP", "MATGL"))
+    )
     monkeypatch.setattr(vpmdk, "MACECalculator", lambda *a, **k: factory("MACE"))
     monkeypatch.setattr(vpmdk, "MatterSimCalculator", lambda *a, **k: factory("MATTERSIM"))
     monkeypatch.setattr(vpmdk, "MatlantisEstimator", lambda *a, **k: object())
