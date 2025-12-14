@@ -78,6 +78,20 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     FAIRChemCalculator = None  # type: ignore
 
+try:
+    from tensorpotential.calculator.asecalculator import TPCalculator
+except Exception:  # pragma: no cover - optional dependency
+    TPCalculator = None  # type: ignore
+
+try:
+    from tensorpotential.calculator.foundation_models import (
+        MODELS_NAME_LIST as GRACE_MODEL_NAMES,
+        grace_fm,
+    )
+except Exception:  # pragma: no cover - optional dependency
+    GRACE_MODEL_NAMES: List[str] = []
+    grace_fm = None  # type: ignore
+
 from ase import units
 from ase.io import write
 from ase.io.vasp import write_vasp_xdatcar
@@ -115,6 +129,7 @@ else:  # pragma: no cover - optional dependency
 
 DEFAULT_ORB_MODEL = "orb-v3-conservative-20-omat"
 DEFAULT_FAIRCHEM_MODEL = "esen-sm-direct-all-oc25"
+DEFAULT_GRACE_MODEL = "GRACE-2L-MP-r6"
 
 
 def _build_allegro_calculator(model_path: str, device: str | None = None):
@@ -549,6 +564,68 @@ def _build_fairchem_calculator(bcar_tags: Dict[str, str]):
     )
 
 
+def _build_grace_calculator(bcar_tags: Dict[str, str]):
+    """Create a GRACE (TensorPotential) ASE calculator."""
+
+    if TPCalculator is None:
+        raise RuntimeError(
+            "TPCalculator not available. Install grace-tensorpotential and dependencies."
+        )
+
+    grace_kwargs: Dict[str, Any] = {}
+
+    pad_fraction = _parse_optional_float(
+        bcar_tags.get("GRACE_PAD_NEIGHBORS_FRACTION"), key="GRACE_PAD_NEIGHBORS_FRACTION"
+    )
+    if pad_fraction is not None:
+        grace_kwargs["pad_neighbors_fraction"] = pad_fraction
+
+    pad_atoms_raw = bcar_tags.get("GRACE_PAD_ATOMS_NUMBER")
+    if pad_atoms_raw is not None:
+        grace_kwargs["pad_atoms_number"] = _coerce_int_tag(
+            pad_atoms_raw, "GRACE_PAD_ATOMS_NUMBER"
+        )
+
+    recompilation_raw = bcar_tags.get("GRACE_MAX_RECOMPILATION")
+    if recompilation_raw is not None:
+        grace_kwargs["max_number_reduction_recompilation"] = _coerce_int_tag(
+            recompilation_raw, "GRACE_MAX_RECOMPILATION"
+        )
+
+    min_dist = _parse_optional_float(bcar_tags.get("GRACE_MIN_DIST"), key="GRACE_MIN_DIST")
+    if min_dist is not None:
+        grace_kwargs["min_dist"] = min_dist
+
+    float_dtype = bcar_tags.get("GRACE_FLOAT_DTYPE")
+    if float_dtype:
+        grace_kwargs["float_dtype"] = float_dtype
+
+    model_value = bcar_tags.get("MODEL")
+    if model_value and os.path.exists(model_value):
+        return TPCalculator(model_value, **grace_kwargs)
+
+    available_models = GRACE_MODEL_NAMES
+    default_model = DEFAULT_GRACE_MODEL
+    if available_models:
+        default_model = default_model if default_model in available_models else available_models[0]
+
+    if grace_fm is not None and available_models:
+        selected = model_value or default_model
+        if selected not in available_models:
+            print(
+                f"Warning: Unknown GRACE model '{selected}', using default {default_model} instead."
+            )
+            selected = default_model
+        return grace_fm(selected, **grace_kwargs)
+
+    if model_value:
+        raise FileNotFoundError(f"GRACE model not found: {model_value}")
+
+    raise RuntimeError(
+        "GRACE calculator requires a MODEL path or available foundation models (grace_fm)."
+    )
+
+
 def get_calculator(bcar_tags: Dict[str, str]):
     """Return ASE calculator based on BCAR tags."""
     nnp = bcar_tags.get("NNP", "CHGNET").upper()
@@ -615,6 +692,8 @@ def get_calculator(bcar_tags: Dict[str, str]):
         return _build_orb_calculator(bcar_tags)
     if nnp in {"FAIRCHEM", "ESEN"}:
         return _build_fairchem_calculator(bcar_tags)
+    if nnp == "GRACE":
+        return _build_grace_calculator(bcar_tags)
     raise ValueError(f"Unsupported NNP type: {nnp}")
 
 

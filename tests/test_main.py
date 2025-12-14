@@ -23,6 +23,7 @@ from tests.conftest import DummyCalculator
         "NEQUIP",
         "ORB",
         "FAIRCHEM",
+        "GRACE",
     ],
 )
 def test_single_point_energy_for_all_potentials(
@@ -62,6 +63,7 @@ def test_single_point_energy_for_all_potentials(
     monkeypatch.setattr(vpmdk, "_build_allegro_calculator", lambda *a, **k: factory("ALLEGRO"))
     monkeypatch.setattr(vpmdk, "ORBCalculator", lambda *a, **k: factory("ORB"))
     monkeypatch.setattr(vpmdk, "ORB_PRETRAINED_MODELS", {vpmdk.DEFAULT_ORB_MODEL: lambda **_: "orb"})
+    monkeypatch.setattr(vpmdk, "_build_grace_calculator", lambda tags: factory("GRACE"))
 
     class _DummyFairChem:
         @classmethod
@@ -201,6 +203,70 @@ def test_main_negative_ibrion_forces_single_point(tmp_path: Path, prepare_inputs
         monkeypatch.undo()
 
     assert seen.get("single_point") == 1
+
+
+def test_build_grace_calculator_prefers_checkpoint(tmp_path: Path):
+    model_path = tmp_path / "grace-model"
+    model_path.write_text("dummy")
+
+    captured: dict[str, object] = {}
+
+    class DummyTP(DummyCalculator):
+        def __init__(self, model, **kwargs):  # type: ignore[override]
+            super().__init__()
+            captured["model"] = model
+            captured["kwargs"] = kwargs
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "TPCalculator", DummyTP)
+    monkeypatch.setattr(vpmdk, "grace_fm", lambda *a, **k: (_ for _ in ()).throw(AssertionError()))
+    monkeypatch.setattr(vpmdk, "GRACE_MODEL_NAMES", [])
+
+    try:
+        calc = vpmdk._build_grace_calculator(
+            {
+                "MODEL": str(model_path),
+                "GRACE_PAD_NEIGHBORS_FRACTION": "0.1",
+                "GRACE_PAD_ATOMS_NUMBER": "12",
+                "GRACE_MAX_RECOMPILATION": "3",
+                "GRACE_MIN_DIST": "1.5",
+                "GRACE_FLOAT_DTYPE": "float32",
+            }
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert isinstance(calc, DummyTP)
+    assert captured["model"] == str(model_path)
+    assert captured["kwargs"] == {
+        "pad_neighbors_fraction": 0.1,
+        "pad_atoms_number": 12,
+        "max_number_reduction_recompilation": 3,
+        "min_dist": 1.5,
+        "float_dtype": "float32",
+    }
+
+
+def test_build_grace_calculator_uses_foundation_model_when_available():
+    monkeypatch = pytest.MonkeyPatch()
+    selected: dict[str, object] = {}
+
+    def fake_grace_fm(model, **kwargs):
+        selected["model"] = model
+        selected["kwargs"] = kwargs
+        return DummyCalculator()
+
+    monkeypatch.setattr(vpmdk, "grace_fm", fake_grace_fm)
+    monkeypatch.setattr(vpmdk, "GRACE_MODEL_NAMES", ["GRACE-FOUNDATION", vpmdk.DEFAULT_GRACE_MODEL])
+    monkeypatch.setattr(vpmdk, "TPCalculator", DummyCalculator)
+    try:
+        calc = vpmdk._build_grace_calculator({"MODEL": "GRACE-FOUNDATION"})
+    finally:
+        monkeypatch.undo()
+
+    assert isinstance(calc, DummyCalculator)
+    assert selected["model"] == "GRACE-FOUNDATION"
+    assert selected["kwargs"] == {}
 
 
 @pytest.mark.parametrize(

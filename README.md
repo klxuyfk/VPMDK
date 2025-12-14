@@ -2,7 +2,7 @@
 
 VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is a lightweight engine that **reads and writes VASP-style inputs/outputs** and performs **molecular dynamics and structure relaxations** using **machine-learning interatomic potentials**. Keep familiar VASP workflows and artifacts while computations run through ASE-compatible ML calculators. A simple driver script, `vpmdk.py`, is provided.
 
-**Supported calculators (via ASE):** **CHGNet**, **MatterSim**, **MACE**, **Matlantis**, **NequIP**, **Allegro**, **ORB**, **MatGL** (via the M3GNet model), and **FAIRChem** (including eSEN checkpoints). Availability depends on the corresponding Python packages being installed.
+**Supported calculators (via ASE):** **CHGNet**, **MatterSim**, **MACE**, **Matlantis**, **NequIP**, **Allegro**, **ORB**, **MatGL** (via the M3GNet model), **FAIRChem** (including eSEN checkpoints), and **GRACE** (TensorPotential foundation models or checkpoints). Availability depends on the corresponding Python packages being installed.
 
 *Not affiliated with, endorsed by, or a replacement for VASP; “VASP” is a trademark of its respective owner. VPMDK only mimics VASP I/O conventions for compatibility.*
 
@@ -93,6 +93,11 @@ Available `BCAR` tags and defaults:
 | `ORB_COMPILE` | Whether to `torch.compile` the ORB model (`0/1`, `true/false`, …) | library default |
 | `FAIRCHEM_TASK` | Task head to use with FAIRChem (e.g. `omol`) | auto-detected when possible |
 | `FAIRCHEM_INFERENCE_SETTINGS` | Inference profile forwarded to FAIRChem | `default` |
+| `GRACE_PAD_NEIGHBORS_FRACTION` | Fake-neighbour padding fraction forwarded to TensorPotential | library default (typically `0.05`) |
+| `GRACE_PAD_ATOMS_NUMBER` | Number of fake atoms for padding (TensorPotential) | library default (typically `10`) |
+| `GRACE_MAX_RECOMPILATION` | Max recompilations triggered by padding reduction | library default (typically `2`) |
+| `GRACE_MIN_DIST` | Minimum allowed interatomic distance | unset (no extra validation) |
+| `GRACE_FLOAT_DTYPE` | Floating-point dtype passed to TensorPotential | `float64` |
 
 Matlantis calculations rely on the [Matlantis API](https://matlantis.com) via
 `pfp-api-client`; ensure your environment is configured with the required API
@@ -137,6 +142,7 @@ selected potential or thermostat:
 | Matlantis potential | `pfp-api-client` (plus `matlantis-features`) | Uses the Matlantis estimator service; configure with `MATLANTIS_*` BCAR tags |
 | ORB potential | `orb-models` (PyTorch) | Downloads pretrained weights unless `MODEL` points to a checkpoint |
 | MatterSim potential | `mattersim` (PyTorch) | Set `MODEL` to the trained parameters |
+| GRACE potential | `grace-tensorpotential` (TensorFlow) | Uses TensorPotential checkpoints (`MODEL=/path/to/model`) or foundation models when available |
 | Andersen thermostat | `ase.md.andersen` (part of ASE extras) | Install ASE with MD extras to enable |
 | Langevin thermostat | `ase.md.langevin` | Ships with ASE; ensure ASE is up to date |
 | Bussi thermostat | `ase.md.bussi` | Included in ASE >= 3.22 |
