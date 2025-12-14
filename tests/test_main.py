@@ -10,13 +10,24 @@ import vpmdk
 from tests.conftest import DummyCalculator
 
 
-@pytest.mark.parametrize("potential", ["CHGNET", "MATGL", "MACE", "MATTERSIM", "MATLANTIS"])
+@pytest.mark.parametrize("potential", ["CHGNET", "MATGL", "MACE", "MATTERSIM", "MATLANTIS", "NEQUIP"])
 def test_single_point_energy_for_all_potentials(
     tmp_path: Path,
     potential: str,
     prepare_inputs,
 ):
-    prepare_inputs(tmp_path, potential=potential, incar_overrides={"NSW": "0"})
+    extra_bcar: dict[str, str] = {}
+    if potential == "NEQUIP":
+        model_path = tmp_path / "nequip-model.pth"
+        model_path.write_text("dummy")
+        extra_bcar["MODEL"] = str(model_path)
+
+    prepare_inputs(
+        tmp_path,
+        potential=potential,
+        incar_overrides={"NSW": "0"},
+        extra_bcar=extra_bcar,
+    )
 
     created: list[tuple[str, DummyCalculator]] = []
 
@@ -32,7 +43,20 @@ def test_single_point_energy_for_all_potentials(
     monkeypatch.setattr(vpmdk, "MatterSimCalculator", lambda *a, **k: factory("MATTERSIM"))
     monkeypatch.setattr(vpmdk, "MatlantisEstimator", lambda *a, **k: object())
     monkeypatch.setattr(vpmdk, "MatlantisASECalculator", lambda *a, **k: factory("MATLANTIS"))
-    monkeypatch.setattr(vpmdk, "EstimatorCalcMode", SimpleNamespace(CRYSTAL="CRYSTAL"))
+
+    class DummyEstimatorMode:
+        CRYSTAL = "CRYSTAL"
+
+        @classmethod
+        def __getitem__(cls, key):
+            return getattr(cls, key)
+
+    monkeypatch.setattr(vpmdk, "EstimatorCalcMode", DummyEstimatorMode)
+    monkeypatch.setattr(
+        vpmdk,
+        "NequIPCalculator",
+        SimpleNamespace(from_deployed_model=lambda *a, **k: factory("NEQUIP")),
+    )
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
     try:
         vpmdk.main()
