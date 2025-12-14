@@ -87,6 +87,19 @@ else:  # pragma: no cover - optional dependency
     NequIPCalculator = None  # type: ignore
 
 
+def _build_allegro_calculator(model_path: str, device: str | None = None):
+    """Create an Allegro calculator from a deployed model."""
+
+    if importlib.util.find_spec("allegro") is None:
+        raise RuntimeError("Allegro calculator not available. Install allegro and dependencies.")
+    if NequIPCalculator is None:
+        raise RuntimeError("NequIPCalculator not available. Install nequip and dependencies.")
+
+    if device:
+        return NequIPCalculator.from_deployed_model(model_path, device=device)
+    return NequIPCalculator.from_deployed_model(model_path)
+
+
 def parse_key_value_file(path: str) -> Dict[str, str]:
     """Parse simple key=value style file."""
     data: Dict[str, str] = {}
@@ -454,6 +467,15 @@ def get_calculator(bcar_tags: Dict[str, str]):
         if model_path and os.path.exists(model_path):
             return MatterSimCalculator(model_path)
         return MatterSimCalculator()
+    if nnp == "ALLEGRO":
+        model_path = bcar_tags.get("MODEL")
+        if not model_path:
+            raise ValueError("Allegro requires MODEL pointing to a deployed model file.")
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Allegro model not found: {model_path}")
+
+        device = bcar_tags.get("DEVICE")
+        return _build_allegro_calculator(model_path, device=device)
     if nnp == "NEQUIP":
         if NequIPCalculator is None:
             raise RuntimeError("NequIPCalculator not available. Install nequip.")

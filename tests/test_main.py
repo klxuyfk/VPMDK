@@ -10,14 +10,16 @@ import vpmdk
 from tests.conftest import DummyCalculator
 
 
-@pytest.mark.parametrize("potential", ["CHGNET", "MATGL", "MACE", "MATTERSIM", "MATLANTIS", "NEQUIP"])
+@pytest.mark.parametrize(
+    "potential", ["CHGNET", "MATGL", "MACE", "MATTERSIM", "MATLANTIS", "ALLEGRO", "NEQUIP"]
+)
 def test_single_point_energy_for_all_potentials(
     tmp_path: Path,
     potential: str,
     prepare_inputs,
 ):
     extra_bcar: dict[str, str] = {}
-    if potential == "NEQUIP":
+    if potential in {"NEQUIP", "ALLEGRO"}:
         model_path = tmp_path / "nequip-model.pth"
         model_path.write_text("dummy")
         extra_bcar["MODEL"] = str(model_path)
@@ -43,6 +45,7 @@ def test_single_point_energy_for_all_potentials(
     monkeypatch.setattr(vpmdk, "MatterSimCalculator", lambda *a, **k: factory("MATTERSIM"))
     monkeypatch.setattr(vpmdk, "MatlantisEstimator", lambda *a, **k: object())
     monkeypatch.setattr(vpmdk, "MatlantisASECalculator", lambda *a, **k: factory("MATLANTIS"))
+    monkeypatch.setattr(vpmdk, "_build_allegro_calculator", lambda *a, **k: factory("ALLEGRO"))
 
     class DummyEstimatorMode:
         CRYSTAL = "CRYSTAL"

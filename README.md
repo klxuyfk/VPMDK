@@ -2,7 +2,7 @@
 
 VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is a lightweight engine that **reads and writes VASP-style inputs/outputs** and performs **molecular dynamics and structure relaxations** using **machine-learning interatomic potentials**. Keep familiar VASP workflows and artifacts while computations run through ASE-compatible ML calculators. A simple driver script, `vpmdk.py`, is provided.
 
-**Supported calculators (via ASE):** **CHGNet**, **MatterSim**, **MACE**, **Matlantis**, **NequIP**, and **MatGL** (via the M3GNet model). Availability depends on the corresponding Python packages being installed.
+**Supported calculators (via ASE):** **CHGNet**, **MatterSim**, **MACE**, **Matlantis**, **NequIP**, **Allegro**, and **MatGL** (via the M3GNet model). Availability depends on the corresponding Python packages being installed.
 
 *Not affiliated with, endorsed by, or a replacement for VASP; “VASP” is a trademark of its respective owner. VPMDK only mimics VASP I/O conventions for compatibility.*
 
@@ -122,6 +122,7 @@ selected potential or thermostat:
 |---------|-------------------|-------|
 | CHGNet potential | `chgnet` (uses PyTorch) | Bundled with a default model; specify `MODEL` to use another |
 | NequIP potential | `nequip` (uses PyTorch) | Requires `MODEL` pointing to a deployed model file |
+| Allegro potential | `allegro` (uses PyTorch and depends on `nequip`) | Requires `MODEL` pointing to a deployed model file |
 | MatGL (M3GNet) potential | `matgl` (uses JAX) | Bundled with a default model; specify `MODEL` to use another |
 | MACE potential | `mace-torch` (PyTorch) | Set `MODEL` to a trained `.model` file |
 | Matlantis potential | `pfp-api-client` (plus `matlantis-features`) | Uses the Matlantis estimator service; configure with `MATLANTIS_*` BCAR tags |
