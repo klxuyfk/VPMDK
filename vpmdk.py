@@ -92,6 +92,15 @@ except Exception:  # pragma: no cover - optional dependency
     GRACE_MODEL_NAMES: List[str] = []
     grace_fm = None  # type: ignore
 
+_sevennet_spec = importlib.util.find_spec("sevennet")
+if _sevennet_spec is not None:  # pragma: no cover - optional dependency
+    try:
+        from sevennet.ase import SevenNetCalculator
+    except Exception:  # pragma: no cover - handled dynamically
+        SevenNetCalculator = None  # type: ignore
+else:  # pragma: no cover - optional dependency
+    SevenNetCalculator = None  # type: ignore
+
 from ase import units
 from ase.io import write
 from ase.io.vasp import write_vasp_xdatcar
@@ -636,6 +645,13 @@ def get_calculator(bcar_tags: Dict[str, str]):
         if model_path and os.path.exists(model_path):
             return CHGNetCalculator(model_path)
         return CHGNetCalculator()
+    if nnp == "SEVENNET":
+        if SevenNetCalculator is None:
+            raise RuntimeError("SevenNetCalculator not available. Install sevennet.")
+        model_path = bcar_tags.get("MODEL")
+        if model_path and os.path.exists(model_path):
+            return SevenNetCalculator(model_path)
+        return SevenNetCalculator()
     if nnp in {"MATGL", "M3GNET"}:
         return _build_m3gnet_calculator(bcar_tags)
     if nnp == "MACE":
