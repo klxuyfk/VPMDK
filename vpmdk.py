@@ -146,17 +146,78 @@ DEFAULT_FAIRCHEM_MODEL = "esen-sm-direct-all-oc25"
 DEFAULT_GRACE_MODEL = "GRACE-2L-MP-r6"
 
 
-def _build_allegro_calculator(model_path: str, device: str | None = None):
-    """Create an Allegro calculator from a deployed model."""
+def _build_nequip_family_calculator(
+    bcar_tags: Dict[str, str],
+    *,
+    require_allegro: bool = False,
+    missing_message: str,
+):
+    """Create NequIP-based calculators that require deployed model files."""
 
-    if importlib.util.find_spec("allegro") is None:
-        raise RuntimeError("Allegro calculator not available. Install allegro and dependencies.")
+    if require_allegro and importlib.util.find_spec("allegro") is None:
+        raise RuntimeError(
+            "Allegro calculator not available. Install allegro and dependencies."
+        )
     if NequIPCalculator is None:
-        raise RuntimeError("NequIPCalculator not available. Install nequip and dependencies.")
+        raise RuntimeError(missing_message)
 
+    model_path = bcar_tags.get("MODEL")
+    model_name = "Allegro" if require_allegro else "NequIP"
+    if not model_path:
+        raise ValueError(f"{model_name} requires MODEL pointing to a deployed model file.")
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"{model_name} model not found: {model_path}")
+
+    device = bcar_tags.get("DEVICE")
     if device:
         return NequIPCalculator.from_deployed_model(model_path, device=device)
     return NequIPCalculator.from_deployed_model(model_path)
+
+
+def _build_nequip_calculator(bcar_tags: Dict[str, str], *, structure=None):
+    """Create a NequIP calculator from a deployed model."""
+
+    return _build_nequip_family_calculator(
+        bcar_tags,
+        missing_message="NequIPCalculator not available. Install nequip and dependencies.",
+    )
+
+
+def _build_allegro_calculator(bcar_tags: Dict[str, str], *, structure=None):
+    """Create an Allegro calculator from a deployed model."""
+
+    return _build_nequip_family_calculator(
+        bcar_tags,
+        require_allegro=True,
+        missing_message="NequIPCalculator not available. Install nequip and dependencies.",
+    )
+
+
+def _resolve_device(device: str | None) -> str | None:
+    """Return user-specified device or best-effort autodetection."""
+
+    if device is not None:
+        return device
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
+def _build_mace_calculator(bcar_tags: Dict[str, str], *, structure=None):
+    """Create a MACE calculator with optional ``MODEL`` override."""
+
+    if MACECalculator is None:
+        raise RuntimeError("MACECalculator not available. Install mace-torch and dependencies.")
+
+    model_path = bcar_tags.get("MODEL")
+    device = _resolve_device(bcar_tags.get("DEVICE"))
+
+    if model_path and os.path.exists(model_path):
+        return MACECalculator(model_path, device=device)
+    return MACECalculator(device=device)
 
 
 def _build_m3gnet_calculator(bcar_tags: Dict[str, str]):
@@ -196,6 +257,22 @@ def _build_m3gnet_calculator(bcar_tags: Dict[str, str]):
         raise RuntimeError("Legacy M3GNet calculator could not be initialized from available models.")
 
     return M3GNetCalculator(potential=potential)
+
+
+def _build_simple_model_calculator(
+    calculator_cls,
+    bcar_tags: Dict[str, str],
+    missing_message: str,
+):
+    """Return calculator initialized with optional ``MODEL`` path."""
+
+    if calculator_cls is None:
+        raise RuntimeError(missing_message)
+
+    model_path = bcar_tags.get("MODEL")
+    if model_path and os.path.exists(model_path):
+        return calculator_cls(model_path)
+    return calculator_cls()
 
 
 def parse_key_value_file(path: str) -> Dict[str, str]:
@@ -694,84 +771,58 @@ def _build_deepmd_calculator(bcar_tags: Dict[str, str], structure=None):
     return DeePMDCalculator(model=model_path, **kwargs)
 
 
+_SIMPLE_CALCULATORS: Dict[str, tuple[Any, str]] = {
+    "CHGNET": (
+        CHGNetCalculator,
+        "CHGNetCalculator not available. Install chgnet.",
+    ),
+    "SEVENNET": (
+        SevenNetCalculator,
+        "SevenNetCalculator not available. Install sevennet.",
+    ),
+    "MATTERSIM": (
+        MatterSimCalculator,
+        "MatterSimCalculator not available. Install mattersim and dependencies.",
+    ),
+}
+
+
+_CALCULATOR_BUILDERS: Dict[str, Callable[[Dict[str, str]], Any]] = {
+    "MATGL": _build_m3gnet_calculator,
+    "M3GNET": _build_m3gnet_calculator,
+    "MACE": _build_mace_calculator,
+    "ALLEGRO": _build_allegro_calculator,
+    "NEQUIP": _build_nequip_calculator,
+    "MATLANTIS": _build_matlantis_calculator,
+    "ORB": _build_orb_calculator,
+    "FAIRCHEM": _build_fairchem_calculator,
+    "ESEN": _build_fairchem_calculator,
+    "GRACE": _build_grace_calculator,
+    "DEEPMD": _build_deepmd_calculator,
+}
+
+for nnp_name, (calculator_cls, message) in _SIMPLE_CALCULATORS.items():
+    _CALCULATOR_BUILDERS[nnp_name] = (
+        lambda bcar_tags, *, calculator_cls=calculator_cls, message=message: _build_simple_model_calculator(
+            calculator_cls,
+            bcar_tags,
+            message,
+        )
+    )
+
+
 def get_calculator(bcar_tags: Dict[str, str], *, structure=None):
     """Return ASE calculator based on BCAR tags."""
+
     nnp = bcar_tags.get("NNP", "CHGNET").upper()
-    if nnp == "CHGNET":
-        if CHGNetCalculator is None:
-            raise RuntimeError("CHGNetCalculator not available. Install chgnet.")
-        model_path = bcar_tags.get("MODEL")
-        if model_path and os.path.exists(model_path):
-            return CHGNetCalculator(model_path)
-        return CHGNetCalculator()
-    if nnp == "SEVENNET":
-        if SevenNetCalculator is None:
-            raise RuntimeError("SevenNetCalculator not available. Install sevennet.")
-        model_path = bcar_tags.get("MODEL")
-        if model_path and os.path.exists(model_path):
-            return SevenNetCalculator(model_path)
-        return SevenNetCalculator()
-    if nnp in {"MATGL", "M3GNET"}:
-        return _build_m3gnet_calculator(bcar_tags)
-    if nnp == "MACE":
-        if MACECalculator is None:
-            raise RuntimeError(
-                "MACECalculator not available. Install mace-torch and dependencies."
-            )
-        model_path = bcar_tags.get("MODEL")
-        device = bcar_tags.get("DEVICE")
-        if device is None:
-            try:
-                import torch
+    builder = _CALCULATOR_BUILDERS.get(nnp)
 
-                device = "cuda" if torch.cuda.is_available() else "cpu"
-            except Exception:
-                device = "cpu"
+    if builder is None:
+        raise ValueError(f"Unsupported NNP type: {nnp}")
 
-        if model_path and os.path.exists(model_path):
-            return MACECalculator(model_path, device=device)
-        return MACECalculator(device=device)
-    if nnp == "MATTERSIM":
-        if MatterSimCalculator is None:
-            raise RuntimeError(
-                "MatterSimCalculator not available. Install mattersim and dependencies."
-            )
-        model_path = bcar_tags.get("MODEL")
-        if model_path and os.path.exists(model_path):
-            return MatterSimCalculator(model_path)
-        return MatterSimCalculator()
-    if nnp == "ALLEGRO":
-        model_path = bcar_tags.get("MODEL")
-        if not model_path:
-            raise ValueError("Allegro requires MODEL pointing to a deployed model file.")
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Allegro model not found: {model_path}")
-
-        device = bcar_tags.get("DEVICE")
-        return _build_allegro_calculator(model_path, device=device)
-    if nnp == "NEQUIP":
-        if NequIPCalculator is None:
-            raise RuntimeError("NequIPCalculator not available. Install nequip.")
-        model_path = bcar_tags.get("MODEL")
-        if not model_path:
-            raise ValueError("NequIP requires MODEL pointing to a deployed model file.")
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"NequIP model not found: {model_path}")
-        device = bcar_tags.get("DEVICE")
-        if device:
-            return NequIPCalculator.from_deployed_model(model_path, device=device)
-        return NequIPCalculator.from_deployed_model(model_path)
-    if nnp == "MATLANTIS":
-        return _build_matlantis_calculator(bcar_tags)
-    if nnp == "ORB":
-        return _build_orb_calculator(bcar_tags)
-    if nnp in {"FAIRCHEM", "ESEN"}:
-        return _build_fairchem_calculator(bcar_tags)
-    if nnp == "GRACE":
-        return _build_grace_calculator(bcar_tags)
-    if nnp == "DEEPMD":
-        return _build_deepmd_calculator(bcar_tags, structure=structure)
-    raise ValueError(f"Unsupported NNP type: {nnp}")
+    if builder is _build_deepmd_calculator:
+        return builder(bcar_tags, structure=structure)
+    return builder(bcar_tags)
 
 
 def _format_energy_value(value: float) -> str:
