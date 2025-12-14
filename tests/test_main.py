@@ -25,6 +25,7 @@ from tests.conftest import DummyCalculator
         "ORB",
         "FAIRCHEM",
         "GRACE",
+        "DEEPMD",
     ],
 )
 def test_single_point_energy_for_all_potentials(
@@ -33,7 +34,7 @@ def test_single_point_energy_for_all_potentials(
     prepare_inputs,
 ):
     extra_bcar: dict[str, str] = {}
-    if potential in {"NEQUIP", "ALLEGRO"}:
+    if potential in {"NEQUIP", "ALLEGRO", "DEEPMD"}:
         model_path = tmp_path / "nequip-model.pth"
         model_path.write_text("dummy")
         extra_bcar["MODEL"] = str(model_path)
@@ -66,6 +67,7 @@ def test_single_point_energy_for_all_potentials(
     monkeypatch.setattr(vpmdk, "ORBCalculator", lambda *a, **k: factory("ORB"))
     monkeypatch.setattr(vpmdk, "ORB_PRETRAINED_MODELS", {vpmdk.DEFAULT_ORB_MODEL: lambda **_: "orb"})
     monkeypatch.setattr(vpmdk, "_build_grace_calculator", lambda tags: factory("GRACE"))
+    monkeypatch.setattr(vpmdk, "DeePMDCalculator", lambda *a, **k: factory("DEEPMD"))
 
     class _DummyFairChem:
         @classmethod
@@ -111,7 +113,7 @@ def test_main_transfers_magmom_to_atoms(tmp_path: Path, prepare_inputs, arrays_c
         return 0.5
 
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
     monkeypatch.setattr(vpmdk, "run_single_point", capture_magmoms)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
     try:
@@ -190,7 +192,7 @@ def test_main_negative_ibrion_forces_single_point(tmp_path: Path, prepare_inputs
         return 0.5
 
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
     monkeypatch.setattr(vpmdk, "run_single_point", fake_single_point)
 
     def fail(*args, **kwargs):  # pragma: no cover - defensive guard
@@ -307,7 +309,7 @@ def test_main_relaxation_respects_isif(
         return 0.0
 
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
     monkeypatch.setattr(vpmdk, "run_relaxation", fake_run_relaxation)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
     messages: list[str] = []
@@ -356,7 +358,7 @@ def test_main_relaxation_uses_energy_tolerance_for_positive_ediffg(
         return 0.0
 
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
     monkeypatch.setattr(vpmdk, "run_relaxation", fake_run_relaxation)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
     try:
@@ -412,7 +414,7 @@ def test_main_passes_md_parameters_to_run_md(tmp_path: Path, prepare_inputs):
         return 0.0
 
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
     monkeypatch.setattr(vpmdk, "run_md", fake_run_md)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
     try:
