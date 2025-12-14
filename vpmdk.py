@@ -9,6 +9,7 @@ CONTCAR and OUTCAR-style energy logs are produced.
 
 import argparse
 import csv
+import importlib.util
 import os
 import re
 import sys
@@ -77,6 +78,13 @@ try:  # pragma: no cover - optional thermostat dependency
     from ase.md.nose_hoover_chain import NoseHooverChainNVT
 except Exception:  # pragma: no cover - handled dynamically
     NoseHooverChainNVT = None  # type: ignore
+
+_nequip_spec = importlib.util.find_spec("nequip")
+_nequip_ase_spec = importlib.util.find_spec("nequip.ase") if _nequip_spec else None
+if _nequip_ase_spec is not None:  # pragma: no cover - optional dependency
+    from nequip.ase import NequIPCalculator
+else:  # pragma: no cover - optional dependency
+    NequIPCalculator = None  # type: ignore
 
 
 def parse_key_value_file(path: str) -> Dict[str, str]:
@@ -446,6 +454,18 @@ def get_calculator(bcar_tags: Dict[str, str]):
         if model_path and os.path.exists(model_path):
             return MatterSimCalculator(model_path)
         return MatterSimCalculator()
+    if nnp == "NEQUIP":
+        if NequIPCalculator is None:
+            raise RuntimeError("NequIPCalculator not available. Install nequip.")
+        model_path = bcar_tags.get("MODEL")
+        if not model_path:
+            raise ValueError("NequIP requires MODEL pointing to a deployed model file.")
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"NequIP model not found: {model_path}")
+        device = bcar_tags.get("DEVICE")
+        if device:
+            return NequIPCalculator.from_deployed_model(model_path, device=device)
+        return NequIPCalculator.from_deployed_model(model_path)
     if nnp == "MATLANTIS":
         return _build_matlantis_calculator(bcar_tags)
     raise ValueError(f"Unsupported NNP type: {nnp}")
