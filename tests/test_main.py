@@ -22,6 +22,7 @@ from tests.conftest import DummyCalculator
         "ALLEGRO",
         "NEQUIP",
         "ORB",
+        "FAIRCHEM",
     ],
 )
 def test_single_point_energy_for_all_potentials(
@@ -61,6 +62,13 @@ def test_single_point_energy_for_all_potentials(
     monkeypatch.setattr(vpmdk, "_build_allegro_calculator", lambda *a, **k: factory("ALLEGRO"))
     monkeypatch.setattr(vpmdk, "ORBCalculator", lambda *a, **k: factory("ORB"))
     monkeypatch.setattr(vpmdk, "ORB_PRETRAINED_MODELS", {vpmdk.DEFAULT_ORB_MODEL: lambda **_: "orb"})
+
+    class _DummyFairChem:
+        @classmethod
+        def from_model_checkpoint(cls, *a, **k):
+            return factory("FAIRCHEM")
+
+    monkeypatch.setattr(vpmdk, "FAIRChemCalculator", _DummyFairChem)
 
     class DummyEstimatorMode:
         CRYSTAL = "CRYSTAL"
@@ -109,6 +117,59 @@ def test_main_transfers_magmom_to_atoms(tmp_path: Path, prepare_inputs, arrays_c
 
     assert "moments" in captured
     assert arrays_close(captured["moments"], [1.25, -0.75])
+
+
+def test_fairchem_calculator_uses_bcar_overrides(tmp_path: Path, prepare_inputs):
+    model_name = "esen-md-direct-all-omol"
+    prepare_inputs(
+        tmp_path,
+        potential="FAIRCHEM",
+        incar_overrides={"NSW": "0"},
+        extra_bcar={
+            "MODEL": model_name,
+            "FAIRCHEM_TASK": "omol",
+            "FAIRCHEM_INFERENCE_SETTINGS": "turbo",
+            "DEVICE": "cuda",
+        },
+    )
+
+    seen: dict[str, object] = {}
+
+    class _DummyFairChem:
+        @classmethod
+        def from_model_checkpoint(
+            cls,
+            name_or_path,
+            *,
+            task_name=None,
+            inference_settings="default",
+            device=None,
+            **_,
+        ):
+            seen.update(
+                {
+                    "name": name_or_path,
+                    "task": task_name,
+                    "settings": inference_settings,
+                    "device": device,
+                }
+            )
+            return DummyCalculator()
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "FAIRChemCalculator", _DummyFairChem)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen == {
+        "name": model_name,
+        "task": "omol",
+        "settings": "turbo",
+        "device": "cuda",
+    }
 
 
 def test_main_negative_ibrion_forces_single_point(tmp_path: Path, prepare_inputs):
