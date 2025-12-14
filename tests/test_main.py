@@ -14,6 +14,7 @@ from tests.conftest import DummyCalculator
     "potential",
     [
         "CHGNET",
+        "SEVENNET",
         "MATGL",
         "M3GNET",
         "MACE",
@@ -53,6 +54,7 @@ def test_single_point_energy_for_all_potentials(
 
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(vpmdk, "CHGNetCalculator", lambda *a, **k: factory("CHGNET"))
+    monkeypatch.setattr(vpmdk, "SevenNetCalculator", lambda *a, **k: factory("SEVENNET"))
     monkeypatch.setattr(
         vpmdk, "_build_m3gnet_calculator", lambda tags: factory(tags.get("NNP", "MATGL"))
     )
