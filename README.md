@@ -2,7 +2,7 @@
 
 VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is a lightweight engine that **reads and writes VASP-style inputs/outputs** and performs **molecular dynamics and structure relaxations** using **machine-learning interatomic potentials**. Keep familiar VASP workflows and artifacts while computations run through ASE-compatible ML calculators. A simple driver script, `vpmdk.py`, is provided.
 
-**Supported calculators (via ASE):** **CHGNet**, **MatterSim**, **MACE**, **Matlantis**, **NequIP**, **Allegro**, **ORB**, and **MatGL** (via the M3GNet model). Availability depends on the corresponding Python packages being installed.
+**Supported calculators (via ASE):** **CHGNet**, **MatterSim**, **MACE**, **Matlantis**, **NequIP**, **Allegro**, **ORB**, **MatGL** (via the M3GNet model), and **FAIRChem** (including eSEN checkpoints). Availability depends on the corresponding Python packages being installed.
 
 *Not affiliated with, endorsed by, or a replacement for VASP; “VASP” is a trademark of its respective owner. VPMDK only mimics VASP I/O conventions for compatibility.*
 
@@ -82,15 +82,17 @@ Available `BCAR` tags and defaults:
 | Tag | Meaning | Default |
 |-----|---------|---------|
 | `NNP` | Name of the potential | `CHGNET` |
-| `MODEL` | Path to a trained parameter set (ORB uses it for weight checkpoints) | potential's built-in model |
+| `MODEL` | Path to a trained parameter set (ORB uses it for weight checkpoints; FAIRChem accepts model names like `esen-sm-direct-all-oc25`) | potential's built-in model |
 | `MATLANTIS_MODEL_VERSION` | Matlantis estimator version identifier | `v8.0.0` |
 | `MATLANTIS_PRIORITY` | Matlantis job priority passed to the estimator | `50` |
 | `MATLANTIS_CALC_MODE` | Matlantis calculation mode (`CRYSTAL`, `MOLECULE`, …) | `PBE` |
-| `DEVICE` | Device for MACE (`cuda` or `cpu`) and ORB (`cpu`, `cuda`, `cuda:N`) | auto-detect (`cuda` if available, else `cpu`) |
+| `DEVICE` | Device for MACE (`cuda` or `cpu`), ORB (`cpu`, `cuda`, `cuda:N`), and FAIRChem | auto-detect (`cuda` if available, else `cpu`) |
 | `WRITE_ENERGY_CSV` | Write `energy.csv` during relaxation (`1` to enable) | `0` (disabled) |
 | `ORB_MODEL` | Pretrained ORB architecture key recognised by `orb_models` | `orb-v3-conservative-20-omat` |
 | `ORB_PRECISION` | Floating-point precision string forwarded to orb-models loaders | `float32-high` |
 | `ORB_COMPILE` | Whether to `torch.compile` the ORB model (`0/1`, `true/false`, …) | library default |
+| `FAIRCHEM_TASK` | Task head to use with FAIRChem (e.g. `omol`) | auto-detected when possible |
+| `FAIRCHEM_INFERENCE_SETTINGS` | Inference profile forwarded to FAIRChem | `default` |
 
 Matlantis calculations rely on the [Matlantis API](https://matlantis.com) via
 `pfp-api-client`; ensure your environment is configured with the required API

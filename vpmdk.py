@@ -73,6 +73,11 @@ except Exception:  # pragma: no cover - optional dependency
     ORBCalculator = None  # type: ignore
     ORB_PRETRAINED_MODELS = None  # type: ignore
 
+try:
+    from fairchem.core.calculate.ase_calculator import FAIRChemCalculator
+except Exception:  # pragma: no cover - optional dependency
+    FAIRChemCalculator = None  # type: ignore
+
 from ase import units
 from ase.io import write
 from ase.io.vasp import write_vasp_xdatcar
@@ -109,6 +114,7 @@ else:  # pragma: no cover - optional dependency
     NequIPCalculator = None  # type: ignore
 
 DEFAULT_ORB_MODEL = "orb-v3-conservative-20-omat"
+DEFAULT_FAIRCHEM_MODEL = "esen-sm-direct-all-oc25"
 
 
 def _build_allegro_calculator(model_path: str, device: str | None = None):
@@ -524,6 +530,25 @@ def _build_orb_calculator(bcar_tags: Dict[str, str]):
     return ORBCalculator(model, device=device)
 
 
+def _build_fairchem_calculator(bcar_tags: Dict[str, str]):
+    """Create the FAIRChem ASE calculator configured from BCAR tags."""
+
+    if FAIRChemCalculator is None:
+        raise RuntimeError("FAIRChemCalculator not available. Install fairchem and dependencies.")
+
+    model_name = bcar_tags.get("MODEL") or DEFAULT_FAIRCHEM_MODEL
+    task_name = bcar_tags.get("FAIRCHEM_TASK")
+    inference_settings = bcar_tags.get("FAIRCHEM_INFERENCE_SETTINGS") or "default"
+    device = bcar_tags.get("DEVICE")
+
+    return FAIRChemCalculator.from_model_checkpoint(
+        model_name,
+        task_name=task_name,
+        inference_settings=inference_settings,
+        device=device,
+    )
+
+
 def get_calculator(bcar_tags: Dict[str, str]):
     """Return ASE calculator based on BCAR tags."""
     nnp = bcar_tags.get("NNP", "CHGNET").upper()
@@ -588,6 +613,8 @@ def get_calculator(bcar_tags: Dict[str, str]):
         return _build_matlantis_calculator(bcar_tags)
     if nnp == "ORB":
         return _build_orb_calculator(bcar_tags)
+    if nnp in {"FAIRCHEM", "ESEN"}:
+        return _build_fairchem_calculator(bcar_tags)
     raise ValueError(f"Unsupported NNP type: {nnp}")
 
 
