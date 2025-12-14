@@ -68,37 +68,47 @@ The script reads a subset of common VASP `INCAR` settings. Other tags are ignore
 
 ### BCAR tags
 
-`BCAR` configures the machine-learning potential and optional outputs:
+`BCAR` is a concise `key=value` file that selects the backend, its weights, and a handful of quality-of-life options. A minimal
+file looks like:
 
 ```
-NNP=CHGNET            # Name of the potential
-MODEL=/path/to/model  # Optional path to a trained parameter set
-DEVICE=cuda           # Optional for MACE: 'cuda' or 'cpu'
-WRITE_ENERGY_CSV=1    # Optional: write energy.csv during relaxation
+NNP=CHGNET            # Potential backend
+MODEL=/path/to/model  # Optional path to weights (varies by backend)
+DEVICE=cuda           # Optional device override when the backend supports it
 ```
 
-Available `BCAR` tags and defaults:
+**Core selection.**
 
 | Tag | Meaning | Default |
 |-----|---------|---------|
-| `NNP` | Name of the potential | `CHGNET` |
-| `MODEL` | Path to a trained parameter set (ORB uses it for weight checkpoints; FAIRChem accepts model names like `esen-sm-direct-all-oc25`) | potential's built-in model |
-| `MATLANTIS_MODEL_VERSION` | Matlantis estimator version identifier | `v8.0.0` |
-| `MATLANTIS_PRIORITY` | Matlantis job priority passed to the estimator | `50` |
-| `MATLANTIS_CALC_MODE` | Matlantis calculation mode (`CRYSTAL`, `MOLECULE`, …) | `PBE` |
-| `DEVICE` | Device for MACE (`cuda` or `cpu`), ORB (`cpu`, `cuda`, `cuda:N`), and FAIRChem | auto-detect (`cuda` if available, else `cpu`) |
-| `WRITE_ENERGY_CSV` | Write `energy.csv` during relaxation (`1` to enable) | `0` (disabled) |
-| `ORB_MODEL` | Pretrained ORB architecture key recognised by `orb_models` | `orb-v3-conservative-20-omat` |
-| `ORB_PRECISION` | Floating-point precision string forwarded to orb-models loaders | `float32-high` |
-| `ORB_COMPILE` | Whether to `torch.compile` the ORB model (`0/1`, `true/false`, …) | library default |
-| `FAIRCHEM_TASK` | Task head to use with FAIRChem (e.g. `omol`) | auto-detected when possible |
-| `FAIRCHEM_INFERENCE_SETTINGS` | Inference profile forwarded to FAIRChem | `default` |
-| `GRACE_PAD_NEIGHBORS_FRACTION` | Fake-neighbour padding fraction forwarded to TensorPotential | library default (typically `0.05`) |
-| `GRACE_PAD_ATOMS_NUMBER` | Number of fake atoms for padding (TensorPotential) | library default (typically `10`) |
-| `GRACE_MAX_RECOMPILATION` | Max recompilations triggered by padding reduction | library default (typically `2`) |
-| `GRACE_MIN_DIST` | Minimum allowed interatomic distance | unset (no extra validation) |
-| `GRACE_FLOAT_DTYPE` | Floating-point dtype passed to TensorPotential | `float64` |
-| `DEEPMD_TYPE_MAP` | Optional comma/space separated list of species mapped to the DeePMD model | inferred from `POSCAR` species order |
+| `NNP` | Backend name (`CHGNET`, `MACE`, `MATGL`, `MATLANTIS`, `MATTERSIM`, `NEQUIP`, `ALLEGRO`, `ORB`, `FAIRCHEM`, `GRACE`, `DEEPMD`, `SEVENNET`) | `CHGNET` |
+| `MODEL` | Path to a trained parameter set (ORB accepts checkpoints; FAIRChem also accepts model names such as `esen-sm-direct-all-oc25`) | Backend default or bundled weights |
+| `DEVICE` | Device hint for backends that support it (`cpu`, `cuda`, `cuda:N`) | Auto-detects GPU when available |
+
+**Output and workflow aids.**
+
+| Tag | Meaning | Default |
+|-----|---------|---------|
+| `WRITE_ENERGY_CSV` | Write `energy.csv` during relaxation (`1` to enable) | `0` |
+| `DEEPMD_TYPE_MAP` | Comma/space-separated species list mapped to the DeePMD graph | Inferred from `POSCAR` order |
+
+**Backend-specific knobs.** Only relevant when the corresponding backend is chosen.
+
+| Tag | Applies to | Meaning | Default |
+|-----|-----------|---------|---------|
+| `MATLANTIS_MODEL_VERSION` | Matlantis | Estimator version identifier | `v8.0.0` |
+| `MATLANTIS_PRIORITY` | Matlantis | Job priority forwarded to the estimator | `50` |
+| `MATLANTIS_CALC_MODE` | Matlantis | Calculation mode (`CRYSTAL`, `MOLECULE`, …) | `PBE` |
+| `ORB_MODEL` | ORB | Pretrained architecture key recognised by `orb_models` | `orb-v3-conservative-20-omat` |
+| `ORB_PRECISION` | ORB | Floating-point precision string forwarded to orb-models loaders | `float32-high` |
+| `ORB_COMPILE` | ORB | Whether to `torch.compile` the ORB model (`0/1`, `true/false`, …) | Library default |
+| `FAIRCHEM_TASK` | FAIRChem | Task head to use (e.g. `omol`) | Auto-detected when possible |
+| `FAIRCHEM_INFERENCE_SETTINGS` | FAIRChem | Inference profile forwarded to FAIRChem | `default` |
+| `GRACE_PAD_NEIGHBORS_FRACTION` | GRACE | Fake-neighbour padding fraction forwarded to TensorPotential | Library default (typically `0.05`) |
+| `GRACE_PAD_ATOMS_NUMBER` | GRACE | Number of fake atoms for padding | Library default (typically `10`) |
+| `GRACE_MAX_RECOMPILATION` | GRACE | Max recompilations triggered by padding reduction | Library default (typically `2`) |
+| `GRACE_MIN_DIST` | GRACE | Minimum allowed interatomic distance | Unset (no extra validation) |
+| `GRACE_FLOAT_DTYPE` | GRACE | Floating-point dtype passed to TensorPotential | `float64` |
 
 Matlantis calculations rely on the [Matlantis API](https://matlantis.com) via
 `pfp-api-client`; ensure your environment is configured with the required API
