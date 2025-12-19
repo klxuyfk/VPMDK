@@ -598,7 +598,7 @@ def _write_lammps_trajectory_step(path: str, atoms, step_index: int) -> None:
     file_mode = "a" if append else "w"
 
     prism = Prism(atoms.get_cell().array, atoms.get_pbc())
-    xhi, yhi, zhi, xy, xz, yz = prism.get_lammps_prism()
+    xlo, xhi, ylo, yhi, zlo, zhi, xy, xz, yz = prism.get_lammps_prism()
     pbc_flags = ["pp" if periodic else "ff" for periodic in atoms.get_pbc()]
 
     species_to_type: Dict[str, int] = {}
@@ -621,9 +621,9 @@ def _write_lammps_trajectory_step(path: str, atoms, step_index: int) -> None:
         handle.write(
             "ITEM: BOX BOUNDS xy xz yz " + " ".join(pbc_flags) + "\n"
         )
-        handle.write(f"0.0 {xhi} {xy}\n")
-        handle.write(f"0.0 {yhi} {xz}\n")
-        handle.write(f"0.0 {zhi} {yz}\n")
+        handle.write(f"{xlo} {xhi} {xy}\n")
+        handle.write(f"{ylo} {yhi} {xz}\n")
+        handle.write(f"{zlo} {zhi} {yz}\n")
 
         columns = ["id", "type", "x", "y", "z"]
         if velocity_data is not None:
