@@ -90,6 +90,8 @@ DEVICE=cuda           # Optional device override when the backend supports it
 | Tag | Meaning | Default |
 |-----|---------|---------|
 | `WRITE_ENERGY_CSV` | Write `energy.csv` during relaxation (`1` to enable) | `0` |
+| `WRITE_LAMMPS_TRAJ` | Write a LAMMPS trajectory during MD (`1` to enable) | `0` |
+| `LAMMPS_TRAJ_INTERVAL` | MD steps between trajectory frames (only when `WRITE_LAMMPS_TRAJ=1`) | `1` |
 | `DEEPMD_TYPE_MAP` | Comma/space-separated species list mapped to the DeePMD graph | Inferred from `POSCAR` order |
 
 **Backend-specific knobs.** Only relevant when the corresponding backend is chosen.
@@ -127,6 +129,7 @@ Depending on the calculation type, VPMDK produces the following files in VASP fo
 | `CONTCAR` | Always | Final atomic positions and cell. |
 | `OUTCAR` | Relaxations and MD | Step-by-step potential, kinetic, and total energies along with temperature. |
 | `XDATCAR` | MD only (`IBRION=0`) | Atomic positions at each MD step (trajectory). |
+| `lammps.lammpstrj` | MD with `WRITE_LAMMPS_TRAJ=1` | LAMMPS text dump of atomic positions at the requested interval. |
 | `energy.csv` | Relaxations with `WRITE_ENERGY_CSV=1` | Potential energy at each relaxation step. |
 
 Relaxations terminate when either the maximum force drops below the value set

@@ -590,6 +590,19 @@ def _write_xdatcar_step(path: str, atoms, step_index: int) -> None:
     _append_xdatcar_configuration(path, atoms, frame_number)
 
 
+def _write_lammps_trajectory_step(path: str, atoms, step_index: int) -> None:
+    """Write or append a LAMMPS trajectory frame for the given MD step."""
+
+    append = step_index != 0
+    write(
+        path,
+        atoms,
+        format="lammps-dump-text",
+        append=append,
+        time=step_index + 1,
+    )
+
+
 def read_structure(poscar_path: str, potcar_path: str | None = None):
     """Read POSCAR and reconcile species with POTCAR if necessary."""
     poscar = Poscar.from_file(poscar_path)
@@ -1148,6 +1161,23 @@ def _should_write_energy_csv(bcar_tags: Dict[str, str]) -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def _should_write_lammps_trajectory(bcar_tags: Dict[str, str]) -> bool:
+    """Return ``True`` when BCAR requests LAMMPS-style trajectory output."""
+
+    value = str(bcar_tags.get("WRITE_LAMMPS_TRAJ", "0")).lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _get_lammps_trajectory_interval(bcar_tags: Dict[str, str]) -> int:
+    """Return the LAMMPS trajectory write interval requested in BCAR."""
+
+    raw = bcar_tags.get("LAMMPS_TRAJ_INTERVAL", "1")
+    interval = _coerce_int_tag(raw, "LAMMPS_TRAJ_INTERVAL")
+    if interval <= 0:
+        raise ValueError("LAMMPS_TRAJ_INTERVAL must be at least 1")
+    return interval
+
+
 class _EnergyConvergenceMonitor:
     """Track ionic step energies and test for convergence."""
 
@@ -1508,6 +1538,9 @@ def run_md(
     teend: float | None = None,
     smass: float | None = None,
     thermostat_params: Dict[str, float] | None = None,
+    write_lammps_traj: bool = False,
+    lammps_traj_interval: int = 1,
+    lammps_traj_path: str = "lammps.lammpstrj",
 ):
     atoms.calc = calculator
     if temperature <= 0:
@@ -1579,6 +1612,8 @@ def run_md(
         atoms.wrap()
         _log_md_state()
         _write_xdatcar_step("XDATCAR", atoms, i)
+        if write_lammps_traj and i % lammps_traj_interval == 0:
+            _write_lammps_trajectory_step(lammps_traj_path, atoms, i)
         if steps > 1 and i + 1 < steps and target_end != temperature:
             next_temp = temperature + (target_end - temperature) * (i + 1) / (steps - 1)
             update_temperature(next_temp)
@@ -1619,6 +1654,8 @@ def main():
 
     calculator = get_calculator(bcar, structure=structure)
     write_energy_csv = _should_write_energy_csv(bcar)
+    write_lammps_traj = _should_write_lammps_trajectory(bcar)
+    lammps_traj_interval = _get_lammps_trajectory_interval(bcar) if write_lammps_traj else 1
 
     if settings.nsw <= 0 or settings.ibrion < 0:
         run_single_point(atoms, calculator)
@@ -1633,6 +1670,8 @@ def main():
             teend=settings.teend,
             smass=settings.smass,
             thermostat_params=settings.thermostat_params,
+            write_lammps_traj=write_lammps_traj,
+            lammps_traj_interval=lammps_traj_interval,
         )
     else:
         run_relaxation(
