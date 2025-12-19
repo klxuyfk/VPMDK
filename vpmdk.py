@@ -599,7 +599,7 @@ def _write_lammps_trajectory_step(path: str, atoms, step_index: int) -> None:
 
     prism = Prism(atoms.get_cell().array, atoms.get_pbc())
     xhi, yhi, zhi, xy, xz, yz = prism.get_lammps_prism()
-    pbc_flags = ["p" if periodic else "f" for periodic in atoms.get_pbc()]
+    pbc_flags = ["pp" if periodic else "ff" for periodic in atoms.get_pbc()]
 
     species_to_type: Dict[str, int] = {}
     symbols = atoms.get_chemical_symbols()
