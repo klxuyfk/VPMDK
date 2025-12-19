@@ -399,9 +399,10 @@ def test_main_passes_md_parameters_to_run_md(tmp_path: Path, prepare_inputs):
         teend,
         smass,
         thermostat_params,
-        write_lammps_traj=False,
-        lammps_traj_interval=1,
+        **kwargs,
     ):
+        write_lammps_traj = kwargs.pop("write_lammps_traj", False)
+        lammps_traj_interval = kwargs.pop("lammps_traj_interval", 1)
         seen.update(
             {
                 "steps": steps,
@@ -415,6 +416,7 @@ def test_main_passes_md_parameters_to_run_md(tmp_path: Path, prepare_inputs):
                 "lammps_traj_interval": lammps_traj_interval,
             }
         )
+        seen["unexpected_kwargs"] = kwargs
         return 0.0
 
     monkeypatch = pytest.MonkeyPatch()

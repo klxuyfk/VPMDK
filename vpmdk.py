@@ -594,7 +594,13 @@ def _write_lammps_trajectory_step(path: str, atoms, step_index: int) -> None:
     """Write or append a LAMMPS trajectory frame for the given MD step."""
 
     append = step_index != 0
-    write(path, atoms, format="lammps-dump-text", append=append)
+    write(
+        path,
+        atoms,
+        format="lammps-dump-text",
+        append=append,
+        time=step_index + 1,
+    )
 
 
 def read_structure(poscar_path: str, potcar_path: str | None = None):
