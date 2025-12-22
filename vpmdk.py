@@ -110,6 +110,7 @@ else:  # pragma: no cover - optional dependency
 
 from ase import units
 from ase.io import write
+from ase.io.lammpsdata import Prism
 from ase.io.vasp import write_vasp_xdatcar
 from ase.optimize import BFGS
 from ase.constraints import UnitCellFilter, StrainFilter, FixAtoms
@@ -594,13 +595,47 @@ def _write_lammps_trajectory_step(path: str, atoms, step_index: int) -> None:
     """Write or append a LAMMPS trajectory frame for the given MD step."""
 
     append = step_index != 0
-    write(
-        path,
-        atoms,
-        format="lammps-dump-text",
-        append=append,
-        time=step_index + 1,
-    )
+    file_mode = "a" if append else "w"
+
+    prism = Prism(atoms.get_cell().array, atoms.get_pbc())
+    xlo, xhi, ylo, yhi, zlo, zhi, xy, xz, yz = prism.get_lammps_prism()
+    pbc_flags = ["pp" if periodic else "ff" for periodic in atoms.get_pbc()]
+
+    species_to_type: Dict[str, int] = {}
+    symbols = atoms.get_chemical_symbols()
+    for symbol in symbols:
+        if symbol not in species_to_type:
+            species_to_type[symbol] = len(species_to_type) + 1
+
+    positions = prism.vector_to_lammps(atoms.get_positions(), wrap=True)
+    velocities = atoms.get_velocities()
+    velocity_data = None
+    if velocities is not None:
+        velocity_data = prism.vector_to_lammps(velocities, wrap=False)
+
+    with open(path, file_mode, encoding="utf-8") as handle:
+        handle.write("ITEM: TIMESTEP\n")
+        handle.write(f"{step_index + 1}\n")
+        handle.write("ITEM: NUMBER OF ATOMS\n")
+        handle.write(f"{len(atoms)}\n")
+        handle.write(
+            "ITEM: BOX BOUNDS xy xz yz " + " ".join(pbc_flags) + "\n"
+        )
+        handle.write(f"{xlo} {xhi} {xy}\n")
+        handle.write(f"{ylo} {yhi} {xz}\n")
+        handle.write(f"{zlo} {zhi} {yz}\n")
+
+        columns = ["id", "type", "x", "y", "z"]
+        if velocity_data is not None:
+            columns.extend(["vx", "vy", "vz"])
+        handle.write("ITEM: ATOMS " + " ".join(columns) + "\n")
+
+        for index, (position, symbol) in enumerate(zip(positions, symbols), start=1):
+            type_id = species_to_type[symbol]
+            values = [index, type_id, *position.tolist()]
+            if velocity_data is not None:
+                values.extend(velocity_data[index - 1].tolist())
+            handle.write(" ".join(str(value) for value in values) + "\n")
 
 
 def read_structure(poscar_path: str, potcar_path: str | None = None):
