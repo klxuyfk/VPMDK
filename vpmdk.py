@@ -634,16 +634,20 @@ def _write_lammps_trajectory_step(path: str, atoms, step_index: int) -> None:
     file_mode = "a" if append else "w"
 
     prism = Prism(atoms.get_cell().array, atoms.get_pbc())
-    bounds = prism.get_lammps_prism()
-    if len(bounds) == 6:
-        xlo, xhi, ylo, yhi, zlo, zhi = bounds
-        xy = xz = yz = 0.0
-    elif len(bounds) == 9:
-        xlo, xhi, ylo, yhi, zlo, zhi, xy, xz, yz = bounds
-    else:  # pragma: no cover - defensive fallback
-        raise ValueError(
-            "Unexpected number of LAMMPS prism parameters: " f"{len(bounds)}"
-        )
+    lx, ly, lz, xy, xz, yz = prism.get_lammps_prism()
+    # Convert the prism representation (box lengths and tilt factors) into the
+    # bounds expected by the LAMMPS dump format. See "How a triclinic box is
+    # defined" in the LAMMPS documentation for the bound transformation.
+    x_tilt_min = min(0.0, xy, xz, xy + xz)
+    x_tilt_max = max(0.0, xy, xz, xy + xz)
+    xlo = 0.0 - x_tilt_min
+    xhi = lx - x_tilt_max
+    y_tilt_min = min(0.0, yz)
+    y_tilt_max = max(0.0, yz)
+    ylo = 0.0 - y_tilt_min
+    yhi = ly - y_tilt_max
+    zlo = 0.0
+    zhi = lz
     pbc_flags = ["pp" if periodic else "ff" for periodic in atoms.get_pbc()]
 
     species_to_type: Dict[str, int] = {}
