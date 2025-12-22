@@ -122,6 +122,28 @@ def test_run_md_writes_lammps_dump_on_interval(tmp_path, load_atoms):
     assert lammps_steps == [0, 2]
 
 
+def test_lammps_dump_writes_box_bounds_from_prism(tmp_path, load_atoms):
+    atoms = load_atoms()
+    path = tmp_path / "traj.lammpstrj"
+
+    vpmdk._write_lammps_trajectory_step(str(path), atoms, 0)
+
+    prism = vpmdk.Prism(atoms.get_cell().array, atoms.get_pbc())
+    lx, ly, lz, xy, xz, yz = prism.get_lammps_prism()
+    expected_xlo = -min(0.0, xy, xz, xy + xz)
+    expected_xhi = lx - max(0.0, xy, xz, xy + xz)
+    expected_ylo = -min(0.0, yz)
+    expected_yhi = ly - max(0.0, yz)
+
+    lines = path.read_text().splitlines()
+    assert lines[0] == "ITEM: TIMESTEP"
+    assert lines[8].startswith("ITEM: ATOMS id type x y z")
+    assert lines[4].split()[:2] == ["ITEM:", "BOX"]
+    assert lines[5] == f"{expected_xlo} {expected_xhi} {xy}"
+    assert lines[6] == f"{expected_ylo} {expected_yhi} {xz}"
+    assert lines[7] == f"0.0 {lz} {yz}"
+
+
 def test_select_md_dynamics_andersen_uses_probability(load_atoms, monkeypatch):
     atoms = load_atoms()
     created: dict[str, object] = {}
