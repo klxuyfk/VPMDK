@@ -602,10 +602,14 @@ def _write_lammps_trajectory_step(path: str, atoms, step_index: int) -> None:
     # Convert the prism representation (box lengths and tilt factors) into the
     # bounds expected by the LAMMPS dump format. See "How a triclinic box is
     # defined" in the LAMMPS documentation for the bound transformation.
-    xlo = -min(0.0, xy, xz, xy + xz)
-    xhi = lx - max(0.0, xy, xz, xy + xz)
-    ylo = -min(0.0, yz)
-    yhi = ly - max(0.0, yz)
+    x_tilt_min = min(0.0, xy, xz, xy + xz)
+    x_tilt_max = max(0.0, xy, xz, xy + xz)
+    xlo = 0.0 + x_tilt_min
+    xhi = lx + x_tilt_max
+    y_tilt_min = min(0.0, yz)
+    y_tilt_max = max(0.0, yz)
+    ylo = 0.0 + y_tilt_min
+    yhi = ly + y_tilt_max
     zlo = 0.0
     zhi = lz
     pbc_flags = ["pp" if periodic else "ff" for periodic in atoms.get_pbc()]
