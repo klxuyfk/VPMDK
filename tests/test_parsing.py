@@ -114,6 +114,53 @@ def test_build_orb_calculator_uses_bcar_tags(monkeypatch: pytest.MonkeyPatch):
     assert captured["compile"] is False
 
 
+def test_build_chgnet_calculator_respects_device(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    captured: dict[str, object] = {}
+
+    class DummyCHGNet:
+        def __init__(self, model_name=None, use_device=None, **_):
+            captured.update({"model": model_name, "device": use_device})
+
+    model_path = tmp_path / "chgnet.pt"
+    model_path.write_text("dummy")
+
+    monkeypatch.setattr(vpmdk, "CHGNetCalculator", DummyCHGNet)
+
+    calculator = vpmdk._build_chgnet_calculator(
+        {"NNP": "CHGNET", "MODEL": str(model_path), "DEVICE": "cpu"}
+    )
+
+    assert isinstance(calculator, DummyCHGNet)
+    assert captured == {"model": str(model_path), "device": "cpu"}
+
+
+def test_build_m3gnet_calculator_respects_device(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    captured: dict[str, object] = {}
+
+    class DummyM3GNet:
+        def __init__(self, model_path=None, *, potential=None, device=None, **_):
+            captured.update(
+                {"model": model_path, "potential": potential, "device": device}
+            )
+
+    model_path = tmp_path / "m3gnet.ckpt"
+    model_path.write_text("dummy")
+
+    monkeypatch.setattr(vpmdk, "M3GNetCalculator", DummyM3GNet)
+    monkeypatch.setattr(vpmdk, "_USING_LEGACY_M3GNET", False)
+
+    calculator = vpmdk._build_m3gnet_calculator(
+        {"NNP": "M3GNET", "MODEL": str(model_path), "DEVICE": "cuda:0"}
+    )
+
+    assert isinstance(calculator, DummyM3GNet)
+    assert captured == {"model": str(model_path), "potential": None, "device": "cuda:0"}
+
+
 def test_build_deepmd_calculator_infers_type_map(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     model_path = tmp_path / "graph.pb"
     model_path.write_text("dummy")
