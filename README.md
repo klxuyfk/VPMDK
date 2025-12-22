@@ -177,11 +177,11 @@ defaults automatically.
 ### GPU usage
 
 This script does not directly manage GPU settings. Each potential selects a
-device on its own. MACE checks for a GPU and uses it when available unless
-`DEVICE=cpu` is specified in `BCAR`. With CUDA devices you can choose which GPU
-to use with `CUDA_VISIBLE_DEVICES`. When running MatGL you may also set
-`XLA_PYTHON_CLIENT_PREALLOCATE=false`. A GPU with at least 8 GB of memory is
-recommended, though running on a CPU also works.
+device on its own. CHGNet, MatGL/M3GNet, MACE, ORB, and FAIRChem honour
+`DEVICE` in `BCAR` (e.g. `DEVICE=cpu` to force a CPU run). With CUDA devices you
+can choose which GPU to use with `CUDA_VISIBLE_DEVICES`. When running MatGL you
+may also set `XLA_PYTHON_CLIENT_PREALLOCATE=false`. A GPU with at least 8 GB of
+memory is recommended, though running on a CPU also works.
 
 ### Example directory layout
 

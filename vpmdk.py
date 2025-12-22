@@ -196,6 +196,28 @@ def _build_allegro_calculator(bcar_tags: Dict[str, str], *, structure=None):
     )
 
 
+def _build_chgnet_calculator(bcar_tags: Dict[str, str]):
+    """Create a CHGNet calculator with optional DEVICE hint."""
+
+    if CHGNetCalculator is None:
+        raise RuntimeError("CHGNetCalculator not available. Install chgnet.")
+
+    model_path = bcar_tags.get("MODEL")
+    device = _resolve_device(bcar_tags.get("DEVICE"))
+    kwargs = {"use_device": device} if device is not None else {}
+
+    if model_path and os.path.exists(model_path):
+        try:
+            return CHGNetCalculator(model_path, **kwargs)
+        except TypeError:
+            return CHGNetCalculator(model_path)
+
+    try:
+        return CHGNetCalculator(**kwargs)
+    except TypeError:
+        return CHGNetCalculator()
+
+
 def _resolve_device(device: str | None) -> str | None:
     """Return user-specified device or best-effort autodetection."""
 
@@ -230,11 +252,19 @@ def _build_m3gnet_calculator(bcar_tags: Dict[str, str]):
         raise RuntimeError("M3GNetCalculator not available. Install matgl or m3gnet.")
 
     model_path = bcar_tags.get("MODEL")
+    device = _resolve_device(bcar_tags.get("DEVICE"))
 
     if not _USING_LEGACY_M3GNET:
+        kwargs = {"device": device} if device is not None else {}
         if model_path and os.path.exists(model_path):
-            return M3GNetCalculator(model_path)
-        return M3GNetCalculator()
+            try:
+                return M3GNetCalculator(model_path, **kwargs)
+            except TypeError:
+                return M3GNetCalculator(model_path)
+        try:
+            return M3GNetCalculator(**kwargs)
+        except TypeError:
+            return M3GNetCalculator()
 
     potential = None
     if model_path and os.path.exists(model_path) and LegacyM3GNetPotential is not None:
@@ -258,6 +288,12 @@ def _build_m3gnet_calculator(bcar_tags: Dict[str, str]):
 
     if potential is None:
         raise RuntimeError("Legacy M3GNet calculator could not be initialized from available models.")
+
+    if device is not None:
+        try:
+            return M3GNetCalculator(potential=potential, device=device)
+        except TypeError:
+            pass
 
     return M3GNetCalculator(potential=potential)
 
@@ -921,10 +957,6 @@ def _build_deepmd_calculator(bcar_tags: Dict[str, str], structure=None):
 
 
 _SIMPLE_CALCULATORS: Dict[str, tuple[Any, str]] = {
-    "CHGNET": (
-        CHGNetCalculator,
-        "CHGNetCalculator not available. Install chgnet.",
-    ),
     "SEVENNET": (
         SevenNetCalculator,
         "SevenNetCalculator not available. Install sevennet.",
@@ -937,6 +969,7 @@ _SIMPLE_CALCULATORS: Dict[str, tuple[Any, str]] = {
 
 
 _CALCULATOR_BUILDERS: Dict[str, Callable[[Dict[str, str]], Any]] = {
+    "CHGNET": _build_chgnet_calculator,
     "MATGL": _build_m3gnet_calculator,
     "M3GNET": _build_m3gnet_calculator,
     "MACE": _build_mace_calculator,
