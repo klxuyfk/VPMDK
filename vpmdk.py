@@ -598,7 +598,16 @@ def _write_lammps_trajectory_step(path: str, atoms, step_index: int) -> None:
     file_mode = "a" if append else "w"
 
     prism = Prism(atoms.get_cell().array, atoms.get_pbc())
-    xlo, xhi, ylo, yhi, zlo, zhi, xy, xz, yz = prism.get_lammps_prism()
+    bounds = prism.get_lammps_prism()
+    if len(bounds) == 6:
+        xlo, xhi, ylo, yhi, zlo, zhi = bounds
+        xy = xz = yz = 0.0
+    elif len(bounds) == 9:
+        xlo, xhi, ylo, yhi, zlo, zhi, xy, xz, yz = bounds
+    else:  # pragma: no cover - defensive fallback
+        raise ValueError(
+            "Unexpected number of LAMMPS prism parameters: " f"{len(bounds)}"
+        )
     pbc_flags = ["pp" if periodic else "ff" for periodic in atoms.get_pbc()]
 
     species_to_type: Dict[str, int] = {}
