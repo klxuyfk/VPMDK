@@ -44,7 +44,7 @@ The script reads a subset of common VASP `INCAR` settings. Other tags are ignore
 | `TEBEG` | Initial temperature in kelvin for molecular dynamics (`IBRION=0`). | `300`. |
 | `TEEND` | Final temperature in kelvin when ramping MD runs. | Same as `TEBEG`. Temperature is linearly ramped between `TEBEG` and `TEEND` over the MD steps. |
 | `POTIM` | Time step in femtoseconds for molecular dynamics (`IBRION=0`). | `2`. |
-| `MDALGO` | Selects the MD integrator / thermostat. | `0` (NVE). See [MD algorithms](#md-algorithms) for details. |
+| `MDALGO` | Selects the MD integrator / thermostat. | `0` (NVE). When left at `0`, `SMASS>0` falls back to Nose–Hoover (`MDALGO=2`) and `SMASS<0` falls back to Langevin (`MDALGO=3`). See [MD algorithms](#md-algorithms) for details. |
 | `SMASS` | Thermostat-specific mass parameter. | Used for Nose–Hoover time constant (`abs(SMASS)` fs) or as a fallback to set `LANGEVIN_GAMMA` when negative. |
 | `ANDERSEN_PROB` | Collision probability for the Andersen thermostat. | `0.1`. Only used with `MDALGO=1`. |
 | `LANGEVIN_GAMMA` | Friction coefficient (1/ps) for Langevin dynamics. | `1.0`. Only used with `MDALGO=3`; falls back to `abs(SMASS)` when `SMASS<0`. |

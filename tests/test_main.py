@@ -437,3 +437,75 @@ def test_main_passes_md_parameters_to_run_md(tmp_path: Path, prepare_inputs):
     assert seen["thermostat"].get("LANGEVIN_GAMMA") == 15.0
     assert seen["write_lammps_traj"] is False
     assert seen["lammps_traj_interval"] == 1
+
+
+def test_main_defaults_to_langevin_when_smass_negative(tmp_path: Path, prepare_inputs):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "2", "IBRION": "0", "SMASS": "-3"},
+    )
+
+    seen: dict[str, object] = {}
+
+    def fake_run_md(
+        atoms,
+        calculator,
+        steps,
+        temperature,
+        timestep,
+        *,
+        mdalgo,
+        smass,
+        **kwargs,
+    ):
+        seen.update({"mdalgo": mdalgo, "smass": smass})
+        return 0.0
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "run_md", fake_run_md)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen["mdalgo"] == 3
+    assert seen["smass"] == -3.0
+
+
+def test_main_defaults_to_nose_when_smass_positive(tmp_path: Path, prepare_inputs):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "2", "IBRION": "0", "SMASS": "2.0"},
+    )
+
+    seen: dict[str, object] = {}
+
+    def fake_run_md(
+        atoms,
+        calculator,
+        steps,
+        temperature,
+        timestep,
+        *,
+        mdalgo,
+        smass,
+        **kwargs,
+    ):
+        seen.update({"mdalgo": mdalgo, "smass": smass})
+        return 0.0
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "run_md", fake_run_md)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen["mdalgo"] == 2
+    assert seen["smass"] == 2.0
