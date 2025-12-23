@@ -92,6 +92,9 @@ def _patch_fairchem_checkpoint_loader():  # pragma: no cover - exercised in down
 
     try:
         from fairchem.core.units.mlip_unit import utils as mlip_utils
+        import hydra
+        import torch
+        from types import SimpleNamespace
     except Exception:
         return
 
@@ -105,10 +108,6 @@ def _patch_fairchem_checkpoint_loader():  # pragma: no cover - exercised in down
         return_checkpoint: bool = True,
         strict: bool = True,
     ):
-        import hydra
-        import torch
-        from types import SimpleNamespace
-
         checkpoint_raw = torch.load(
             checkpoint_location, map_location="cpu", weights_only=False
         )
@@ -959,8 +958,6 @@ def _build_fairchem_calculator(bcar_tags: Dict[str, str]):
 
     if FAIRChemCalculator is None:
         raise RuntimeError("FAIRChemCalculator not available. Install fairchem and dependencies.")
-
-    _patch_fairchem_checkpoint_loader()
 
     model_name = bcar_tags.get("MODEL") or DEFAULT_FAIRCHEM_MODEL
     task_name = bcar_tags.get("FAIRCHEM_TASK")
