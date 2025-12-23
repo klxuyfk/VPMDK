@@ -137,11 +137,23 @@ def test_lammps_dump_writes_box_bounds_from_prism(tmp_path, load_atoms):
 
     lines = path.read_text().splitlines()
     assert lines[0] == "ITEM: TIMESTEP"
-    assert lines[8].startswith("ITEM: ATOMS id type x y z")
+    assert lines[8].startswith("ITEM: ATOMS id type xs ys zs ix iy iz")
     assert lines[4].split()[:2] == ["ITEM:", "BOX"]
-    assert lines[5] == f"{expected_xlo} {expected_xhi} {xy}"
-    assert lines[6] == f"{expected_ylo} {expected_yhi} {xz}"
-    assert lines[7] == f"0.0 {lz} {yz}"
+
+    xlo_line, xhi_line, xy_line = lines[5].split()
+    assert float(xlo_line) == expected_xlo
+    assert float(xhi_line) == expected_xhi
+    assert float(xy_line) == xy
+
+    ylo_line, yhi_line, xz_line = lines[6].split()
+    assert float(ylo_line) == expected_ylo
+    assert float(yhi_line) == expected_yhi
+    assert float(xz_line) == xz
+
+    zlo_line, zhi_line, yz_line = lines[7].split()
+    assert float(zlo_line) == 0.0
+    assert float(zhi_line) == lz
+    assert float(yz_line) == yz
 
 
 def test_select_md_dynamics_andersen_uses_probability(load_atoms, monkeypatch):

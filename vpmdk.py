@@ -656,7 +656,16 @@ def _write_lammps_trajectory_step(path: str, atoms, step_index: int) -> None:
         if symbol not in species_to_type:
             species_to_type[symbol] = len(species_to_type) + 1
 
-    positions = prism.vector_to_lammps(atoms.get_positions(), wrap=True)
+    # Obtain atomic positions in the LAMMPS coordinate system without wrapping
+    lammps_positions = prism.vector_to_lammps(atoms.get_positions(), wrap=False)
+    cell_matrix = prism.cell
+
+    # Convert to fractional coordinates in the LAMMPS cell and extract image flags
+    fractional = np.linalg.solve(cell_matrix.T, lammps_positions.T).T
+    pbc = np.array(atoms.get_pbc(), dtype=bool)
+    image_flags = (np.floor(fractional).astype(int)) * pbc
+    scaled_positions = fractional - image_flags
+
     velocities = atoms.get_velocities()
     velocity_data = None
     if velocities is not None:
@@ -674,14 +683,16 @@ def _write_lammps_trajectory_step(path: str, atoms, step_index: int) -> None:
         handle.write(f"{ylo} {yhi} {xz}\n")
         handle.write(f"{zlo} {zhi} {yz}\n")
 
-        columns = ["id", "type", "x", "y", "z"]
+        columns = ["id", "type", "xs", "ys", "zs", "ix", "iy", "iz"]
         if velocity_data is not None:
             columns.extend(["vx", "vy", "vz"])
         handle.write("ITEM: ATOMS " + " ".join(columns) + "\n")
 
-        for index, (position, symbol) in enumerate(zip(positions, symbols), start=1):
+        for index, (scaled, images, symbol) in enumerate(
+            zip(scaled_positions, image_flags, symbols), start=1
+        ):
             type_id = species_to_type[symbol]
-            values = [index, type_id, *position.tolist()]
+            values = [index, type_id, *scaled.tolist(), *images.tolist()]
             if velocity_data is not None:
                 values.extend(velocity_data[index - 1].tolist())
             handle.write(" ".join(str(value) for value in values) + "\n")
