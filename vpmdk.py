@@ -877,13 +877,17 @@ def _get_fairchem_v1_calculator_cls():
 
     global FAIRChemV1Calculator
 
+    first_import_error: Exception | None = None
+
     if FAIRChemV1Calculator is not None:
         return FAIRChemV1Calculator
 
     for module_name in _FAIRCHEM_V1_IMPORT_PATHS:
         try:
             spec = importlib.util.find_spec(module_name)
-        except Exception:  # pragma: no cover - importlib edge case
+        except Exception as exc:  # pragma: no cover - importlib edge case
+            if first_import_error is None:
+                first_import_error = exc
             continue
 
         if spec is None:
@@ -891,13 +895,20 @@ def _get_fairchem_v1_calculator_cls():
 
         try:
             module = importlib.import_module(module_name)
-        except Exception:  # pragma: no cover - optional dependency
+        except Exception as exc:  # pragma: no cover - optional dependency
+            if first_import_error is None:
+                first_import_error = exc
             continue
 
         candidate = getattr(module, "OCPCalculator", None)
         if candidate is not None:
             FAIRChemV1Calculator = candidate
             return candidate
+
+    if first_import_error is not None:
+        raise RuntimeError(
+            "FAIRChem v1 calculator not available due to an import failure."
+        ) from first_import_error
 
     return None
 
