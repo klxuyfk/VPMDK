@@ -80,6 +80,97 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     FAIRChemCalculator = None  # type: ignore
 
+# FAIRChem 0.2.1 expects the checkpoint loaded by ``torch.load`` to expose
+# attributes such as ``model_config`` rather than dictionary keys. Some public
+# eSEN checkpoints (e.g., ``esen_30m_oam.pt``) are saved as plain dictionaries,
+# which triggers an AttributeError deep inside ``fairchem.core.units``.  Patch
+# the loader at import time to accept both structures when FAIRChem is
+# available.  The patch is idempotent and skipped if fairchem is absent.
+def _patch_fairchem_checkpoint_loader():  # pragma: no cover - exercised in downstream environments
+    if FAIRChemCalculator is None:
+        return
+
+    try:
+        from fairchem.core.units.mlip_unit import utils as mlip_utils
+        import hydra
+        import torch
+        from types import SimpleNamespace
+    except Exception:
+        return
+
+    if getattr(mlip_utils.load_inference_model, "_vpmdk_patched", False):
+        return
+
+    def _load_inference_model(
+        checkpoint_location: str,
+        overrides: dict | None = None,
+        use_ema: bool = False,
+        return_checkpoint: bool = True,
+        strict: bool = True,
+    ):
+        checkpoint_raw = torch.load(
+            checkpoint_location, map_location="cpu", weights_only=False
+        )
+
+        if isinstance(checkpoint_raw, dict):
+            model_config = checkpoint_raw.get("model_config") or checkpoint_raw.get("config")
+            model_state_dict = checkpoint_raw.get("model_state_dict") or checkpoint_raw.get(
+                "state_dict"
+            )
+            ema_state_dict = checkpoint_raw.get("ema_state_dict")
+            tasks_config = checkpoint_raw.get("tasks_config", [])
+
+            if model_config is None or model_state_dict is None:
+                raise ValueError(
+                    "Checkpoint is missing model configuration or weights; "
+                    "cannot build FAIRChem model from provided file."
+                )
+
+            checkpoint = SimpleNamespace(
+                model_config=model_config,
+                model_state_dict=model_state_dict,
+                ema_state_dict=ema_state_dict,
+                tasks_config=tasks_config,
+            )
+        else:
+            checkpoint = checkpoint_raw
+
+        if overrides is not None and getattr(checkpoint, "model_config", None) is not None:
+            checkpoint.model_config = mlip_utils.update_configs(
+                checkpoint.model_config, overrides
+            )
+
+        model = hydra.utils.instantiate(checkpoint.model_config)
+        if use_ema:
+            model = torch.optim.swa_utils.AveragedModel(model)
+            model_dict = model.state_dict()
+            ema_state_dict = getattr(checkpoint, "ema_state_dict", None)
+
+            if ema_state_dict is None:
+                raise ValueError(
+                    "EMA weights were requested but checkpoint lacks ema_state_dict"
+                )
+
+            n_averaged = ema_state_dict.get("n_averaged")
+            model_dict.pop("n_averaged", None)
+            ema_state_dict.pop("n_averaged", None)
+
+            matched_dict = mlip_utils.match_state_dict(model_dict, ema_state_dict)
+            if n_averaged is not None:
+                matched_dict["n_averaged"] = n_averaged
+
+            mlip_utils.load_state_dict(model, matched_dict, strict=strict)
+        else:
+            mlip_utils.load_state_dict(model, checkpoint.model_state_dict, strict=strict)
+
+        return (model, checkpoint) if return_checkpoint is True else model
+
+    _load_inference_model._vpmdk_patched = True  # type: ignore[attr-defined]
+    mlip_utils.load_inference_model = _load_inference_model  # type: ignore[assignment]
+
+
+_patch_fairchem_checkpoint_loader()
+
 try:
     from tensorpotential.calculator.asecalculator import TPCalculator
 except Exception:  # pragma: no cover - optional dependency
