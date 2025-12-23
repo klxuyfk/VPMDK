@@ -9,6 +9,7 @@ CONTCAR and OUTCAR-style energy logs are produced.
 
 import argparse
 import csv
+import importlib
 import importlib.util
 import os
 import re
@@ -76,9 +77,11 @@ except Exception:  # pragma: no cover - optional dependency
     ORB_PRETRAINED_MODELS = None  # type: ignore
 
 try:
-    from fairchem.core.calculate.ase_calculator import FAIRChemCalculator
+    from fairchem.core.calculate.ase_calculator import FAIRChemCalculator  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
     FAIRChemCalculator = None  # type: ignore
+
+FAIRChemV1Calculator = None  # type: ignore
 
 try:
     from tensorpotential.calculator.asecalculator import TPCalculator
@@ -862,6 +865,43 @@ def _build_orb_calculator(bcar_tags: Dict[str, str]):
     return ORBCalculator(model, device=device)
 
 
+_FAIRCHEM_V1_IMPORT_PATHS = (
+    "ocpmodels.common.relaxation.ase_utils",
+    "fairchem.core.common.relaxation.ase_utils",
+    "fairchem.common.relaxation.ase_utils",
+)
+
+
+def _get_fairchem_v1_calculator_cls():
+    """Return FAIRChem v1 calculator class if installed."""
+
+    global FAIRChemV1Calculator
+
+    if FAIRChemV1Calculator is not None:
+        return FAIRChemV1Calculator
+
+    for module_name in _FAIRCHEM_V1_IMPORT_PATHS:
+        try:
+            spec = importlib.util.find_spec(module_name)
+        except Exception:  # pragma: no cover - importlib edge case
+            continue
+
+        if spec is None:
+            continue
+
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:  # pragma: no cover - optional dependency
+            continue
+
+        candidate = getattr(module, "OCPCalculator", None)
+        if candidate is not None:
+            FAIRChemV1Calculator = candidate
+            return candidate
+
+    return None
+
+
 def _build_fairchem_calculator(bcar_tags: Dict[str, str]):
     """Create the FAIRChem ASE calculator configured from BCAR tags."""
 
@@ -879,6 +919,30 @@ def _build_fairchem_calculator(bcar_tags: Dict[str, str]):
         inference_settings=inference_settings,
         device=device,
     )
+
+
+def _build_fairchem_v1_calculator(bcar_tags: Dict[str, str]):
+    """Create the FAIRChem v1 OCPCalculator configured from BCAR tags."""
+
+    calculator_cls = _get_fairchem_v1_calculator_cls()
+    if calculator_cls is None:
+        raise RuntimeError(
+            "FAIRChem v1 calculator not available. Install fairchem v1 (OCP) dependencies."
+        )
+
+    model_path = bcar_tags.get("MODEL")
+    if not model_path:
+        raise ValueError("FAIRChem v1 requires MODEL pointing to a checkpoint file.")
+
+    config_path = bcar_tags.get("FAIRCHEM_CONFIG")
+    device = bcar_tags.get("DEVICE")
+    cpu_flag = device is not None and device.lower() == "cpu"
+
+    kwargs: Dict[str, Any] = {"checkpoint_path": model_path, "cpu": cpu_flag}
+    if config_path:
+        kwargs["config_yml"] = config_path
+
+    return calculator_cls(**kwargs)
 
 
 def _build_grace_calculator(bcar_tags: Dict[str, str]):
@@ -993,7 +1057,9 @@ _CALCULATOR_BUILDERS: Dict[str, Callable[[Dict[str, str]], Any]] = {
     "MATLANTIS": _build_matlantis_calculator,
     "ORB": _build_orb_calculator,
     "FAIRCHEM": _build_fairchem_calculator,
+    "FAIRCHEM_V2": _build_fairchem_calculator,
     "ESEN": _build_fairchem_calculator,
+    "FAIRCHEM_V1": _build_fairchem_v1_calculator,
     "GRACE": _build_grace_calculator,
     "DEEPMD": _build_deepmd_calculator,
 }

@@ -81,7 +81,7 @@ DEVICE=cuda           # Optional device override when the backend supports it
 
 | Tag | Meaning | Default |
 |-----|---------|---------|
-| `NNP` | Backend name (`CHGNET`, `MACE`, `MATGL`, `MATLANTIS`, `MATTERSIM`, `NEQUIP`, `ALLEGRO`, `ORB`, `FAIRCHEM`, `GRACE`, `DEEPMD`, `SEVENNET`) | `CHGNET` |
+| `NNP` | Backend name (`CHGNET`, `MACE`, `MATGL`, `MATLANTIS`, `MATTERSIM`, `NEQUIP`, `ALLEGRO`, `ORB`, `FAIRCHEM`, `FAIRCHEM_V2`, `FAIRCHEM_V1`, `GRACE`, `DEEPMD`, `SEVENNET`) | `CHGNET` |
 | `MODEL` | Path to a trained parameter set (ORB accepts checkpoints; FAIRChem also accepts model names such as `esen-sm-direct-all-oc25`) | Backend default or bundled weights |
 | `DEVICE` | Device hint for backends that support it (`cpu`, `cuda`, `cuda:N`) | Auto-detects GPU when available |
 
@@ -104,8 +104,9 @@ DEVICE=cuda           # Optional device override when the backend supports it
 | `ORB_MODEL` | ORB | Pretrained architecture key recognised by `orb_models` | `orb-v3-conservative-20-omat` |
 | `ORB_PRECISION` | ORB | Floating-point precision string forwarded to orb-models loaders | `float32-high` |
 | `ORB_COMPILE` | ORB | Whether to `torch.compile` the ORB model (`0/1`, `true/false`, …) | Library default |
-| `FAIRCHEM_TASK` | FAIRChem | Task head to use (e.g. `omol`) | Auto-detected when possible |
-| `FAIRCHEM_INFERENCE_SETTINGS` | FAIRChem | Inference profile forwarded to FAIRChem | `default` |
+| `FAIRCHEM_TASK` | FAIRChem v2 (`FAIRCHEM`/`FAIRCHEM_V2`) | Task head to use (e.g. `omol`) | Auto-detected when possible |
+| `FAIRCHEM_INFERENCE_SETTINGS` | FAIRChem v2 (`FAIRCHEM`/`FAIRCHEM_V2`) | Inference profile forwarded to FAIRChem | `default` |
+| `FAIRCHEM_CONFIG` | FAIRChem v1 (`FAIRCHEM_V1`) | Path to the YAML config used with the checkpoint | Required for most checkpoints |
 | `GRACE_PAD_NEIGHBORS_FRACTION` | GRACE | Fake-neighbour padding fraction forwarded to TensorPotential | Library default (typically `0.05`) |
 | `GRACE_PAD_ATOMS_NUMBER` | GRACE | Number of fake atoms for padding | Library default (typically `10`) |
 | `GRACE_MAX_RECOMPILATION` | GRACE | Max recompilations triggered by padding reduction | Library default (typically `2`) |
@@ -119,6 +120,12 @@ credentials before running VPMDK with `NNP=MATLANTIS`.
 ORB calculations rely on the [orb-models](https://github.com/orbital-materials/orb-models)
 package. When `MODEL` is omitted, VPMDK downloads the pretrained weights specified by
 `ORB_MODEL` using orb-models; set `MODEL=/path/to/checkpoint.ckpt` to run with local weights.
+
+FAIRChem 2.x and 1.x are incompatible. Select `NNP=FAIRCHEM` (or `FAIRCHEM_V2`) to
+use FAIRChem v2 checkpoints via `FAIRChemCalculator.from_model_checkpoint`, and
+`NNP=FAIRCHEM_V1` when running legacy OCP/FAIRChem v1 checkpoints with
+`OCPCalculator`. Switching conda environments per checkpoint version is supported by
+selecting the appropriate tag.
 
 ## Output files
 

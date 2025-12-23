@@ -24,6 +24,8 @@ from tests.conftest import DummyCalculator
         "NEQUIP",
         "ORB",
         "FAIRCHEM",
+        "FAIRCHEM_V2",
+        "FAIRCHEM_V1",
         "GRACE",
         "DEEPMD",
     ],
@@ -74,7 +76,24 @@ def test_single_point_energy_for_all_potentials(
         def from_model_checkpoint(cls, *a, **k):
             return factory("FAIRCHEM")
 
+    def fake_fairchem_builder(tags: dict[str, str]):
+        nnp_tag = tags.get("NNP", "").upper()
+        name = "FAIRCHEM_V2" if nnp_tag == "FAIRCHEM_V2" else "FAIRCHEM"
+        return factory(name)
+
     monkeypatch.setattr(vpmdk, "FAIRChemCalculator", _DummyFairChem)
+    monkeypatch.setitem(vpmdk._CALCULATOR_BUILDERS, "FAIRCHEM", fake_fairchem_builder)
+    monkeypatch.setitem(
+        vpmdk._CALCULATOR_BUILDERS, "FAIRCHEM_V2", fake_fairchem_builder
+    )
+
+    class _DummyFairChemV1:
+        def __init__(self, *a, **k):
+            factory("FAIRCHEM_V1")
+
+    monkeypatch.setattr(
+        vpmdk, "_get_fairchem_v1_calculator_cls", lambda: _DummyFairChemV1
+    )
 
     class DummyEstimatorMode:
         CRYSTAL = "CRYSTAL"
@@ -175,6 +194,37 @@ def test_fairchem_calculator_uses_bcar_overrides(tmp_path: Path, prepare_inputs)
         "task": "omol",
         "settings": "turbo",
         "device": "cuda",
+    }
+
+
+def test_fairchem_v1_builder_uses_bcar_overrides():
+    seen: dict[str, object] = {}
+
+    class _DummyFairChemV1:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        vpmdk, "_get_fairchem_v1_calculator_cls", lambda: _DummyFairChemV1
+    )
+
+    calculator = vpmdk.get_calculator(
+        {
+            "NNP": "FAIRCHEM_V1",
+            "MODEL": "checkpoint.pt",
+            "FAIRCHEM_CONFIG": "config.yml",
+            "DEVICE": "cpu",
+        }
+    )
+
+    monkeypatch.undo()
+
+    assert isinstance(calculator, _DummyFairChemV1)
+    assert seen == {
+        "checkpoint_path": "checkpoint.pt",
+        "cpu": True,
+        "config_yml": "config.yml",
     }
 
 
