@@ -137,9 +137,51 @@ def _patch_fairchem_checkpoint_loader():  # pragma: no cover - exercised in down
             checkpoint = checkpoint_raw
 
         if overrides is not None and getattr(checkpoint, "model_config", None) is not None:
-            checkpoint.model_config = mlip_utils.update_configs(
-                checkpoint.model_config, overrides
-            )
+            try:
+                checkpoint.model_config = mlip_utils.update_configs(
+                    checkpoint.model_config, overrides
+                )
+            except KeyError:
+                # Some checkpoints (e.g., early eSEN releases) lack newer keys such as
+                # ``backbone`` that fairchem's update_configs expects to pre-exist. Fall
+                # back to a permissive merge that allows overrides to introduce missing
+                # keys instead of failing with a KeyError.  OmegaConf is used when
+                # available to preserve DictConfig semantics.
+                try:  # pragma: no cover - depends on optional dependency
+                    from omegaconf import OmegaConf
+                except Exception:  # pragma: no cover - graceful degradation
+                    OmegaConf = None  # type: ignore
+
+                def _coerce_container(cfg):
+                    if OmegaConf is None:
+                        return cfg
+                    try:
+                        return OmegaConf.to_container(cfg, resolve=True)
+                    except Exception:
+                        return cfg
+
+                def _rebuild_config(cfg):
+                    if OmegaConf is None:
+                        return cfg
+                    try:
+                        return OmegaConf.create(cfg)
+                    except Exception:
+                        return cfg
+
+                def _merge(base, patch):
+                    if isinstance(base, dict) and isinstance(patch, dict):
+                        merged = dict(base)
+                        for key, value in patch.items():
+                            if key in merged:
+                                merged[key] = _merge(merged[key], value)
+                            else:
+                                merged[key] = value
+                        return merged
+                    return patch
+
+                base_config = _coerce_container(checkpoint.model_config)
+                override_config = _coerce_container(overrides)
+                checkpoint.model_config = _rebuild_config(_merge(base_config, override_config))
 
         model = hydra.utils.instantiate(checkpoint.model_config)
         if use_ema:
