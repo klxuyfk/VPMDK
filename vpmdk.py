@@ -1221,12 +1221,17 @@ def _load_incar_settings(incar) -> IncarSettings:
     parsed_teend = _parse_optional_float(teend_value, key="TEEND")
     teend = parsed_teend if parsed_teend is not None else tebeg
     potim = float(incar.get("POTIM", 2.0))
-    mdalgo = int(float(incar.get("MDALGO", 0)))
     smass = (
         _parse_optional_float(incar.get("SMASS"), key="SMASS")
         if "SMASS" in incar
         else None
     )
+    mdalgo = int(float(incar.get("MDALGO", 0)))
+    if mdalgo == 0 and smass is not None:
+        if smass < 0:
+            mdalgo = 3
+        elif smass > 0:
+            mdalgo = 2
     thermostat_params = _extract_thermostat_parameters(incar)
     requested_isif = int(float(incar.get("ISIF", 2)))
     normalized_isif = _normalize_isif(requested_isif)
