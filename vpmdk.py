@@ -169,6 +169,14 @@ def _patch_fairchem_checkpoint_loader():  # pragma: no cover - exercised in down
     _load_inference_model._vpmdk_patched = True  # type: ignore[attr-defined]
     mlip_utils.load_inference_model = _load_inference_model  # type: ignore[assignment]
 
+    try:
+        from fairchem.core.units.mlip_unit import predict as mlip_predict
+    except Exception:
+        mlip_predict = None  # type: ignore
+
+    if mlip_predict is not None:
+        mlip_predict.load_inference_model = _load_inference_model  # type: ignore[assignment]
+
 
 _patch_fairchem_checkpoint_loader()
 
