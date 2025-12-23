@@ -866,6 +866,7 @@ def _build_orb_calculator(bcar_tags: Dict[str, str]):
 
 
 _FAIRCHEM_V1_IMPORT_PATHS = (
+    "fairchem_core.common.relaxation.ase_utils",
     "ocpmodels.common.relaxation.ase_utils",
     "fairchem.core.common.relaxation.ase_utils",
     "fairchem.common.relaxation.ase_utils",
