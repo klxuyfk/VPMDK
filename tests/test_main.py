@@ -36,7 +36,7 @@ def test_single_point_energy_for_all_potentials(
     prepare_inputs,
 ):
     extra_bcar: dict[str, str] = {}
-    if potential in {"NEQUIP", "ALLEGRO", "DEEPMD"}:
+    if potential in {"NEQUIP", "ALLEGRO", "DEEPMD", "FAIRCHEM_V1"}:
         model_path = tmp_path / "nequip-model.pth"
         model_path.write_text("dummy")
         extra_bcar["MODEL"] = str(model_path)
