@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vpmdk"
+version = "0.1.0"
+description = "Run machine-learning potentials using VASP style inputs."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+keywords = ["vasp", "molecular-dynamics", "machine-learning", "ase"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: BSD License",
+  "Operating System :: OS Independent",
+]
+dependencies = [
+  "ase",
+  "numpy",
+  "pymatgen",
+]
+
+[project.scripts]
+vpmdk = "vpmdk:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["vpmdk_core"]
+py-modules = ["vpmdk"]

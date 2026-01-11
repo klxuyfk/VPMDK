@@ -1,10 +1,18 @@
 # VPMDK
 
-VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is a lightweight engine that **reads and writes VASP-style inputs/outputs** and performs **molecular dynamics and structure relaxations** using **machine-learning interatomic potentials**. Keep familiar VASP workflows and artifacts while computations run through ASE-compatible ML calculators. A simple driver script, `vpmdk.py`, is provided.
+VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is a lightweight engine that **reads and writes VASP-style inputs/outputs** and performs **molecular dynamics and structure relaxations** using **machine-learning interatomic potentials**. Keep familiar VASP workflows and artifacts while computations run through ASE-compatible ML calculators. The `vpmdk` command (and legacy `vpmdk.py` wrapper) are provided.
 
 **Supported calculators (via ASE):** **CHGNet**, **SevenNet**, **MatterSim**, **MACE**, **Matlantis**, **NequIP**, **Allegro**, **ORB**, **MatGL** (via the M3GNet model), **FAIRChem** (including eSEN checkpoints), **GRACE** (TensorPotential foundation models or checkpoints), and **DeePMD-kit**. Availability depends on the corresponding Python packages being installed.
 
 *Not affiliated with, endorsed by, or a replacement for VASP; “VASP” is a trademark of its respective owner. VPMDK only mimics VASP I/O conventions for compatibility.*
+
+## Installation
+
+Install the package from PyPI (or from a checkout):
+
+```bash
+pip install vpmdk
+```
 
 ## Usage
 
@@ -16,10 +24,16 @@ VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is 
 3. Run:
 
    ```bash
-   python vpmdk.py [--dir PATH_TO_INPUT]
+   vpmdk [--dir PATH_TO_INPUT]
    ```
 
 If `--dir` is omitted, the current directory (`.`) is used.
+
+When running directly from a repository checkout, the legacy wrapper still works:
+
+```bash
+python vpmdk.py [--dir PATH_TO_INPUT]
+```
 
 ## Input files
 
@@ -203,7 +217,7 @@ calc_dir/
 Example command:
 
 ```bash
-python vpmdk.py --dir calc_dir
+vpmdk --dir calc_dir
 ```
 
 ## License
