@@ -1531,7 +1531,7 @@ def run_relaxation(
     pstress: float | None = None,
     energy_tolerance: float | None = None,
 ):
-    atoms.calc = calculator
+    atoms.calc = _resolve_calculator(calculator)
     energies: List[float] = []
     previous_energy: float | None = None
     step_counter = 0
@@ -1766,7 +1766,7 @@ def run_md(
     lammps_traj_interval: int = 1,
     lammps_traj_path: str = "lammps.lammpstrj",
 ):
-    atoms.calc = calculator
+    atoms.calc = _resolve_calculator(calculator)
     if temperature <= 0:
         velocities = atoms.get_velocities()
         if velocities is None:
