@@ -116,7 +116,6 @@ from ase.io import write
 from ase.io.lammpsdata import Prism
 from ase.io.vasp import write_vasp_xdatcar
 from ase.optimize import BFGS
-from ase.calculators.calculator import Calculator, all_changes
 try:
     from ase.constraints import UnitCellFilter, StrainFilter, FixAtoms
 except ImportError:  # pragma: no cover - ASE moved filters in newer versions
@@ -1072,14 +1071,6 @@ _CALCULATOR_BUILDERS: Dict[str, str] = {
 }
 
 
-class _FallbackCalculator(Calculator):
-    implemented_properties = ["energy"]
-
-    def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
-        super().calculate(atoms, properties, system_changes)
-        self.results["energy"] = 0.0
-
-
 def _build_calculator_from_init_factory(calculator, bcar_tags: Dict[str, str]):
     init = getattr(calculator.__class__, "__init__", None)
     closure = getattr(init, "__closure__", None)
@@ -1109,7 +1100,9 @@ def _attach_fallback_calculator(calculator, bcar_tags: Dict[str, str]):
     if fallback is None or not hasattr(fallback, "get_potential_energy"):
         fallback = _build_calculator_from_init_factory(calculator, bcar_tags)
     if fallback is None:
-        fallback = _FallbackCalculator()
+        raise RuntimeError(
+            "FAIRChem v1 calculator wrapper does not provide an inner ASE calculator."
+        )
     setattr(calculator, "calculator", fallback)
     return calculator
 
