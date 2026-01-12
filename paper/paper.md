@@ -46,13 +46,13 @@ VPMDK addresses this gap with a minimal driver that speaks the VASP dialect on d
 
 # Usage
 
-Place `POSCAR` (and optionally `INCAR`, `POTCAR`, `BCAR`) in a directory and run:
+Prepare a directory containing at least `POSCAR` (optional `INCAR`, `POTCAR`, `BCAR`) and run:
 
 ```bash
-python vpmdk.py [--dir calc_dir]
+vpmdk [--dir calc_dir]
 ```
 
-`INCAR` chooses mode and control parameters; `BCAR` selects the potential and optional `MODEL`. Results appear as `CONTCAR`, `OUTCAR`, and, for MD, `XDATCAR`.
+If `--dir` is omitted, the current directory (`.`) is used. `INCAR` chooses mode and control parameters; `BCAR` selects the potential and optional `MODEL`. Results appear as `CONTCAR`, `OUTCAR`, and, for MD, `XDATCAR`.
 
 # Limitations and scope
 
@@ -63,4 +63,3 @@ VPMDK is not affiliated with, endorsed by, or a drop‑in replacement for VASP; 
 I thank the developers and maintainers of ASE and pymatgen for foundational infrastructure, and the authors of CHGNet, M3GNet/MatGL, MACE, and MatterSim for making high‑quality MLPs broadly available.
 
 # References
-
