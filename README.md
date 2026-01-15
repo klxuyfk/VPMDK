@@ -121,6 +121,7 @@ DEVICE=cuda           # Optional device override when the backend supports it
 | `FAIRCHEM_TASK` | FAIRChem v2 (`FAIRCHEM`/`FAIRCHEM_V2`) | Task head to use (e.g. `omol`) | Auto-detected when possible |
 | `FAIRCHEM_INFERENCE_SETTINGS` | FAIRChem v2 (`FAIRCHEM`/`FAIRCHEM_V2`) | Inference profile forwarded to FAIRChem | `default` |
 | `FAIRCHEM_CONFIG` | FAIRChem v1 (`FAIRCHEM_V1`) | Path to the YAML config used with the checkpoint | Required for most checkpoints |
+| `FAIRCHEM_V1_PREDICTOR` | FAIRChem v1 (`FAIRCHEM_V1`) | Use the predictor directly instead of the OCPCalculator (`1` to enable) | `0` |
 | `GRACE_PAD_NEIGHBORS_FRACTION` | GRACE | Fake-neighbour padding fraction forwarded to TensorPotential | Library default (typically `0.05`) |
 | `GRACE_PAD_ATOMS_NUMBER` | GRACE | Number of fake atoms for padding | Library default (typically `10`) |
 | `GRACE_MAX_RECOMPILATION` | GRACE | Max recompilations triggered by padding reduction | Library default (typically `2`) |
