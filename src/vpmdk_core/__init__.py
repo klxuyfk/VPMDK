@@ -195,7 +195,9 @@ def _build_nequip_family_calculator(
                 return NequIPCalculator.from_deployed_model(model_path, device=device)
             return NequIPCalculator.from_deployed_model(model_path)
         except Exception:
-            pass
+            ext = os.path.splitext(model_path)[1].lower()
+            if ext not in {".pt", ".pth"}:
+                raise
 
     if hasattr(NequIPCalculator, "from_compiled_model"):
         if device:

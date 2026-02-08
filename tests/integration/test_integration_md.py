@@ -91,7 +91,7 @@ def test_md_mace_required(tmp_path: Path, data_dir: Path) -> None:
     _require_cuda()
     model_path = os.environ.get("VPMDK_MACE_MODEL")
     if not model_path:
-        pytest.fail("Set VPMDK_MACE_MODEL to a MACE .model checkpoint.")
+        pytest.skip("Set VPMDK_MACE_MODEL to run MACE integration.")
     if not Path(model_path).exists():
         pytest.fail(f"MACE model not found: {model_path}")
     bcar = f"NNP=MACE\nMODEL={model_path}\nDEVICE=cuda\n"
