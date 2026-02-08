@@ -190,9 +190,12 @@ def _build_nequip_family_calculator(
 
     device = bcar_tags.get("DEVICE")
     if hasattr(NequIPCalculator, "from_deployed_model"):
-        if device:
-            return NequIPCalculator.from_deployed_model(model_path, device=device)
-        return NequIPCalculator.from_deployed_model(model_path)
+        try:
+            if device:
+                return NequIPCalculator.from_deployed_model(model_path, device=device)
+            return NequIPCalculator.from_deployed_model(model_path)
+        except Exception:
+            pass
 
     if hasattr(NequIPCalculator, "from_compiled_model"):
         if device:

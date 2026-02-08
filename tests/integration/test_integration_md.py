@@ -59,12 +59,15 @@ def _write_inputs(tmp_path: Path, data_dir: Path, bcar_text: str) -> None:
 
 def _run_vpmdk(calc_dir: Path) -> None:
     argv = ["vpmdk.py", "--dir", str(calc_dir)]
-    original = sys.argv[:]
+    original_argv = sys.argv[:]
+    original_cwd = Path.cwd()
     sys.argv[:] = argv
     try:
+        os.chdir(calc_dir)
         vpmdk.main()
     finally:
-        sys.argv[:] = original
+        sys.argv[:] = original_argv
+        os.chdir(original_cwd)
 
 
 def _assert_outputs(calc_dir: Path) -> None:

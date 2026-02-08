@@ -24,9 +24,7 @@ def test_nequip_uses_compiled_model_fallback(tmp_path: Path, monkeypatch: pytest
         SimpleNamespace(from_compiled_model=from_compiled_model),
     )
 
-    calc = vpmdk._build_nequip_calculator(
-        {"MODEL": str(model_path), "DEVICE": "cuda"}, require_allegro=False
-    )
+    calc = vpmdk._build_nequip_calculator({"MODEL": str(model_path), "DEVICE": "cuda"})
 
     assert calc == "nequip-compiled"
     assert seen == {"path": str(model_path), "device": "cuda"}
