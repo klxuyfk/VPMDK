@@ -30,9 +30,17 @@ except Exception:  # pragma: no cover - optional dependency
 
 LegacyM3GNet = None
 LegacyM3GNetPotential = None
+MatGLLoadModel = None
 
 try:
     from matgl.ext.ase import M3GNetCalculator  # type: ignore
+
+    try:
+        import matgl
+
+        MatGLLoadModel = getattr(matgl, "load_model", None)
+    except Exception:  # pragma: no cover - optional dependency
+        MatGLLoadModel = None
 
     _USING_LEGACY_M3GNET = False
 except Exception:  # pragma: no cover - optional dependency
@@ -181,9 +189,32 @@ def _build_nequip_family_calculator(
         raise FileNotFoundError(f"{model_name} model not found: {model_path}")
 
     device = bcar_tags.get("DEVICE")
-    if device:
-        return NequIPCalculator.from_deployed_model(model_path, device=device)
-    return NequIPCalculator.from_deployed_model(model_path)
+    if hasattr(NequIPCalculator, "from_deployed_model"):
+        try:
+            if device:
+                return NequIPCalculator.from_deployed_model(model_path, device=device)
+            return NequIPCalculator.from_deployed_model(model_path)
+        except Exception as exc:
+            ext = os.path.splitext(model_path)[1].lower()
+            if ext not in {".pt", ".pth"}:
+                raise
+            if not hasattr(NequIPCalculator, "from_compiled_model"):
+                raise
+            try:
+                if device:
+                    return NequIPCalculator.from_compiled_model(model_path, device=device)
+                return NequIPCalculator.from_compiled_model(model_path)
+            except Exception as compiled_exc:
+                raise compiled_exc from exc
+
+    if hasattr(NequIPCalculator, "from_compiled_model"):
+        if device:
+            return NequIPCalculator.from_compiled_model(model_path, device=device)
+        return NequIPCalculator.from_compiled_model(model_path)
+
+    raise RuntimeError(
+        f"{model_name} calculator does not expose from_deployed_model or from_compiled_model."
+    )
 
 
 def _build_nequip_calculator(bcar_tags: Dict[str, str], *, structure=None):
@@ -266,6 +297,12 @@ def _build_m3gnet_calculator(bcar_tags: Dict[str, str]):
     if not _USING_LEGACY_M3GNET:
         kwargs = {"device": device} if device is not None else {}
         if model_path and os.path.exists(model_path):
+            if MatGLLoadModel is not None:
+                try:
+                    potential = MatGLLoadModel(model_path)
+                    return M3GNetCalculator(potential, **kwargs)
+                except Exception:
+                    pass
             try:
                 return M3GNetCalculator(model_path, **kwargs)
             except TypeError:
@@ -1223,6 +1260,10 @@ def _build_deepmd_calculator(bcar_tags: Dict[str, str], structure=None):
     kwargs: Dict[str, Any] = {}
     if type_map:
         kwargs["type_map"] = type_map
+
+    head_value = bcar_tags.get("DEEPMD_HEAD")
+    if head_value:
+        kwargs["head"] = head_value
 
     return DeePMDCalculator(model=model_path, **kwargs)
 
