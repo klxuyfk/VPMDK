@@ -11,7 +11,8 @@ Key issues addressed:
 
 > ✅ The full sequence below was executed in this environment and validated.
 
-Verified with `/tmp/fairchem_v1_env4` during this update.
+Verified with `/tmp/fairchem_v1_env4` during this update. This is a venv-based
+recipe; conda environments can follow the same dependency constraints.
 
 ---
 

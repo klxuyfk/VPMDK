@@ -107,6 +107,7 @@ DEVICE=cuda           # Optional device override when the backend supports it
 | `WRITE_LAMMPS_TRAJ` | Write a LAMMPS trajectory during MD (`1` to enable) | `0` |
 | `LAMMPS_TRAJ_INTERVAL` | MD steps between trajectory frames (only when `WRITE_LAMMPS_TRAJ=1`) | `1` |
 | `DEEPMD_TYPE_MAP` | Comma/space-separated species list mapped to the DeePMD graph | Inferred from `POSCAR` order |
+| `DEEPMD_HEAD` | Select a DeePMD model head by name (when supported by the checkpoint) | Unset |
 
 **Backend-specific knobs.** Only relevant when the corresponding backend is chosen.
 
@@ -172,11 +173,11 @@ selected potential or thermostat:
 |---------|-------------------|-------|
 | CHGNet potential | `chgnet` (uses PyTorch) | Bundled with a default model; specify `MODEL` to use another |
 | SevenNet potential | `sevennet` (uses PyTorch) | Bundled with a default model; specify `MODEL` to use another |
-| NequIP potential | `nequip` (uses PyTorch) | Requires `MODEL` pointing to a deployed model file |
-| Allegro potential | `allegro` (uses PyTorch and depends on `nequip`) | Requires `MODEL` pointing to a deployed model file |
-| MatGL (M3GNet) potential | `matgl` (uses JAX) | Bundled with a default model; specify `MODEL` to use another |
+| NequIP potential | `nequip` (uses PyTorch) | `MODEL` should point to a deployed model file; compiled/TorchScript models are also accepted when supported by the NequIP version (`from_compiled_model`) |
+| Allegro potential | `allegro` (uses PyTorch and depends on `nequip`) | `MODEL` should point to a deployed model file; compiled/TorchScript models are also accepted when supported by the NequIP version (`from_compiled_model`) |
+| MatGL (M3GNet) potential | `matgl` (uses PyTorch + DGL or JAX, depending on install) | Bundled with a default model; specify `MODEL` to use another. MatGL 1.x commonly expects a model directory passed through `matgl.load_model`. |
 | MACE potential | `mace-torch` (PyTorch) | Set `MODEL` to a trained `.model` file |
-| DeePMD-kit potential | `deepmd-kit` | Set `MODEL` to the frozen graph (`.pb`) and optionally `DEEPMD_TYPE_MAP` |
+| DeePMD-kit potential | `deepmd-kit` | Set `MODEL` to the frozen graph (`.pb`) or a PyTorch checkpoint (`.pt`), depending on the DeePMD backend, and optionally `DEEPMD_TYPE_MAP`/`DEEPMD_HEAD` |
 | Matlantis potential | `pfp-api-client` (plus `matlantis-features`) | Uses the Matlantis estimator service; configure with `MATLANTIS_*` BCAR tags |
 | ORB potential | `orb-models` (PyTorch) | Downloads pretrained weights unless `MODEL` points to a checkpoint |
 | MatterSim potential | `mattersim` (PyTorch) | Set `MODEL` to the trained parameters |
@@ -201,9 +202,10 @@ defaults automatically.
 This script does not directly manage GPU settings. Each potential selects a
 device on its own. CHGNet, MatGL/M3GNet, MACE, ORB, and FAIRChem honour
 `DEVICE` in `BCAR` (e.g. `DEVICE=cpu` to force a CPU run). With CUDA devices you
-can choose which GPU to use with `CUDA_VISIBLE_DEVICES`. When running MatGL you
-may also set `XLA_PYTHON_CLIENT_PREALLOCATE=false`. A GPU with at least 8 GB of
-memory is recommended, though running on a CPU also works.
+can choose which GPU to use with `CUDA_VISIBLE_DEVICES`. MatGL GPU tuning is
+backend-dependent (PyTorch+DGL vs JAX), so environment variables differ between
+installations. A GPU with at least 8 GB of memory is recommended, though running
+on a CPU also works.
 
 ### Example directory layout
 
