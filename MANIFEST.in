@@ -2,3 +2,7 @@ include LICENSE
 include README.md
 include pyproject.toml
 recursive-include src *.py
+prune tests
+prune notes
+prune paper
+exclude AGENTS.md
