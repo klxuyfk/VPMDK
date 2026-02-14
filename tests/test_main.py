@@ -144,6 +144,30 @@ def test_main_transfers_magmom_to_atoms(tmp_path: Path, prepare_inputs, arrays_c
     assert arrays_close(captured["moments"], [1.25, -0.75])
 
 
+def test_fairchem_v1_predictor_tag_uses_predictor(tmp_path: Path):
+    model_path = tmp_path / "fairchem-model.pt"
+    model_path.write_text("dummy")
+
+    class DummyPredictor:
+        def __init__(self, *args, **kwargs):
+            self.kwargs = kwargs
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "_get_fairchem_v1_predictor_cls", lambda: DummyPredictor)
+    try:
+        calc = vpmdk.get_calculator(
+            {
+                "NNP": "FAIRCHEM_V1",
+                "MODEL": str(model_path),
+                "FAIRCHEM_V1_PREDICTOR": "1",
+            }
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert isinstance(calc, vpmdk._FairChemV1PredictorCalculator)
+
+
 def test_fairchem_calculator_uses_bcar_overrides(tmp_path: Path, prepare_inputs):
     model_name = "esen-md-direct-all-omol"
     prepare_inputs(

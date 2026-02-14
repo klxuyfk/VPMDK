@@ -1,10 +1,18 @@
 # VPMDK
 
-VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is a lightweight engine that **reads and writes VASP-style inputs/outputs** and performs **molecular dynamics and structure relaxations** using **machine-learning interatomic potentials**. Keep familiar VASP workflows and artifacts while computations run through ASE-compatible ML calculators. A simple driver script, `vpmdk.py`, is provided.
+VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is a lightweight engine that **reads and writes VASP-style inputs/outputs** and performs **molecular dynamics and structure relaxations** using **machine-learning interatomic potentials**. Keep familiar VASP workflows and artifacts while computations run through ASE-compatible ML calculators. The `vpmdk` command (and legacy `vpmdk.py` wrapper) are provided.
 
 **Supported calculators (via ASE):** **CHGNet**, **SevenNet**, **MatterSim**, **MACE**, **Matlantis**, **NequIP**, **Allegro**, **ORB**, **MatGL** (via the M3GNet model), **FAIRChem** (including eSEN checkpoints), **GRACE** (TensorPotential foundation models or checkpoints), and **DeePMD-kit**. Availability depends on the corresponding Python packages being installed.
 
 *Not affiliated with, endorsed by, or a replacement for VASP; “VASP” is a trademark of its respective owner. VPMDK only mimics VASP I/O conventions for compatibility.*
+
+## Installation
+
+Install the package from PyPI (or from a checkout):
+
+```bash
+pip install vpmdk
+```
 
 ## Usage
 
@@ -16,10 +24,16 @@ VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is 
 3. Run:
 
    ```bash
-   python vpmdk.py [--dir PATH_TO_INPUT]
+   vpmdk [--dir PATH_TO_INPUT]
    ```
 
 If `--dir` is omitted, the current directory (`.`) is used.
+
+When running directly from a repository checkout, the legacy wrapper still works:
+
+```bash
+python vpmdk.py [--dir PATH_TO_INPUT]
+```
 
 ## Input files
 
@@ -93,6 +107,7 @@ DEVICE=cuda           # Optional device override when the backend supports it
 | `WRITE_LAMMPS_TRAJ` | Write a LAMMPS trajectory during MD (`1` to enable) | `0` |
 | `LAMMPS_TRAJ_INTERVAL` | MD steps between trajectory frames (only when `WRITE_LAMMPS_TRAJ=1`) | `1` |
 | `DEEPMD_TYPE_MAP` | Comma/space-separated species list mapped to the DeePMD graph | Inferred from `POSCAR` order |
+| `DEEPMD_HEAD` | Select a DeePMD model head by name (when supported by the checkpoint) | Unset |
 
 **Backend-specific knobs.** Only relevant when the corresponding backend is chosen.
 
@@ -107,6 +122,7 @@ DEVICE=cuda           # Optional device override when the backend supports it
 | `FAIRCHEM_TASK` | FAIRChem v2 (`FAIRCHEM`/`FAIRCHEM_V2`) | Task head to use (e.g. `omol`) | Auto-detected when possible |
 | `FAIRCHEM_INFERENCE_SETTINGS` | FAIRChem v2 (`FAIRCHEM`/`FAIRCHEM_V2`) | Inference profile forwarded to FAIRChem | `default` |
 | `FAIRCHEM_CONFIG` | FAIRChem v1 (`FAIRCHEM_V1`) | Path to the YAML config used with the checkpoint | Required for most checkpoints |
+| `FAIRCHEM_V1_PREDICTOR` | FAIRChem v1 (`FAIRCHEM_V1`) | Use the predictor directly instead of the OCPCalculator (`1` to enable) | `0` |
 | `GRACE_PAD_NEIGHBORS_FRACTION` | GRACE | Fake-neighbour padding fraction forwarded to TensorPotential | Library default (typically `0.05`) |
 | `GRACE_PAD_ATOMS_NUMBER` | GRACE | Number of fake atoms for padding | Library default (typically `10`) |
 | `GRACE_MAX_RECOMPILATION` | GRACE | Max recompilations triggered by padding reduction | Library default (typically `2`) |
@@ -157,11 +173,11 @@ selected potential or thermostat:
 |---------|-------------------|-------|
 | CHGNet potential | `chgnet` (uses PyTorch) | Bundled with a default model; specify `MODEL` to use another |
 | SevenNet potential | `sevennet` (uses PyTorch) | Bundled with a default model; specify `MODEL` to use another |
-| NequIP potential | `nequip` (uses PyTorch) | Requires `MODEL` pointing to a deployed model file |
-| Allegro potential | `allegro` (uses PyTorch and depends on `nequip`) | Requires `MODEL` pointing to a deployed model file |
-| MatGL (M3GNet) potential | `matgl` (uses JAX) | Bundled with a default model; specify `MODEL` to use another |
+| NequIP potential | `nequip` (uses PyTorch) | `MODEL` should point to a deployed model file; compiled/TorchScript models are also accepted when supported by the NequIP version (`from_compiled_model`) |
+| Allegro potential | `allegro` (uses PyTorch and depends on `nequip`) | `MODEL` should point to a deployed model file; compiled/TorchScript models are also accepted when supported by the NequIP version (`from_compiled_model`) |
+| MatGL (M3GNet) potential | `matgl` (uses PyTorch + DGL or JAX, depending on install) | Bundled with a default model; specify `MODEL` to use another. MatGL 1.x commonly expects a model directory passed through `matgl.load_model`. |
 | MACE potential | `mace-torch` (PyTorch) | Set `MODEL` to a trained `.model` file |
-| DeePMD-kit potential | `deepmd-kit` | Set `MODEL` to the frozen graph (`.pb`) and optionally `DEEPMD_TYPE_MAP` |
+| DeePMD-kit potential | `deepmd-kit` | Set `MODEL` to the frozen graph (`.pb`) or a PyTorch checkpoint (`.pt`), depending on the DeePMD backend, and optionally `DEEPMD_TYPE_MAP`/`DEEPMD_HEAD` |
 | Matlantis potential | `pfp-api-client` (plus `matlantis-features`) | Uses the Matlantis estimator service; configure with `MATLANTIS_*` BCAR tags |
 | ORB potential | `orb-models` (PyTorch) | Downloads pretrained weights unless `MODEL` points to a checkpoint |
 | MatterSim potential | `mattersim` (PyTorch) | Set `MODEL` to the trained parameters |
@@ -186,9 +202,10 @@ defaults automatically.
 This script does not directly manage GPU settings. Each potential selects a
 device on its own. CHGNet, MatGL/M3GNet, MACE, ORB, and FAIRChem honour
 `DEVICE` in `BCAR` (e.g. `DEVICE=cpu` to force a CPU run). With CUDA devices you
-can choose which GPU to use with `CUDA_VISIBLE_DEVICES`. When running MatGL you
-may also set `XLA_PYTHON_CLIENT_PREALLOCATE=false`. A GPU with at least 8 GB of
-memory is recommended, though running on a CPU also works.
+can choose which GPU to use with `CUDA_VISIBLE_DEVICES`. MatGL GPU tuning is
+backend-dependent (PyTorch+DGL vs JAX), so environment variables differ between
+installations. A GPU with at least 8 GB of memory is recommended, though running
+on a CPU also works.
 
 ### Example directory layout
 
@@ -203,7 +220,7 @@ calc_dir/
 Example command:
 
 ```bash
-python vpmdk.py --dir calc_dir
+vpmdk --dir calc_dir
 ```
 
 ## License
