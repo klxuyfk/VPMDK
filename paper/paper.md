@@ -12,7 +12,7 @@ authors:
     equal-contrib: true
     affiliation: 1
 affiliations:
- - name: Corteo INC, Japan
+ - name: Corteo Co., Ltd., Japan
    index: 1
 date: 17 October 2025
 bibliography: paper.bib
