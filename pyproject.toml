@@ -7,12 +7,11 @@ name = "vpmdk"
 version = "0.1.0"
 description = "Run machine-learning potentials using VASP style inputs."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "BSD-3-Clause"
 keywords = ["vasp", "molecular-dynamics", "machine-learning", "ase"]
 classifiers = [
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
