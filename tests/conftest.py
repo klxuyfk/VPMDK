@@ -278,11 +278,11 @@ def prepare_inputs(data_dir: Path):
         bcar_lines = (data_dir / "BCAR").read_text().splitlines()
         replaced = False
         for idx, line in enumerate(bcar_lines):
-            if line.startswith("NNP="):
-                bcar_lines[idx] = f"NNP={potential.upper()}"
+            if line.startswith("MLP=") or line.startswith("NNP="):
+                bcar_lines[idx] = f"MLP={potential.upper()}"
                 replaced = True
         if not replaced:
-            bcar_lines.append(f"NNP={potential.upper()}")
+            bcar_lines.append(f"MLP={potential.upper()}")
         if extra_bcar:
             for key, value in extra_bcar.items():
                 bcar_lines.append(f"{key}={value}")

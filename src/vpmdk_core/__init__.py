@@ -381,7 +381,28 @@ def parse_key_value_file(path: str) -> Dict[str, str]:
                 continue
             k, v = line.split('=', 1)
             data[k.strip().upper()] = v.strip()
+    # Backward compatibility: interpret legacy NNP tag as MLP when MLP is absent.
+    if "MLP" not in data and "NNP" in data:
+        data["MLP"] = data["NNP"]
     return data
+
+
+def _resolve_mlp_tag(bcar_tags: Dict[str, str], *, default: str = "CHGNET") -> str:
+    """Return selected BCAR potential tag using ``MLP`` with legacy ``NNP`` fallback."""
+
+    if "MLP" in bcar_tags:
+        mlp_value = str(bcar_tags.get("MLP", "")).strip()
+        if not mlp_value:
+            raise ValueError("BCAR tag MLP is present but empty.")
+        return mlp_value.upper()
+
+    if "NNP" in bcar_tags:
+        nnp_value = str(bcar_tags.get("NNP", "")).strip()
+        if not nnp_value:
+            raise ValueError("BCAR tag NNP is present but empty.")
+        return nnp_value.upper()
+
+    return default.strip().upper()
 
 
 def _flatten(values: Iterable[object]) -> List[float]:
@@ -2067,13 +2088,13 @@ def _build_calculator_from_init_factory(calculator, bcar_tags: Dict[str, str]):
     closure = getattr(init, "__closure__", None)
     if not closure:
         return None
-    nnp = bcar_tags.get("NNP", "")
+    mlp = _resolve_mlp_tag(bcar_tags, default="")
     for cell in closure:
         factory = cell.cell_contents
         if not callable(factory):
             continue
         try:
-            candidate = factory(nnp)
+            candidate = factory(mlp)
         except TypeError:
             try:
                 candidate = factory()
@@ -2101,15 +2122,15 @@ def _attach_fallback_calculator(calculator, bcar_tags: Dict[str, str]):
 def get_calculator(bcar_tags: Dict[str, str], *, structure=None):
     """Return ASE calculator based on BCAR tags."""
 
-    nnp = bcar_tags.get("NNP", "CHGNET").upper()
-    if nnp in _SIMPLE_CALCULATORS:
-        calculator_attr, message = _SIMPLE_CALCULATORS[nnp]
+    mlp = _resolve_mlp_tag(bcar_tags)
+    if mlp in _SIMPLE_CALCULATORS:
+        calculator_attr, message = _SIMPLE_CALCULATORS[mlp]
         calculator_cls = globals().get(calculator_attr)
         return _build_simple_model_calculator(calculator_cls, bcar_tags, message)
 
-    builder_entry = _CALCULATOR_BUILDERS.get(nnp)
+    builder_entry = _CALCULATOR_BUILDERS.get(mlp)
     if builder_entry is None:
-        raise ValueError(f"Unsupported NNP type: {nnp}")
+        raise ValueError(f"Unsupported MLP type: {mlp}")
     if callable(builder_entry):
         builder = builder_entry
         builder_name = getattr(builder_entry, "__name__", "")
@@ -3364,7 +3385,7 @@ def run_neb_images(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run NNP with VASP style inputs")
+    parser = argparse.ArgumentParser(description="Run MLP with VASP style inputs")
     parser.add_argument("--dir", default=".", help="Input directory")
     args = parser.parse_args()
     workdir = args.dir
@@ -3376,7 +3397,7 @@ def main():
 
     for fname in ["KPOINTS", "WAVECAR", "CHGCAR"]:
         if os.path.exists(os.path.join(workdir, fname)):
-            print(f"Note: {fname} detected but not used in NNP calculations.")
+            print(f"Note: {fname} detected but not used in MLP calculations.")
 
     incar = _load_incar(incar_path)
     bcar = parse_key_value_file(bcar_path) if os.path.exists(bcar_path) else {}
