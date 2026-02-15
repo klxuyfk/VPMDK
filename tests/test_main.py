@@ -744,6 +744,59 @@ def test_main_neb_runner_writes_parent_aggregate_outputs(tmp_path: Path, prepare
     assert len(root.findall("calculation")) == 3
 
 
+def test_main_neb_runner_parent_aggregate_supports_relative_workdir(
+    tmp_path: Path, prepare_inputs
+):
+    run_dir = tmp_path / "runs" / "neb1"
+    run_dir.mkdir(parents=True)
+    prepare_inputs(
+        run_dir,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "2", "ISIF": "2", "IMAGES": "1"},
+    )
+
+    poscar_text = (run_dir / "POSCAR").read_text()
+    for image in ("00", "01", "02"):
+        image_dir = run_dir / image
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(poscar_text)
+
+    class StressDummyCalculator(DummyCalculator):
+        def calculate(self, atoms=None, properties=("energy",), system_changes=()):
+            super().calculate(atoms=atoms, properties=properties, system_changes=system_changes)
+            self.results["stress"] = np.zeros(6, dtype=float)
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+            self._callbacks = []
+
+        def attach(self, callback, *args, **kwargs):
+            self._callbacks.append(callback)
+
+        def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            target.positions += 0.01
+            for callback in self._callbacks:
+                callback()
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: StressDummyCalculator())
+    monkeypatch.setattr(vpmdk, "BFGS", DummyBFGS)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", "runs/neb1"])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert (run_dir / "OUTCAR").exists()
+    assert (run_dir / "OSZICAR").exists()
+    assert (run_dir / "vasprun.xml").exists()
+    root = ET.parse(run_dir / "vasprun.xml").getroot()
+    assert len(root.findall("calculation")) == 3
+
+
 def test_main_passes_md_parameters_to_run_md(tmp_path: Path, prepare_inputs):
     prepare_inputs(
         tmp_path,

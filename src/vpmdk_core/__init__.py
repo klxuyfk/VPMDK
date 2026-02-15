@@ -3245,7 +3245,8 @@ def run_neb_images(
 ) -> None:
     """Run independent per-image calculations for a NEB-like directory layout."""
 
-    image_dirs = _discover_neb_image_directories(workdir)
+    workdir_abs = os.path.abspath(workdir)
+    image_dirs = _discover_neb_image_directories(workdir_abs)
     if len(image_dirs) < 2:
         raise RuntimeError(
             "NEB mode requires numbered image directories (for example 00, 01, 02)."
@@ -3257,7 +3258,7 @@ def run_neb_images(
         if expected_dirs != len(image_dirs):
             print(
                 f"Warning: IMAGES={images_hint} implies {expected_dirs} image directories, "
-                f"but found {len(image_dirs)} under {workdir}. Proceeding with discovered directories."
+                f"but found {len(image_dirs)} under {workdir_abs}. Proceeding with discovered directories."
             )
 
     total_images = len(image_dirs)
@@ -3322,10 +3323,10 @@ def run_neb_images(
                     neb_next_positions=neb_next_positions,
                     oszicar_pseudo_scf=oszicar_pseudo_scf,
                 )
-    with _working_directory(workdir):
+    with _working_directory(workdir_abs):
         image_results = _collect_neb_image_results(image_dirs, potcar_path=potcar_path)
         _write_neb_parent_aggregate_outputs(
-            workdir=workdir,
+            workdir=workdir_abs,
             settings=settings,
             image_results=image_results,
             oszicar_pseudo_scf=oszicar_pseudo_scf,
