@@ -20,29 +20,33 @@ bibliography: paper.bib
 
 # Summary
 
-VPMDK (the *Vasp‑Protocol Machine‑learning Dynamics Kit*) is a lightweight command‑line driver that preserves the familiar Vienna *Ab initio* Simulation Package (VASP) workflow while executing atomistic simulations with modern machine‑learning interatomic potentials (MLPs). The tool reads VASP‑style inputs (`POSCAR`, `INCAR`, optional `POTCAR` and `BCAR`) and emits VASP‑style outputs (`CONTCAR`, `OUTCAR`, `XDATCAR`), but routes energy/force/stress evaluation to ASE‑compatible calculators. The backend roster now spans CHGNet, M3GNet (via MatGL), MACE, MatterSim, Matlantis, NequIP/Allegro, SevenNet, DeePMD‑kit, ORB, FAIRChem, and GRACE [@Larsen2017ASE; @Deng2023CHGNet; @Chen2022M3GNet; @Batatia2022MACE; @Mattersim2024; @PFPMatl2024; @Batzner2022NequIP; @Musaelian2023Allegro; @Oba2024SevenNet; @Zhang2018DeePMD; @Wang2018DeePMD; @OrbModels2024; @Hegde2024FAIRChem; @Choudhary2024GRACE]. By acting as a thin shim rather than a full re‑implementation of VASP, VPMDK makes it possible to swap DFT with an MLP surrogate in existing VASP‑centric data and workflow ecosystems without rewriting pipelines or abandoning well‑understood artefacts.
+VPMDK (the *Vasp-Protocol Machine-learning Dynamics Kit*) is a lightweight command-line driver that preserves the familiar Vienna *Ab initio* Simulation Package (VASP) workflow while running atomistic simulations with machine-learning interatomic potentials (MLPs). It reads VASP-style inputs (`POSCAR`, `INCAR`, optional `POTCAR` and `BCAR`) and writes VASP-style outputs (`CONTCAR`, `OUTCAR`, `XDATCAR`), while delegating energy/force/stress evaluation to ASE-compatible calculators [@Larsen2017ASE]. Supported backends include CHGNet, M3GNet (via MatGL), MACE, MatterSim, Matlantis, NequIP/Allegro, SevenNet, DeePMD-kit, ORB, FAIRChem, and GRACE [@Deng2023CHGNet; @Chen2022M3GNet; @Batatia2022MACE; @Mattersim2024; @PFPMatl2024; @Batzner2022NequIP; @Musaelian2023Allegro; @Oba2024SevenNet; @Zhang2018DeePMD; @Wang2018DeePMD; @OrbModels2024; @Hegde2024FAIRChem; @Choudhary2024GRACE].
 
 # Statement of need
 
-High‑throughput screening, structure relaxation, and molecular dynamics in crystalline materials are frequently orchestrated around VASP’s I/O conventions. Meanwhile, MLPs have matured into practical surrogates trained on large DFT corpora, offering orders‑of‑magnitude speedups for many tasks while retaining useful accuracy across broad chemistries [@Deng2023CHGNet; @Chen2022M3GNet; @Batatia2022MACE; @Mattersim2024; @Oba2024SevenNet; @Hegde2024FAIRChem; @Choudhary2024GRACE]. In practice, however, deploying MLPs often requires ASE‑based Python scripts and data layouts that diverge from VASP‑style workflows, creating friction for users who rely on legacy post‑processing and workflow managers.
+Many high-throughput relaxation and molecular-dynamics pipelines in materials science are built around VASP I/O conventions. At the same time, modern MLPs provide practical speedups for many workloads [@Deng2023CHGNet; @Chen2022M3GNet; @Batatia2022MACE; @Mattersim2024; @Oba2024SevenNet; @Hegde2024FAIRChem; @Choudhary2024GRACE]. In practice, adopting these models often means rewriting workflows around custom Python scripts.
 
-VPMDK addresses this gap with a minimal driver that speaks the VASP dialect on disk yet computes with an MLP under the hood. Researchers can therefore (i) reuse existing input repositories and provenance policies, (ii) keep downstream analysis that expects `OUTCAR`/`XDATCAR`, and (iii) rapidly switch among state‑of‑the‑art neural potentials for pre‑screening, initial relaxations, finite‑temperature MD, or dataset generation—often as a drop‑in substitute for expensive DFT calls.
+VPMDK targets this migration cost. It keeps VASP-style files and control flow while enabling users to switch among multiple MLP backends for screening, pre-relaxation, and finite-temperature MD.
+
+# State of the field
+
+Related approaches include (i) custom ASE scripts, (ii) direct use of model-specific APIs without ASE wrappers, and (iii) engine-specific integrations such as LAMMPS with MLIAP-style interfaces. These approaches are useful, but they usually require workflow-specific glue code and often do not preserve VASP-style on-disk artifacts.
+
+VPMDK is designed around two comparison axes: compatibility with existing VASP-centric workflows and ease of backend switching as MLP methods evolve. This allows reuse of existing scripts and post-processing pipelines that expect VASP-like files, including workflows for structure optimization and transition-state studies. The contribution is therefore an interoperability layer, not a new potential model or a full workflow platform. Electronic-structure features (k-points, wavefunctions, charge densities) are out of scope.
 
 ![Overview of `VPMDK`](fig1.png)
 
 # Design and implementation
 
-**I/O compatibility.** Structures are loaded from `POSCAR` via *pymatgen* and converted to ASE `Atoms`. If present, `POTCAR` is used only to reconcile species ordering; wavefunctions or charge densities (`WAVECAR`, `CHGCAR`) are detected but intentionally ignored. Initial magnetic moments are parsed from `INCAR`’s `MAGMOM` (including VASP shorthand such as `2*1.0`) and propagated to ASE when counts match [@Larsen2017ASE; @Ong2013pymatgen].
+**I/O compatibility.** Structures are loaded from `POSCAR` via *pymatgen* and converted to ASE `Atoms` [@Larsen2017ASE; @Ong2013pymatgen]. `POTCAR` is used only for species ordering. `WAVECAR`/`CHGCAR` are detected and ignored. `MAGMOM` parsing (including shorthand like `2*1.0`) is propagated when counts match.
 
-**Configuration model.** Runtime behavior is driven primarily by a subset of VASP’s `INCAR` keys: `NSW` and `IBRION` choose single‑point (<0), MD (=0), or relaxation (>0). `TEBEG`/`TEEND` (K) and `POTIM` (fs) control MD, and `EDIFFG` follows VASP semantics: negative values set a force threshold (eV/Å) for relaxations, whereas positive values request convergence by total‑energy change between ionic steps. Crystal degrees of freedom are governed by `ISIF`; when cell updates are requested, relaxation wraps ASE’s filters (e.g., `UnitCellFilter`) and converts `PSTRESS` from kBar to eV/Å³. Unsupported tags are warned but safely ignored.
+**Configuration model.** A subset of `INCAR` keys controls runtime. `NSW` and `IBRION` select single-point, MD, or relaxation. `TEBEG`, `TEEND`, and `POTIM` control MD. `EDIFFG` follows VASP-like semantics (force criterion when negative, energy-change criterion when positive). `ISIF` and `PSTRESS` control cell updates during relaxation.
 
-**MLP backends.** The optional `BCAR` control file (simple `key=value`) selects the calculator and, when applicable, the weight source. CHGNet, MatGL/M3GNet, and SevenNet ship with default parameters; MACE, MatterSim, NequIP/Allegro, ORB, FAIRChem, GRACE, and DeePMD‑kit accept checkpoints supplied via `MODEL`. Matlantis uses the cloud estimator API (model version, priority, and calculation mode are set through BCAR). Backend‑specific conveniences—such as `DEVICE` hints, DeePMD species maps, or ORB precision/compilation flags—live alongside a generic `WRITE_ENERGY_CSV` switch for lightweight per‑step logs [@Oba2024SevenNet; @PFPMatl2024; @OrbModels2024; @Hegde2024FAIRChem; @Choudhary2024GRACE; @Zhang2018DeePMD; @Wang2018DeePMD].
+**Backends and runtime options.** `BCAR` (`key=value`) selects backend and optional model/checkpoint paths. VPMDK supports default-model and checkpoint-driven backends and includes practical options such as `DEVICE`, DeePMD species maps, ORB precision/compilation flags, and optional per-step energy logging [@Oba2024SevenNet; @PFPMatl2024; @OrbModels2024; @Hegde2024FAIRChem; @Choudhary2024GRACE; @Zhang2018DeePMD; @Wang2018DeePMD].
 
-**Dynamics and thermostats.** For MD (`IBRION=0`), VPMDK uses velocity‑Verlet integration and supports common thermostats via ASE: Andersen (`MDALGO=1`), Nose–Hoover chains (`2` and `4`), Langevin (`3`), and canonical sampling velocity rescaling (Bussi; `5`). Temperatures are optionally ramped linearly from `TEBEG` to `TEEND`. Trajectories are written to `XDATCAR` incrementally, while `OUTCAR` records stepwise energies and temperature.
+**MD and relaxation.** For `IBRION=0`, VPMDK uses velocity-Verlet with optional ASE thermostats (Andersen, Nose-Hoover chains, Langevin, and CSVR/Bussi). Relaxations use BFGS and support selected variable-cell modes through ASE filters.
 
-**Relaxation behavior.** Geometry optimizations use BFGS, printing to `OUTCAR` and writing `CONTCAR` on completion. If requested via `BCAR`, a per‑step `energy.csv` is emitted for quick inspection. Cell updates (e.g., `ISIF=3,4,6–8`) map to ASE’s filters, with temporary ionic freezing when VASP semantics require cell‑only steps.
-
-**Outputs and provenance.** VPMDK intentionally mirrors VASP artefacts—`CONTCAR` for the final structure, `OUTCAR` for a human‑readable log, and `XDATCAR` for MD trajectories—so that downstream tools expecting VASP I/O continue to work with MLP‑generated results. The tool does **not** attempt to emulate electronic‑structure features (k‑points, smearing, or charge densities); such files are recognized only to aid mixed DFT/MLP pipelines.
+**Outputs.** The tool writes `CONTCAR`, `OUTCAR`, and `XDATCAR` in VASP-like formats so existing downstream scripts can continue to operate.
 
 # Usage
 
@@ -54,12 +58,24 @@ vpmdk [--dir calc_dir]
 
 If `--dir` is omitted, the current directory (`.`) is used. `INCAR` chooses mode and control parameters; `BCAR` selects the potential and optional `MODEL`. Results appear as `CONTCAR`, `OUTCAR`, and, for MD, `XDATCAR`.
 
+# Research impact
+
+The author has applied VPMDK to USPEX 9.4.4 as a drop-in VASP interface and observed faster practical turnaround for crystal-structure optimization in internal use, without modifying USPEX source code. Partial applicability has also been tested for Henkelman-group scripts that rely on VASP-style artifacts.
+
+As of February 15, 2026, no external peer-reviewed publication citing VPMDK is available. A manuscript describing the USPEX-based application is in preparation. To the author's knowledge, the software is currently used in two research laboratories. These observations indicate interoperability value, while quantitative speed and accuracy depend on the selected backend, model, and target system.
+
 # Limitations and scope
 
-VPMDK is not affiliated with, endorsed by, or a drop‑in replacement for VASP; it only mimics VASP I/O for convenience. Only a subset of `INCAR` keys are honored, and electronic‑structure quantities (k‑point meshes, wavefunctions, charge densities) are out of scope. Accuracy and transferability are those of the chosen MLP and its training regime; users should verify applicability for their chemistry and conditions [@Deng2023CHGNet; @Chen2022M3GNet; @Batatia2022MACE; @Mattersim2024; @Oba2024SevenNet; @Hegde2024FAIRChem; @Choudhary2024GRACE].
+VPMDK is not affiliated with, endorsed by, or a replacement for VASP. It mimics selected VASP I/O conventions for workflow compatibility and supports only a subset of `INCAR` keys. Electronic-structure quantities (k-point meshes, wavefunctions, charge densities) are out of scope. Accuracy and transferability are determined by the chosen MLP and its training regime; users must validate applicability for each chemistry and condition [@Deng2023CHGNet; @Chen2022M3GNet; @Batatia2022MACE; @Mattersim2024; @Oba2024SevenNet; @Hegde2024FAIRChem; @Choudhary2024GRACE].
+
+# AI use disclosure
+
+Generative AI tools were used extensively during development. The initial prototype (POSCAR parsing, switching among a small number of MLP backends, structural relaxation, and `CONTCAR` output) was written by a human author. Subsequent additions, including `INCAR` parsing, MD functionality, support for additional backends, and substantial test expansion, were developed with AI-assisted code generation.
+
+All AI-assisted outputs were reviewed, corrected, and validated by the author, who takes full responsibility for the software and manuscript content.
 
 # Acknowledgements
 
-I thank the developers and maintainers of ASE and pymatgen for foundational infrastructure, and the authors of CHGNet, M3GNet/MatGL, MACE, and MatterSim for making high‑quality MLPs broadly available.
+I thank the developers and maintainers of ASE and pymatgen for foundational infrastructure, and the authors of CHGNet, M3GNet/MatGL, MACE, and MatterSim for making high-quality MLPs broadly available.
 
 # References
