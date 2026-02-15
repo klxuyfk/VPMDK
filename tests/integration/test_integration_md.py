@@ -79,6 +79,8 @@ def _assert_outputs(calc_dir: Path) -> None:
 
 @pytest.mark.integration
 def test_md_chgnet_required(tmp_path: Path, data_dir: Path) -> None:
+    if vpmdk.CHGNetCalculator is None:
+        pytest.skip("chgnet is not installed.")
     _require_cuda()
     bcar = "NNP=CHGNET\nDEVICE=cuda\n"
     _write_inputs(tmp_path, data_dir, bcar)

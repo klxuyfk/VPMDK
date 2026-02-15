@@ -43,6 +43,20 @@ def test_bcar_parsing_handles_case_whitespace_and_comments(tmp_path: Path):
 
 
 @pytest.mark.parametrize(
+    "tags, expected",
+    [
+        ({"WRITE_OSZICAR_PSEUDO_SCF": "1"}, True),
+        ({"WRITE_OSZICAR_PSEUDO_SCF": "on"}, True),
+        ({"WRITE_PSEUDO_SCF": "yes"}, True),
+        ({}, False),
+        ({"WRITE_OSZICAR_PSEUDO_SCF": "off"}, False),
+    ],
+)
+def test_should_write_oszicar_pseudo_scf(tags, expected):
+    assert vpmdk._should_write_oszicar_pseudo_scf(tags) is expected
+
+
+@pytest.mark.parametrize(
     "definition, expected",
     [
         ("2*1.5 0.25", [1.5, 1.5, 0.25]),
