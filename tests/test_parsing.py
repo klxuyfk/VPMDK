@@ -74,6 +74,22 @@ def test_get_calculator_accepts_legacy_nnp_tag(monkeypatch: pytest.MonkeyPatch):
     assert isinstance(calculator, DummyCHGNet)
 
 
+def test_get_calculator_rejects_explicit_empty_backend_tags(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class DummyCHGNet:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(vpmdk, "CHGNetCalculator", DummyCHGNet)
+
+    with pytest.raises(ValueError, match="MLP"):
+        vpmdk.get_calculator({"MLP": ""})
+
+    with pytest.raises(ValueError, match="NNP"):
+        vpmdk.get_calculator({"NNP": "  "})
+
+
 @pytest.mark.parametrize(
     "tags, expected",
     [
