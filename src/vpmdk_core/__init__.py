@@ -2655,13 +2655,16 @@ def _load_incar_settings(incar) -> IncarSettings:
     default_isif = 0 if ibrion == 0 else 2
     requested_isif = int(float(incar.get("ISIF", default_isif)))
     normalized_isif = _normalize_isif(requested_isif)
+    stress_isif = (
+        requested_isif if requested_isif in SUPPORTED_ISIF_VALUES else normalized_isif
+    )
 
     return IncarSettings(
         nsw=nsw,
         ibrion=ibrion,
         ediffg=ediffg,
         isif=normalized_isif,
-        stress_isif=requested_isif,
+        stress_isif=stress_isif,
         pstress=pstress,
         tebeg=tebeg,
         teend=teend,
@@ -3248,6 +3251,7 @@ def run_neb_images(
     """Run independent per-image calculations for a NEB-like directory layout."""
 
     workdir_abs = os.path.abspath(workdir)
+    potcar_path_abs = os.path.abspath(potcar_path) if potcar_path else None
     image_dirs = _discover_neb_image_directories(workdir_abs)
     if len(image_dirs) < 2:
         raise RuntimeError(
@@ -3267,7 +3271,7 @@ def run_neb_images(
     image_reference_positions: list[np.ndarray] = []
     for image_dir in image_dirs:
         structure_path = _resolve_neb_image_structure_path(image_dir)
-        structure = read_structure(structure_path, potcar_path)
+        structure = read_structure(structure_path, potcar_path_abs)
         image_atoms = AseAtomsAdaptor.get_atoms(structure)
         image_atoms.wrap()
         image_reference_positions.append(np.asarray(image_atoms.get_positions(), dtype=float))
@@ -3275,7 +3279,7 @@ def run_neb_images(
     for image_index, image_dir in enumerate(image_dirs, start=1):
         image_name = os.path.basename(image_dir)
         structure_path = _resolve_neb_image_structure_path(image_dir)
-        structure = read_structure(structure_path, potcar_path)
+        structure = read_structure(structure_path, potcar_path_abs)
         atoms = AseAtomsAdaptor.get_atoms(structure)
         atoms.wrap()
         _apply_initial_magnetization(atoms, incar)
@@ -3326,7 +3330,7 @@ def run_neb_images(
                     oszicar_pseudo_scf=oszicar_pseudo_scf,
                 )
     with _working_directory(workdir_abs):
-        image_results = _collect_neb_image_results(image_dirs, potcar_path=potcar_path)
+        image_results = _collect_neb_image_results(image_dirs, potcar_path=potcar_path_abs)
         _write_neb_parent_aggregate_outputs(
             workdir=workdir_abs,
             settings=settings,

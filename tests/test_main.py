@@ -413,10 +413,59 @@ def test_main_relaxation_respects_isif(
         monkeypatch.undo()
 
     assert seen["isif"] == expected
+    assert seen["stress_isif"] == isif
     if warning_fragment is None:
         assert not any("Warning: ISIF=" in message for message in messages)
     else:
         assert any(warning_fragment in message for message in messages)
+
+
+def test_main_relaxation_invalid_isif_normalizes_stress_mode(tmp_path: Path, prepare_inputs):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "2", "ISIF": "-1"},
+    )
+
+    seen: dict[str, object] = {}
+    messages: list[str] = []
+
+    def fake_run_relaxation(
+        atoms,
+        calculator,
+        steps,
+        fmax,
+        write_energy_csv=False,
+        isif=2,
+        pstress=None,
+        energy_tolerance=None,
+        ibrion=2,
+        stress_isif=None,
+        neb_mode=False,
+        oszicar_pseudo_scf=False,
+    ):
+        seen["isif"] = isif
+        seen["stress_isif"] = stress_isif
+        return 0.0
+
+    def fake_print(*args, **kwargs):
+        sep = kwargs.get("sep", " ")
+        end = kwargs.get("end", "\n")
+        messages.append(sep.join(str(a) for a in args) + end)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "run_relaxation", fake_run_relaxation)
+    monkeypatch.setattr("builtins.print", fake_print)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen.get("isif") == 2
+    assert seen.get("stress_isif") == 2
+    assert any("defaulting to ISIF=2 behavior" in message for message in messages)
 
 
 def test_main_relaxation_uses_energy_tolerance_for_positive_ediffg(
@@ -795,6 +844,68 @@ def test_main_neb_runner_parent_aggregate_supports_relative_workdir(
     assert (run_dir / "vasprun.xml").exists()
     root = ET.parse(run_dir / "vasprun.xml").getroot()
     assert len(root.findall("calculation")) == 3
+
+
+def test_main_neb_runner_passes_absolute_potcar_to_collect_results(
+    tmp_path: Path, prepare_inputs
+):
+    run_dir = tmp_path / "runs" / "neb2"
+    run_dir.mkdir(parents=True)
+    prepare_inputs(
+        run_dir,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "2", "ISIF": "2", "IMAGES": "1"},
+    )
+    (run_dir / "POTCAR").write_text("Si\n")
+
+    poscar_text = (run_dir / "POSCAR").read_text()
+    for image in ("00", "01", "02"):
+        image_dir = run_dir / image
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(poscar_text)
+
+    seen: dict[str, object] = {}
+
+    def fake_run_relaxation(
+        atoms,
+        calculator,
+        steps,
+        fmax,
+        write_energy_csv=False,
+        isif=2,
+        pstress=None,
+        energy_tolerance=None,
+        ibrion=2,
+        stress_isif=None,
+        neb_mode=False,
+        neb_prev_positions=None,
+        neb_next_positions=None,
+        oszicar_pseudo_scf=False,
+    ):
+        return 0.0
+
+    def fake_collect(image_dirs, *, potcar_path=None):
+        seen["cwd"] = Path.cwd()
+        seen["potcar_path"] = potcar_path
+        seen["image_dirs"] = list(image_dirs)
+        return []
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "run_relaxation", fake_run_relaxation)
+    monkeypatch.setattr(vpmdk, "_collect_neb_image_results", fake_collect)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", "runs/neb2"])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen.get("cwd") == run_dir
+    potcar_path = seen.get("potcar_path")
+    assert isinstance(potcar_path, str)
+    assert Path(potcar_path).is_absolute()
+    assert Path(potcar_path).exists()
 
 
 def test_main_passes_md_parameters_to_run_md(tmp_path: Path, prepare_inputs):
