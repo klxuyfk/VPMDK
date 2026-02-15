@@ -61,7 +61,9 @@ def test_single_point_energy_for_all_potentials(
     monkeypatch.setattr(vpmdk, "CHGNetCalculator", lambda *a, **k: factory("CHGNET"))
     monkeypatch.setattr(vpmdk, "SevenNetCalculator", lambda *a, **k: factory("SEVENNET"))
     monkeypatch.setattr(
-        vpmdk, "_build_m3gnet_calculator", lambda tags: factory(tags.get("NNP", "MATGL"))
+        vpmdk,
+        "_build_m3gnet_calculator",
+        lambda tags: factory(vpmdk._resolve_mlp_tag(tags, default="MATGL")),
     )
     monkeypatch.setattr(vpmdk, "MACECalculator", lambda *a, **k: factory("MACE"))
     monkeypatch.setattr(vpmdk, "MatterSimCalculator", lambda *a, **k: factory("MATTERSIM"))
@@ -79,8 +81,8 @@ def test_single_point_energy_for_all_potentials(
             return factory("FAIRCHEM")
 
     def fake_fairchem_builder(tags: dict[str, str]):
-        nnp_tag = tags.get("NNP", "").upper()
-        name = "FAIRCHEM_V2" if nnp_tag == "FAIRCHEM_V2" else "FAIRCHEM"
+        mlp_tag = vpmdk._resolve_mlp_tag(tags, default="")
+        name = "FAIRCHEM_V2" if mlp_tag == "FAIRCHEM_V2" else "FAIRCHEM"
         return factory(name)
 
     monkeypatch.setattr(vpmdk, "FAIRChemCalculator", _DummyFairChem)
@@ -159,7 +161,7 @@ def test_fairchem_v1_predictor_tag_uses_predictor(tmp_path: Path):
     try:
         calc = vpmdk.get_calculator(
             {
-                "NNP": "FAIRCHEM_V1",
+                "MLP": "FAIRCHEM_V1",
                 "MODEL": str(model_path),
                 "FAIRCHEM_V1_PREDICTOR": "1",
             }
@@ -240,7 +242,7 @@ def test_fairchem_v1_builder_uses_bcar_overrides():
 
     calculator = vpmdk.get_calculator(
         {
-            "NNP": "FAIRCHEM_V1",
+            "MLP": "FAIRCHEM_V1",
             "MODEL": "checkpoint.pt",
             "FAIRCHEM_CONFIG": "config.yml",
             "DEVICE": "cpu",

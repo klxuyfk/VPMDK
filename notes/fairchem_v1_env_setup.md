@@ -1,7 +1,7 @@
 # FAIRChem v1 environment recipe (fairchem-core==1.10.0 baseline)
 
 This document is a **tested** recipe to build a clean FAIRChem v1 environment
-that works with VPMDK’s `NNP=FAIRCHEM_V1` (OCPCalculator).
+that works with VPMDK’s `MLP=FAIRCHEM_V1` (OCPCalculator).
 
 Key issues addressed:
 - **PyG extras missing** (`torch-scatter`/`torch-sparse`) cause the
@@ -64,14 +64,14 @@ Expected output: `OCPCalculator` is present, and `sph_harm` imports without erro
 
 ## VPMDK usage notes (FAIRCHEM_V1)
 
-When running VPMDK with `NNP=FAIRCHEM_V1`, you **must** provide:
+When running VPMDK with `MLP=FAIRCHEM_V1`, you **must** provide:
 - `MODEL=/path/to/checkpoint.pt`
 - `FAIRCHEM_CONFIG=/path/to/config.yml` (required for most v1 checkpoints)
 
 Example BCAR snippet:
 
 ```text
-NNP=FAIRCHEM_V1
+MLP=FAIRCHEM_V1
 MODEL=/path/to/checkpoint.pt
 FAIRCHEM_CONFIG=/path/to/config.yml
 ```
