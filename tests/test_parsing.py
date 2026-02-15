@@ -92,6 +92,28 @@ Direct
     assert scaled[0][0] == pytest.approx(0.25, rel=1e-12, abs=1e-12)
 
 
+def test_collect_neb_image_results_raises_on_malformed_vasprun(tmp_path: Path):
+    image_dir = tmp_path / "00"
+    image_dir.mkdir()
+
+    poscar_text = """Si2
+1.0
+        3.8669745922         0.0000000000         0.0000000000
+        1.9334872961         3.3488982326         0.0000000000
+        1.9334872961         1.1162994109         3.1573715331
+   Si
+    2
+Direct
+     0.750000000         0.750000000         0.750000000
+     0.500000000         0.500000000         0.500000000
+"""
+    (image_dir / "POSCAR").write_text(poscar_text)
+    (image_dir / "vasprun.xml").write_text("<modeling><calculation></modeling>")
+
+    with pytest.raises(RuntimeError, match="Failed to parse NEB image vasprun.xml"):
+        vpmdk._collect_neb_image_results([str(image_dir)], potcar_path=None)
+
+
 @pytest.mark.parametrize(
     "definition, expected",
     [

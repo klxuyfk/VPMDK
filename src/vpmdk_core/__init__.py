@@ -2492,12 +2492,18 @@ def _collect_neb_image_results(
         if os.path.exists(vasprun_path):
             try:
                 potential_energy, parsed_forces, parsed_stress = _read_last_vasprun_step(vasprun_path)
-                if parsed_forces is not None and parsed_forces.shape == (len(atoms), 3):
-                    forces = parsed_forces
+                if parsed_forces is None or parsed_forces.shape != (len(atoms), 3):
+                    raise ValueError(
+                        f"Unexpected forces shape in {vasprun_path}: "
+                        f"{None if parsed_forces is None else parsed_forces.shape}"
+                    )
+                forces = parsed_forces
                 if parsed_stress is not None:
                     stress = parsed_stress
-            except Exception:
-                pass
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to parse NEB image vasprun.xml for {image_name}: {vasprun_path}"
+                ) from exc
 
         results.append(
             _NebImageResult(
