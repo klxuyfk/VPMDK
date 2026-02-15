@@ -89,7 +89,7 @@ The script reads a subset of common VASP `INCAR` settings. Other tags are ignore
 file looks like:
 
 ```
-NNP=CHGNET            # Potential backend
+MLP=CHGNET            # Potential backend
 MODEL=/path/to/model  # Optional path to weights (varies by backend)
 DEVICE=cuda           # Optional device override when the backend supports it
 ```
@@ -98,9 +98,11 @@ DEVICE=cuda           # Optional device override when the backend supports it
 
 | Tag | Meaning | Default |
 |-----|---------|---------|
-| `NNP` | Backend name (`CHGNET`, `MACE`, `MATGL`, `MATLANTIS`, `MATTERSIM`, `NEQUIP`, `ALLEGRO`, `ORB`, `FAIRCHEM`, `FAIRCHEM_V2`, `FAIRCHEM_V1`, `GRACE`, `DEEPMD`, `SEVENNET`) | `CHGNET` |
+| `MLP` | Backend name (`CHGNET`, `MACE`, `MATGL`, `MATLANTIS`, `MATTERSIM`, `NEQUIP`, `ALLEGRO`, `ORB`, `FAIRCHEM`, `FAIRCHEM_V2`, `FAIRCHEM_V1`, `GRACE`, `DEEPMD`, `SEVENNET`) | `CHGNET` |
 | `MODEL` | Path to a trained parameter set (ORB accepts checkpoints; FAIRChem also accepts model names such as `esen-sm-direct-all-oc25`) | Backend default or bundled weights |
 | `DEVICE` | Device hint for backends that support it (`cpu`, `cuda`, `cuda:N`) | Auto-detects GPU when available |
+
+`NNP` is accepted as a backward-compatible alias of `MLP`.
 
 **Output and workflow aids.**
 
@@ -138,15 +140,15 @@ DEVICE=cuda           # Optional device override when the backend supports it
 
 Matlantis calculations rely on the [Matlantis API](https://matlantis.com) via
 `pfp-api-client`; ensure your environment is configured with the required API
-credentials before running VPMDK with `NNP=MATLANTIS`.
+credentials before running VPMDK with `MLP=MATLANTIS`.
 
 ORB calculations rely on the [orb-models](https://github.com/orbital-materials/orb-models)
 package. When `MODEL` is omitted, VPMDK downloads the pretrained weights specified by
 `ORB_MODEL` using orb-models; set `MODEL=/path/to/checkpoint.ckpt` to run with local weights.
 
-FAIRChem 2.x and 1.x are incompatible. Select `NNP=FAIRCHEM` (or `FAIRCHEM_V2`) to
+FAIRChem 2.x and 1.x are incompatible. Select `MLP=FAIRCHEM` (or `MLP=FAIRCHEM_V2`) to
 use FAIRChem v2 checkpoints via `FAIRChemCalculator.from_model_checkpoint`, and
-`NNP=FAIRCHEM_V1` when running legacy OCP/FAIRChem v1 checkpoints with
+`MLP=FAIRCHEM_V1` when running legacy OCP/FAIRChem v1 checkpoints with
 `OCPCalculator`. Switching conda environments per checkpoint version is supported by
 selecting the appropriate tag.
 
