@@ -1,0 +1,24 @@
+
+Unziping the OUTCARs ... done
+Do nebbarrier.pl ; nebspline.pl
+0
+0.167611730464769
+
+0.20454192515791
+
+Do nebef.pl
+Do nebmovie.pl
+Do nebjmovie.pl
+Do nebconverge.pl
+Zipping the OUTCARs again ... done
+
+Forces and Energy:
+   0         0.000002       -10.824314         0.000000 
+   1         0.502741       -10.811831         0.012483 
+   2         1.666224       -10.612653         0.211661 
+
+Extremum 1 found at image  0.000000 with energy:  0.000000
+Extremum 2 found at image  0.742849 with energy:  0.022388
+Extremum 3 found at image  1.068392 with energy:  0.009046
+Extremum 4 found at image  2.000000 with energy:  0.211661
+

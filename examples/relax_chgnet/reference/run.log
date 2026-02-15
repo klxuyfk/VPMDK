@@ -1,0 +1,10 @@
+/home/nei/miniconda3/envs/ase_env/lib/python3.13/site-packages/e3nn/o3/_wigner.py:10: UserWarning: Environment variable TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD detected, since the`weights_only` argument was not explicitly passed to `torch.load`, forcing weights_only=False.
+  _Jd, _W3j_flat, _W3j_indices = torch.load(os.path.join(os.path.dirname(__file__), 'constants.pt'))
+/home/nei/miniconda3/envs/ase_env/lib/python3.13/site-packages/chgnet/model/model.py:898: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:835.)
+  volumes = torch.tensor(volumes, dtype=TORCH_DTYPE, device=atomic_numbers.device)
+cuequivariance or cuequivariance_torch is not available. Cuequivariance acceleration will be disabled.
+CHGNet v0.3.0 initialized with 412,525 parameters
+CHGNet will run on cpu
+   1 F= -.10627505E+02 E0= -.10627505E+02  d E =+.00000000E+00
+Calculation completed.
