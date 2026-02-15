@@ -390,11 +390,19 @@ def parse_key_value_file(path: str) -> Dict[str, str]:
 def _resolve_mlp_tag(bcar_tags: Dict[str, str], *, default: str = "CHGNET") -> str:
     """Return selected BCAR potential tag using ``MLP`` with legacy ``NNP`` fallback."""
 
-    value = bcar_tags.get("MLP")
-    if value is None or str(value).strip() == "":
-        value = bcar_tags.get("NNP", default)
-    text = str(value).strip().upper()
-    return text or default
+    if "MLP" in bcar_tags:
+        mlp_value = str(bcar_tags.get("MLP", "")).strip()
+        if not mlp_value:
+            raise ValueError("BCAR tag MLP is present but empty.")
+        return mlp_value.upper()
+
+    if "NNP" in bcar_tags:
+        nnp_value = str(bcar_tags.get("NNP", "")).strip()
+        if not nnp_value:
+            raise ValueError("BCAR tag NNP is present but empty.")
+        return nnp_value.upper()
+
+    return default.strip().upper()
 
 
 def _flatten(values: Iterable[object]) -> List[float]:
