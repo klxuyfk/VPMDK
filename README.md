@@ -53,7 +53,7 @@ The script reads a subset of common VASP `INCAR` settings. Other tags are ignore
 |-----|---------|-----------------|
 | `NSW` | Number of ionic steps. | `0` (single-point calculation). |
 | `IBRION` | Ionic movement algorithm. | `<0` performs a single-point calculation without moving ions, `0` runs molecular dynamics, positive values trigger a BFGS geometry optimisation with a fixed cell. Defaults to `-1`. |
-| `ISIF` | Controls whether the cell changes during relaxations. | `2` keeps the cell fixed (default). `3` relaxes ions and the full cell, `4` keeps the volume constant while optimising ions and the cell shape, `5` optimises the cell shape at constant volume with fixed ions, `6` changes only the cell, `7` enables isotropic cell changes with fixed ions, and `8` couples ionic relaxations to isotropic volume changes. Unsupported values fall back to `2` with a warning. |
+| `ISIF` | Controls whether the cell changes during relaxations. | `2` keeps the cell fixed (default). `3` relaxes ions and the full cell, `4` keeps the volume constant while optimising ions and the cell shape, `5` optimises the cell shape at constant volume with fixed ions, `6` changes only the cell, `7` enables isotropic cell changes with fixed ions, and `8` couples ionic relaxations to isotropic volume changes. Stress output follows VASP-style semantics: `ISIF<=0` omits stress blocks, `ISIF=1` writes trace-only pressure information, and `ISIF>=2` writes the full stress tensor block. Unsupported values fall back to `2` behavior with a warning. |
 | `EDIFFG` | Convergence threshold for relaxations in eV/Å. | `-0.02`. |
 | `TEBEG` | Initial temperature in kelvin for molecular dynamics (`IBRION=0`). | `300`. |
 | `TEEND` | Final temperature in kelvin when ramping MD runs. | Same as `TEBEG`. Temperature is linearly ramped between `TEBEG` and `TEEND` over the MD steps. |
@@ -66,6 +66,9 @@ The script reads a subset of common VASP `INCAR` settings. Other tags are ignore
 | `NHC_NCHAINS` | Nose–Hoover chain length. | `1` for `MDALGO=2`, `3` for `MDALGO=4`. |
 | `PSTRESS` | External pressure in kBar applied during relaxations. | Converts to scalar pressure in the ASE optimiser when `ISIF` allows cell changes. |
 | `MAGMOM` | Initial magnetic moments. | Parsed like VASP; supports shorthand such as `2*1.0`. |
+| `IMAGES` | Number of NEB images. | Enables NEB mode detection. When numbered image directories (`00`, `01`, ...) exist, VPMDK runs them sequentially and emits NEB-style projection lines in each image `OUTCAR`. |
+| `LCLIMB` | Climbing-image switch for NEB. | Used as a compatibility hint for VTST post-processing outputs. |
+| `SPRING` | Spring constant for NEB. | Used as a compatibility hint for VTST post-processing outputs. |
 
 ### MD algorithms
 
@@ -106,8 +109,12 @@ DEVICE=cuda           # Optional device override when the backend supports it
 | `WRITE_ENERGY_CSV` | Write `energy.csv` during relaxation (`1` to enable) | `0` |
 | `WRITE_LAMMPS_TRAJ` | Write a LAMMPS trajectory during MD (`1` to enable) | `0` |
 | `LAMMPS_TRAJ_INTERVAL` | MD steps between trajectory frames (only when `WRITE_LAMMPS_TRAJ=1`) | `1` |
+| `WRITE_OSZICAR_PSEUDO_SCF` | Add pseudo electronic-step (`DAV:`) lines to `OSZICAR` (`1` to enable) | `0` (OFF) |
 | `DEEPMD_TYPE_MAP` | Comma/space-separated species list mapped to the DeePMD graph | Inferred from `POSCAR` order |
 | `DEEPMD_HEAD` | Select a DeePMD model head by name (when supported by the checkpoint) | Unset |
+
+`WRITE_PSEUDO_SCF` is accepted as a compatibility alias of
+`WRITE_OSZICAR_PSEUDO_SCF`.
 
 **Backend-specific knobs.** Only relevant when the corresponding backend is chosen.
 
@@ -150,7 +157,9 @@ Depending on the calculation type, VPMDK produces the following files in VASP fo
 | File | When produced | Contents |
 |------|---------------|----------|
 | `CONTCAR` | Always | Final atomic positions and cell. |
-| `OUTCAR` | Relaxations and MD | Step-by-step potential, kinetic, and total energies along with temperature. |
+| `OUTCAR` | Always | VASP-like step blocks plus a simplified timing/memory footer at the end of each run. |
+| `OSZICAR` | Always | VASP-like ionic-step energy summary (`F`, `E0`, `dE`; and MD thermostat terms) with VASP-like aligned scientific notation. Optional pseudo electronic-step (`DAV:`) lines are added only when `WRITE_OSZICAR_PSEUDO_SCF=1`; these are compatibility placeholders, not real electronic SCF iterations. |
+| `vasprun.xml` | Always | Minimal VASP-like XML containing initial/final structures, per-step energies, and forces. |
 | `XDATCAR` | MD only (`IBRION=0`) | Atomic positions at each MD step (trajectory). |
 | `lammps.lammpstrj` | MD with `WRITE_LAMMPS_TRAJ=1` | LAMMPS text dump of atomic positions at the requested interval. |
 | `energy.csv` | Relaxations with `WRITE_ENERGY_CSV=1` | Potential energy at each relaxation step. |
@@ -158,6 +167,23 @@ Depending on the calculation type, VPMDK produces the following files in VASP fo
 Relaxations terminate when either the maximum force drops below the value set
 by `EDIFFG` (default `0.02` eV/Å) or, when `EDIFFG` is positive, when the
 change in energy between ionic steps falls below the specified threshold.
+
+When `INCAR` contains NEB-style tags (for example `IMAGES`, `LCLIMB`, or
+`SPRING`) and numbered image directories are present, VPMDK iterates over those
+directories (`00`, `01`, ...) and runs each image. For compatibility with VTST
+post-processing scripts, each image `OUTCAR` includes a
+`NEB: projections ...` line in every ionic block. This runner performs
+independent per-image calculations and does not apply spring-coupled NEB forces
+between images.
+
+The NEB `CHAIN` block values are approximate: VPMDK estimates the local tangent
+from neighboring image position differences (`next-prev`, or one-sided at
+endpoints), then projects the per-atom force onto that tangent to populate
+`tangential force`, `TANGENT/CHAIN-FORCE`, and `CHAIN + TOTAL`.
+
+For NEB-style directory runs, VPMDK also writes parent-level aggregate
+`OUTCAR`, `OSZICAR`, and `vasprun.xml` files in the top NEB directory using the
+final state from each numbered image.
 
 Initial magnetic moments from `MAGMOM` are propagated to ASE when the value can
 be matched with the number of atoms or species counts in the POSCAR.
