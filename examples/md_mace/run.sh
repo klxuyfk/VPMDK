@@ -4,7 +4,25 @@ set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p reference
 
-MODEL_PATH=$(awk -F= '$1=="MODEL" {print $2}' BCAR | xargs)
+MODEL_PATH=$(
+  awk '
+    {
+      line = $0
+      sub(/[#!].*$/, "", line)
+      if (index(line, "=") == 0) {
+        next
+      }
+      key = substr(line, 1, index(line, "=") - 1)
+      val = substr(line, index(line, "=") + 1)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
+      if (toupper(key) == "MODEL") {
+        print val
+        exit
+      }
+    }
+  ' BCAR
+)
 if [[ -z "${MODEL_PATH}" || "${MODEL_PATH}" == "PATH_TO_MACE_MODEL" ]]; then
   echo "Set MODEL in BCAR before running (example: MODEL=./model/mace.model)" >&2
   exit 1
