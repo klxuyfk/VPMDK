@@ -56,6 +56,42 @@ def test_should_write_oszicar_pseudo_scf(tags, expected):
     assert vpmdk._should_write_oszicar_pseudo_scf(tags) is expected
 
 
+def test_collect_neb_image_results_prefers_contcar_for_geometry(tmp_path: Path):
+    image_dir = tmp_path / "00"
+    image_dir.mkdir()
+
+    poscar_text = """Si2
+1.0
+        3.8669745922         0.0000000000         0.0000000000
+        1.9334872961         3.3488982326         0.0000000000
+        1.9334872961         1.1162994109         3.1573715331
+   Si
+    2
+Direct
+     0.750000000         0.750000000         0.750000000
+     0.500000000         0.500000000         0.500000000
+"""
+    contcar_text = """Si2
+1.0
+        3.8669745922         0.0000000000         0.0000000000
+        1.9334872961         3.3488982326         0.0000000000
+        1.9334872961         1.1162994109         3.1573715331
+   Si
+    2
+Direct
+     0.250000000         0.750000000         0.750000000
+     0.500000000         0.500000000         0.500000000
+"""
+    (image_dir / "POSCAR").write_text(poscar_text)
+    (image_dir / "CONTCAR").write_text(contcar_text)
+
+    results = vpmdk._collect_neb_image_results([str(image_dir)], potcar_path=None)
+
+    assert len(results) == 1
+    scaled = results[0].atoms.get_scaled_positions()
+    assert scaled[0][0] == pytest.approx(0.25, rel=1e-12, abs=1e-12)
+
+
 @pytest.mark.parametrize(
     "definition, expected",
     [

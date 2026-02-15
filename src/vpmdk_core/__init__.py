@@ -2403,15 +2403,17 @@ def _discover_neb_image_directories(workdir: str) -> List[str]:
     return [path for _, path in indexed_dirs]
 
 
-def _resolve_neb_image_structure_path(image_dir: str) -> str:
-    """Return structure path for one NEB image (POSCAR or CONTCAR)."""
+def _resolve_neb_image_structure_path(image_dir: str, *, prefer_contcar: bool = False) -> str:
+    """Return structure path for one NEB image (POSCAR/CONTCAR)."""
 
     poscar_path = os.path.join(image_dir, "POSCAR")
-    if os.path.exists(poscar_path):
-        return poscar_path
     contcar_path = os.path.join(image_dir, "CONTCAR")
-    if os.path.exists(contcar_path):
-        return contcar_path
+    candidates = (
+        (contcar_path, poscar_path) if prefer_contcar else (poscar_path, contcar_path)
+    )
+    for path in candidates:
+        if os.path.exists(path):
+            return path
     raise FileNotFoundError(
         f"Neither POSCAR nor CONTCAR found in NEB image directory: {image_dir}"
     )
@@ -2472,7 +2474,7 @@ def _collect_neb_image_results(
     results: list[_NebImageResult] = []
     for image_dir in image_dirs:
         image_name = os.path.basename(image_dir)
-        structure_path = _resolve_neb_image_structure_path(image_dir)
+        structure_path = _resolve_neb_image_structure_path(image_dir, prefer_contcar=True)
         structure = read_structure(structure_path, potcar_path)
         atoms = AseAtomsAdaptor.get_atoms(structure)
         atoms.wrap()
