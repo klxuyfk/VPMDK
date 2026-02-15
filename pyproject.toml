@@ -24,6 +24,12 @@ dependencies = [
   "pymatgen",
 ]
 
+[project.urls]
+Homepage = "https://github.com/klxuyfk/VPMDK"
+Source = "https://github.com/klxuyfk/VPMDK"
+Documentation = "https://github.com/klxuyfk/VPMDK#readme"
+"Issue Tracker" = "https://github.com/klxuyfk/VPMDK/issues"
+
 [project.scripts]
 vpmdk = "vpmdk:main"
 
