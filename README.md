@@ -54,7 +54,7 @@ The script reads a subset of common VASP `INCAR` settings. Other tags are ignore
 | `NSW` | Number of ionic steps. | `0` (single-point calculation). |
 | `IBRION` | Ionic movement algorithm. | `<0` performs a single-point calculation without moving ions, `0` runs molecular dynamics, positive values trigger a BFGS geometry optimisation with a fixed cell. Defaults to `-1`. |
 | `ISIF` | Controls whether the cell changes during relaxations. | `2` keeps the cell fixed (default). `3` relaxes ions and the full cell, `4` keeps the volume constant while optimising ions and the cell shape, `5` optimises the cell shape at constant volume with fixed ions, `6` changes only the cell, `7` enables isotropic cell changes with fixed ions, and `8` couples ionic relaxations to isotropic volume changes. Stress output follows VASP-style semantics: `ISIF<=0` omits stress blocks, `ISIF=1` writes trace-only pressure information, and `ISIF>=2` writes the full stress tensor block. Unsupported values fall back to `2` behavior with a warning. |
-| `EDIFFG` | Convergence threshold for relaxations in eV/Å. | `-0.02`. |
+| `EDIFFG` | Convergence criterion for relaxations. | `<0`: force criterion using `abs(EDIFFG)` in eV/Å (default `-0.02`). `>0`: energy criterion using `EDIFFG` in eV (`|ΔE|` between ionic steps). |
 | `TEBEG` | Initial temperature in kelvin for molecular dynamics (`IBRION=0`). | `300`. |
 | `TEEND` | Final temperature in kelvin when ramping MD runs. | Same as `TEBEG`. Temperature is linearly ramped between `TEBEG` and `TEEND` over the MD steps. |
 | `POTIM` | Time step in femtoseconds for molecular dynamics (`IBRION=0`). | `2`. |
@@ -166,9 +166,10 @@ Depending on the calculation type, VPMDK produces the following files in VASP fo
 | `lammps.lammpstrj` | MD with `WRITE_LAMMPS_TRAJ=1` | LAMMPS text dump of atomic positions at the requested interval. |
 | `energy.csv` | Relaxations with `WRITE_ENERGY_CSV=1` | Potential energy at each relaxation step. |
 
-Relaxations terminate when either the maximum force drops below the value set
-by `EDIFFG` (default `0.02` eV/Å) or, when `EDIFFG` is positive, when the
-change in energy between ionic steps falls below the specified threshold.
+Relaxation convergence follows VASP-like `EDIFFG` sign semantics:
+
+- `EDIFFG < 0`: converged when the maximum force is below `abs(EDIFFG)` (eV/Å).
+- `EDIFFG > 0`: converged when `|ΔE|` between ionic steps is below `EDIFFG` (eV).
 
 When `INCAR` contains NEB-style tags (for example `IMAGES`, `LCLIMB`, or
 `SPRING`) and numbered image directories are present, VPMDK iterates over those
