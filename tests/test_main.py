@@ -719,10 +719,17 @@ def test_main_neb_runner_dispatches_single_point_when_nsw_is_zero(
         image_dir.mkdir()
         (image_dir / "POSCAR").write_text(poscar_text)
 
-    seen: list[str] = []
+    seen: list[dict[str, object]] = []
 
     def fake_run_single_point(atoms, calculator, **kwargs):
-        seen.append(Path.cwd().name)
+        seen.append(
+            {
+                "cwd": Path.cwd().name,
+                "neb_mode": kwargs.get("neb_mode"),
+                "has_prev": kwargs.get("neb_prev_positions") is not None,
+                "has_next": kwargs.get("neb_next_positions") is not None,
+            }
+        )
         return 0.0
 
     def fail(*args, **kwargs):  # pragma: no cover - defensive guard
@@ -739,7 +746,99 @@ def test_main_neb_runner_dispatches_single_point_when_nsw_is_zero(
     finally:
         monkeypatch.undo()
 
-    assert seen == ["00", "01", "02"]
+    assert [item["cwd"] for item in seen] == ["00", "01", "02"]
+    assert all(item["neb_mode"] is True for item in seen)
+    assert [item["has_prev"] for item in seen] == [False, True, True]
+    assert [item["has_next"] for item in seen] == [True, True, False]
+
+
+def test_main_neb_runner_single_point_writes_neb_projection_lines(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0", "IMAGES": "1"},
+    )
+
+    poscar_text = (tmp_path / "POSCAR").read_text()
+    for image in ("00", "01", "02"):
+        image_dir = tmp_path / image
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(poscar_text)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    for image in ("00", "01", "02"):
+        outcar = (tmp_path / image / "OUTCAR").read_text()
+        assert "NEB: projections on to tangent" in outcar
+        assert "CHAIN + TOTAL  (eV/Angst)" in outcar
+
+
+def test_main_neb_runner_passes_neb_context_to_md(tmp_path: Path, prepare_inputs):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "2", "IBRION": "0", "IMAGES": "1"},
+    )
+
+    poscar_text = (tmp_path / "POSCAR").read_text()
+    for image in ("00", "01", "02"):
+        image_dir = tmp_path / image
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(poscar_text)
+
+    seen: list[dict[str, object]] = []
+
+    def fake_run_md(
+        atoms,
+        calculator,
+        steps,
+        temperature,
+        timestep,
+        *,
+        mdalgo,
+        teend=None,
+        smass=None,
+        thermostat_params=None,
+        **kwargs,
+    ):
+        seen.append(
+            {
+                "cwd": Path.cwd().name,
+                "steps": steps,
+                "neb_mode": kwargs.get("neb_mode"),
+                "has_prev": kwargs.get("neb_prev_positions") is not None,
+                "has_next": kwargs.get("neb_next_positions") is not None,
+            }
+        )
+        return 0.0
+
+    def fail(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("NEB MD setup should not dispatch to relaxation/single-point")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "run_md", fake_run_md)
+    monkeypatch.setattr(vpmdk, "run_single_point", fail)
+    monkeypatch.setattr(vpmdk, "run_relaxation", fail)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert [item["cwd"] for item in seen] == ["00", "01", "02"]
+    assert all(item["steps"] == 2 for item in seen)
+    assert all(item["neb_mode"] is True for item in seen)
+    assert [item["has_prev"] for item in seen] == [False, True, True]
+    assert [item["has_next"] for item in seen] == [True, True, False]
 
 
 def test_main_neb_runner_writes_parent_aggregate_outputs(tmp_path: Path, prepare_inputs):

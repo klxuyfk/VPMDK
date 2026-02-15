@@ -2204,6 +2204,9 @@ def run_single_point(
     *,
     isif: int | None = None,
     oszicar_pseudo_scf: bool = False,
+    neb_mode: bool = False,
+    neb_prev_positions: np.ndarray | None = None,
+    neb_next_positions: np.ndarray | None = None,
 ):
     atoms.calc = _resolve_calculator(calculator)
     recorder = _initialize_vasp_compat_outputs(
@@ -2211,6 +2214,9 @@ def run_single_point(
         ibrion=-1,
         isif=isif,
         write_oszicar_pseudo_scf=oszicar_pseudo_scf,
+        neb_mode=neb_mode,
+        neb_prev_positions=neb_prev_positions,
+        neb_next_positions=neb_next_positions,
     )
     energy = atoms.get_potential_energy()
     delta = 0.0
@@ -3115,6 +3121,9 @@ def run_md(
     thermostat_params: Dict[str, float] | None = None,
     isif: int | None = 0,
     oszicar_pseudo_scf: bool = False,
+    neb_mode: bool = False,
+    neb_prev_positions: np.ndarray | None = None,
+    neb_next_positions: np.ndarray | None = None,
     write_lammps_traj: bool = False,
     lammps_traj_interval: int = 1,
     lammps_traj_path: str = "lammps.lammpstrj",
@@ -3127,6 +3136,9 @@ def run_md(
         potim=timestep,
         mdalgo=mdalgo,
         write_oszicar_pseudo_scf=oszicar_pseudo_scf,
+        neb_mode=neb_mode,
+        neb_prev_positions=neb_prev_positions,
+        neb_next_positions=neb_next_positions,
     )
     if temperature <= 0:
         velocities = atoms.get_velocities()
@@ -3295,6 +3307,9 @@ def run_neb_images(
                     calculator,
                     isif=settings.stress_isif,
                     oszicar_pseudo_scf=oszicar_pseudo_scf,
+                    neb_mode=True,
+                    neb_prev_positions=neb_prev_positions,
+                    neb_next_positions=neb_next_positions,
                 )
             elif settings.ibrion == 0:
                 run_md(
@@ -3309,6 +3324,9 @@ def run_neb_images(
                     thermostat_params=settings.thermostat_params,
                     isif=settings.stress_isif,
                     oszicar_pseudo_scf=oszicar_pseudo_scf,
+                    neb_mode=True,
+                    neb_prev_positions=neb_prev_positions,
+                    neb_next_positions=neb_next_positions,
                     write_lammps_traj=write_lammps_traj,
                     lammps_traj_interval=lammps_traj_interval,
                 )
