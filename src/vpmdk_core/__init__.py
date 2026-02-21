@@ -14,6 +14,8 @@ import importlib.util
 import os
 import re
 import sys
+import time
+import xml.etree.ElementTree as ET
 from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -122,6 +124,7 @@ else:  # pragma: no cover - optional dependency
 
 from ase import units
 from ase.calculators.calculator import Calculator, all_changes
+from ase.calculators.singlepoint import SinglePointCalculator
 from ase.io import write
 from ase.io.lammpsdata import Prism
 from ase.io.vasp import write_vasp_xdatcar
@@ -133,6 +136,11 @@ except ImportError:  # pragma: no cover - ASE moved filters in newer versions
     from ase.constraints import FixAtoms
 from ase.md.verlet import VelocityVerlet
 from ase.md import velocitydistribution
+
+try:
+    import resource
+except Exception:  # pragma: no cover - optional on non-Unix platforms
+    resource = None  # type: ignore
 
 try:  # pragma: no cover - optional thermostat dependency
     from ase.md.andersen import Andersen
@@ -373,7 +381,28 @@ def parse_key_value_file(path: str) -> Dict[str, str]:
                 continue
             k, v = line.split('=', 1)
             data[k.strip().upper()] = v.strip()
+    # Backward compatibility: interpret legacy NNP tag as MLP when MLP is absent.
+    if "MLP" not in data and "NNP" in data:
+        data["MLP"] = data["NNP"]
     return data
+
+
+def _resolve_mlp_tag(bcar_tags: Dict[str, str], *, default: str = "CHGNET") -> str:
+    """Return selected BCAR potential tag using ``MLP`` with legacy ``NNP`` fallback."""
+
+    if "MLP" in bcar_tags:
+        mlp_value = str(bcar_tags.get("MLP", "")).strip()
+        if not mlp_value:
+            raise ValueError("BCAR tag MLP is present but empty.")
+        return mlp_value.upper()
+
+    if "NNP" in bcar_tags:
+        nnp_value = str(bcar_tags.get("NNP", "")).strip()
+        if not nnp_value:
+            raise ValueError("BCAR tag NNP is present but empty.")
+        return nnp_value.upper()
+
+    return default.strip().upper()
 
 
 def _flatten(values: Iterable[object]) -> List[float]:
@@ -742,6 +771,762 @@ def _write_lammps_trajectory_step(path: str, atoms, step_index: int) -> None:
             if velocity_data is not None:
                 values.extend(velocity_data[index - 1].tolist())
             handle.write(" ".join(str(value) for value in values) + "\n")
+
+
+@dataclass
+class _VasprunStep:
+    """Container for one ionic step written to ``vasprun.xml``."""
+
+    cell: list[list[float]]
+    scaled_positions: list[list[float]]
+    forces: list[list[float]]
+    stress: list[list[float]] | None
+    potential_energy: float
+    total_energy: float
+    kinetic_energy: float
+    thermostat_potential: float
+    thermostat_kinetic: float
+    temperature: float
+    sc_time: float = 0.0
+
+
+@dataclass
+class _VaspCompatRecorder:
+    """State tracker for VASP-like ``OUTCAR``/``OSZICAR``/``vasprun.xml`` output."""
+
+    symbols: List[str]
+    initial_cell: list[list[float]]
+    initial_scaled_positions: list[list[float]]
+    ibrion: int
+    potim: float | None
+    mdalgo: int | None
+    isif: int | None = None
+    stress_mode: str = "none"
+    neb_mode: bool = False
+    write_oszicar_pseudo_scf: bool = False
+    oszicar_scf_header_written: bool = False
+    neb_prev_positions: np.ndarray | None = None
+    neb_next_positions: np.ndarray | None = None
+    started_at: float = field(default_factory=time.perf_counter)
+    previous_energy: float | None = None
+    steps: List[_VasprunStep] = field(default_factory=list)
+
+
+@dataclass
+class _NebImageResult:
+    """Final-step summary extracted from one NEB image directory."""
+
+    image_name: str
+    atoms: Any
+    potential_energy: float
+    forces: np.ndarray
+    stress: np.ndarray | None
+
+
+@dataclass
+class _NebChainApproximation:
+    """Approximate NEB chain components derived from neighboring images."""
+
+    tangential_force: float
+    tangent_vectors: np.ndarray
+    chain_force_vectors: np.ndarray
+    chain_plus_total: np.ndarray
+
+
+def _coerce_neb_reference_positions(values) -> np.ndarray | None:
+    """Return neighbor image positions as ``(n_atoms, 3)`` array when valid."""
+
+    if values is None:
+        return None
+    try:
+        array = np.asarray(values, dtype=float)
+    except Exception:
+        return None
+    if array.ndim != 2 or array.shape[1] != 3:
+        return None
+    return np.array(array, dtype=float, copy=True)
+
+
+def _matrix_to_nested_list(values) -> list[list[float]]:
+    """Return ``values`` as nested Python ``float`` lists."""
+
+    return np.asarray(values, dtype=float).tolist()
+
+
+def _safe_get_forces(atoms) -> np.ndarray:
+    """Return per-atom forces or zeros when unavailable."""
+
+    try:
+        return np.asarray(atoms.get_forces(), dtype=float)
+    except Exception:
+        return np.zeros((len(atoms), 3), dtype=float)
+
+
+def _stress_mode_from_isif(isif: int | None) -> str:
+    """Return stress output mode from VASP ``ISIF`` semantics."""
+
+    if isif is None:
+        return "none"
+    if isif <= 0:
+        return "none"
+    if isif == 1:
+        return "trace"
+    return "full"
+
+
+def _voigt_to_full_stress(stress_voigt: np.ndarray) -> np.ndarray:
+    """Convert ASE Voigt stress ``[xx, yy, zz, yz, xz, xy]`` to 3x3 matrix."""
+
+    xx, yy, zz, yz, xz, xy = [float(v) for v in stress_voigt]
+    return np.array(
+        [
+            [xx, xy, xz],
+            [xy, yy, yz],
+            [xz, yz, zz],
+        ],
+        dtype=float,
+    )
+
+
+def _full_to_voigt_stress(stress_matrix: np.ndarray) -> np.ndarray:
+    """Convert full 3x3 stress matrix to ASE Voigt convention."""
+
+    return np.array(
+        [
+            float(stress_matrix[0, 0]),
+            float(stress_matrix[1, 1]),
+            float(stress_matrix[2, 2]),
+            float(stress_matrix[1, 2]),
+            float(stress_matrix[0, 2]),
+            float(stress_matrix[0, 1]),
+        ],
+        dtype=float,
+    )
+
+
+def _safe_get_stress_matrix(atoms, *, mode: str) -> np.ndarray | None:
+    """Return stress matrix in eV/A^3 based on output mode."""
+
+    if mode == "none":
+        return None
+
+    try:
+        raw = np.asarray(atoms.get_stress(voigt=True), dtype=float)
+    except Exception:
+        return None
+
+    if raw.shape == (6,):
+        stress_voigt = raw
+    elif raw.shape == (3, 3):
+        stress_voigt = _full_to_voigt_stress(raw)
+    else:
+        return None
+
+    if mode == "trace":
+        mean_pressure = float(np.mean(stress_voigt[:3]))
+        stress_voigt = np.array([mean_pressure, mean_pressure, mean_pressure, 0.0, 0.0, 0.0])
+
+    return _voigt_to_full_stress(stress_voigt)
+
+
+def _estimate_neb_chain_approximation(
+    *,
+    positions: np.ndarray,
+    forces: np.ndarray,
+    prev_positions: np.ndarray | None,
+    next_positions: np.ndarray | None,
+) -> _NebChainApproximation | None:
+    """Estimate NEB chain vectors from neighboring image displacements."""
+
+    if positions.shape != forces.shape or positions.ndim != 2 or positions.shape[1] != 3:
+        return None
+
+    prev = prev_positions if prev_positions is not None and prev_positions.shape == positions.shape else None
+    nxt = next_positions if next_positions is not None and next_positions.shape == positions.shape else None
+
+    if prev is not None and nxt is not None:
+        tangent_raw = nxt - prev
+    elif nxt is not None:
+        tangent_raw = nxt - positions
+    elif prev is not None:
+        tangent_raw = positions - prev
+    else:
+        tangent_raw = np.zeros_like(forces)
+
+    tangent_norm = float(np.linalg.norm(tangent_raw.ravel()))
+    if tangent_norm <= 1e-14:
+        tangent_vectors = np.zeros_like(forces)
+        tangential_force = 0.0
+        chain_force_vectors = np.zeros_like(forces)
+    else:
+        tangent_vectors = tangent_raw / tangent_norm
+        tangential_force = float(np.dot(forces.ravel(), tangent_vectors.ravel()))
+        chain_force_vectors = tangent_vectors * tangential_force
+
+    if forces.size:
+        chain_plus_total = np.sum(chain_force_vectors + forces, axis=0)
+    else:
+        chain_plus_total = np.zeros(3, dtype=float)
+
+    return _NebChainApproximation(
+        tangential_force=tangential_force,
+        tangent_vectors=tangent_vectors,
+        chain_force_vectors=chain_force_vectors,
+        chain_plus_total=chain_plus_total,
+    )
+
+
+def _read_non_comment_lines(path: str) -> list[str]:
+    """Return stripped non-empty lines with ``#``/``!`` comments removed."""
+
+    if not os.path.exists(path):
+        return []
+    lines: list[str] = []
+    with open(path, encoding="utf-8", errors="ignore") as handle:
+        for raw in handle:
+            line = raw.rstrip("\n")
+            for marker in ("#", "!"):
+                if marker in line:
+                    line = line.split(marker, 1)[0]
+            stripped = line.strip()
+            if stripped:
+                lines.append(stripped)
+    return lines
+
+
+def _extract_potcar_titles(path: str) -> list[str]:
+    """Return POTCAR TITEL strings from ``path`` when available."""
+
+    if not os.path.exists(path):
+        return []
+    titles: list[str] = []
+    with open(path, encoding="utf-8", errors="ignore") as handle:
+        for line in handle:
+            if "TITEL" not in line or "=" not in line:
+                continue
+            title = line.split("=", 1)[1].strip()
+            if title:
+                titles.append(title)
+    return titles
+
+
+def _append_outcar_metadata_header(handle, atoms) -> None:
+    """Append VASP-like metadata/header blocks to ``OUTCAR``."""
+
+    incar_lines = _read_non_comment_lines("INCAR")
+    if incar_lines:
+        handle.write(" INCAR:\n")
+        for line in incar_lines:
+            handle.write(f"   {line}\n")
+
+    potcar_titles = _extract_potcar_titles("POTCAR")
+    if potcar_titles:
+        for title in potcar_titles:
+            handle.write(f" POTCAR:    {title}\n")
+    elif len(atoms):
+        seen: OrderedDict[str, None] = OrderedDict()
+        for symbol in atoms.get_chemical_symbols():
+            seen.setdefault(symbol, None)
+        for symbol in seen:
+            handle.write(f" POTCAR:    PAW_PBE {symbol}\n")
+
+    cell = np.asarray(atoms.get_cell().array, dtype=float)
+    if abs(np.linalg.det(cell)) > 1e-14:
+        reciprocal = np.linalg.inv(cell).T
+    else:
+        reciprocal = np.zeros((3, 3), dtype=float)
+    handle.write("      direct lattice vectors                 reciprocal lattice vectors\n")
+    for direct, recip in zip(cell, reciprocal):
+        handle.write(
+            f"  {direct[0]:12.9f} {direct[1]:12.9f} {direct[2]:12.9f}"
+            f"   {recip[0]:12.9f} {recip[1]:12.9f} {recip[2]:12.9f}\n"
+        )
+
+    kp_lines = _read_non_comment_lines("KPOINTS")
+    kpoint_label = "Gamma"
+    if len(kp_lines) >= 3:
+        kpoint_label = kp_lines[2]
+    handle.write(
+        f" k-points in reciprocal lattice and weights: {kpoint_label:<40}\n"
+    )
+    handle.write("   0.00000000   0.00000000   0.00000000      1.00000000\n\n")
+
+
+def _append_kpoints_xml(parent) -> None:
+    """Append a minimal Gamma-only ``kpoints`` section."""
+
+    kpoints = ET.SubElement(parent, "kpoints")
+    ET.SubElement(kpoints, "generation", {"param": "Gamma"})
+    kpointlist = ET.SubElement(kpoints, "varray", {"name": "kpointlist"})
+    ET.SubElement(kpointlist, "v").text = "       0.00000000       0.00000000       0.00000000 "
+    weights = ET.SubElement(kpoints, "varray", {"name": "weights"})
+    ET.SubElement(weights, "v").text = "       1.00000000 "
+
+
+def _initialize_vasp_compat_outputs(
+    atoms,
+    *,
+    ibrion: int,
+    potim: float | None = None,
+    mdalgo: int | None = None,
+    isif: int | None = None,
+    neb_mode: bool = False,
+    write_oszicar_pseudo_scf: bool = False,
+    neb_prev_positions: np.ndarray | None = None,
+    neb_next_positions: np.ndarray | None = None,
+) -> _VaspCompatRecorder:
+    """Initialize compatibility outputs and return recorder state."""
+
+    initial_cell = _matrix_to_nested_list(atoms.get_cell().array)
+    initial_scaled_positions = _matrix_to_nested_list(atoms.get_scaled_positions())
+    current_positions = np.asarray(atoms.get_positions(), dtype=float)
+    prev_positions = _coerce_neb_reference_positions(neb_prev_positions)
+    if prev_positions is not None and prev_positions.shape != current_positions.shape:
+        prev_positions = None
+    next_positions = _coerce_neb_reference_positions(neb_next_positions)
+    if next_positions is not None and next_positions.shape != current_positions.shape:
+        next_positions = None
+    recorder = _VaspCompatRecorder(
+        symbols=list(atoms.get_chemical_symbols()),
+        initial_cell=initial_cell,
+        initial_scaled_positions=initial_scaled_positions,
+        ibrion=ibrion,
+        potim=potim,
+        mdalgo=mdalgo,
+        isif=isif,
+        stress_mode=_stress_mode_from_isif(isif),
+        neb_mode=neb_mode,
+        write_oszicar_pseudo_scf=write_oszicar_pseudo_scf,
+        neb_prev_positions=prev_positions,
+        neb_next_positions=next_positions,
+    )
+
+    with open("OUTCAR", "w", encoding="utf-8") as handle:
+        handle.write(" vasp.6.x compatible output generated by VPMDK\n")
+        handle.write(f"   IBRION = {ibrion:6d}\n")
+        if isif is not None:
+            handle.write(f"   ISIF   = {isif:6d}\n")
+        if mdalgo is not None:
+            handle.write(f"   MDALGO = {mdalgo:6d}\n")
+        if potim is not None:
+            handle.write(f"   POTIM  = {potim:6.4f}    time-step for ionic-motion\n")
+        handle.write(f"   ICHAIN = {0:6d}\n")
+        handle.write(
+            f"   number of dos      NEDOS =    301   number of ions     NIONS = {len(atoms):6d}\n"
+        )
+        handle.write("\n")
+        _append_outcar_metadata_header(handle, atoms)
+
+    with open("OSZICAR", "w", encoding="utf-8"):
+        pass
+
+    return recorder
+
+
+def _append_outcar_compat_step(
+    step_index: int,
+    atoms,
+    forces: np.ndarray,
+    stress_matrix: np.ndarray | None,
+    potential_energy: float,
+    total_energy: float,
+    kinetic_energy: float,
+    thermostat_potential: float,
+    thermostat_kinetic: float,
+    neb_mode: bool = False,
+    neb_chain: _NebChainApproximation | None = None,
+) -> None:
+    """Append a VTST-friendly ionic-step block to ``OUTCAR``."""
+
+    positions = np.asarray(atoms.get_positions(), dtype=float)
+    if forces.size:
+        norms = np.linalg.norm(forces, axis=1)
+        force_max = float(np.max(norms))
+        force_rms = float(np.sqrt(np.mean(norms * norms)))
+    else:
+        force_max = 0.0
+        force_rms = 0.0
+
+    with open("OUTCAR", "a", encoding="utf-8") as handle:
+        handle.write(
+            f"--------------------------------------- Iteration {step_index:6d}(   1)  ---------------------------------------\n"
+        )
+        handle.write(" POSITION                                       TOTAL-FORCE (eV/Angst)\n")
+        handle.write(" -----------------------------------------------------------------------------------\n")
+        for position, force in zip(positions, forces):
+            handle.write(
+                f" {position[0]:16.8f} {position[1]:16.8f} {position[2]:16.8f}"
+                f" {force[0]:16.8f} {force[1]:16.8f} {force[2]:16.8f}\n"
+            )
+        handle.write(" -----------------------------------------------------------------------------------\n")
+        drift = np.sum(forces, axis=0) if forces.size else np.zeros(3, dtype=float)
+        handle.write(
+            "    total drift:                               "
+            f"{drift[0]:12.6f} {drift[1]:12.6f} {drift[2]:12.6f}\n\n"
+        )
+        handle.write(f" FORCES: max atom, RMS {force_max:16.8f} {force_rms:16.8f}\n\n")
+        if stress_matrix is not None:
+            xx = float(stress_matrix[0, 0])
+            yy = float(stress_matrix[1, 1])
+            zz = float(stress_matrix[2, 2])
+            xy = float(stress_matrix[0, 1])
+            yz = float(stress_matrix[1, 2])
+            zx = float(stress_matrix[2, 0])
+            to_kbar = 1.0 / KBAR_TO_EV_PER_A3
+            ext_pressure = (xx + yy + zz) / 3.0 * to_kbar
+            handle.write("  FORCE on cell =-STRESS in cart. coord.  units (eV):\n")
+            handle.write("  Direction    XX          YY          ZZ          XY          YZ          ZX\n")
+            handle.write("  -------------------------------------------------------------------------------------\n")
+            handle.write(
+                f"  Total   {xx:11.5f} {yy:11.5f} {zz:11.5f}"
+                f" {xy:11.5f} {yz:11.5f} {zx:11.5f}\n"
+            )
+            handle.write(
+                f"  in kB   {xx * to_kbar:11.2f} {yy * to_kbar:11.2f} {zz * to_kbar:11.2f}"
+                f" {xy * to_kbar:11.2f} {yz * to_kbar:11.2f} {zx * to_kbar:11.2f}\n"
+            )
+            handle.write(
+                f"  external pressure = {ext_pressure:11.2f} kB  Pullay stress =        0.00 kB\n\n"
+            )
+        if neb_mode:
+            if neb_chain is None:
+                tangential_force = 0.0
+                tangent_vectors = np.zeros_like(forces)
+                chain_force_vectors = np.zeros_like(forces)
+                chain_plus_total = np.zeros(3, dtype=float)
+            else:
+                tangential_force = float(neb_chain.tangential_force)
+                tangent_vectors = np.asarray(neb_chain.tangent_vectors, dtype=float)
+                if tangent_vectors.shape != forces.shape:
+                    tangent_vectors = np.zeros_like(forces)
+                chain_force_vectors = np.asarray(neb_chain.chain_force_vectors, dtype=float)
+                if chain_force_vectors.shape != forces.shape:
+                    chain_force_vectors = np.zeros_like(forces)
+                chain_plus_total = np.asarray(neb_chain.chain_plus_total, dtype=float)
+                if chain_plus_total.shape != (3,):
+                    chain_plus_total = np.zeros(3, dtype=float)
+
+            perpendicular_forces = forces - chain_force_vectors
+            if perpendicular_forces.size:
+                chain_force_max = float(np.max(np.linalg.norm(perpendicular_forces, axis=1)))
+            else:
+                chain_force_max = 0.0
+
+            handle.write(
+                " NEB: projections on to tangent (spring, REAL) "
+                f"{0.0:12.6f} {tangential_force:12.6f} {chain_force_max:12.6f}\n\n"
+            )
+        handle.write("  FREE ENERGIE OF THE ION-ELECTRON SYSTEM (eV)\n")
+        handle.write("  ---------------------------------------------------\n")
+        handle.write(f"  free  energy   TOTEN  = {potential_energy:16.8f} eV\n")
+        handle.write(
+            f"  energy  without entropy= {potential_energy:16.8f}  "
+            f"energy(sigma->0) = {potential_energy:16.8f}\n"
+        )
+        handle.write(f"  kinetic energy EKIN    = {kinetic_energy:16.8f} eV\n")
+        handle.write(f"  nose potential         = {thermostat_potential:16.8f} eV\n")
+        handle.write(f"  nose kinetic           = {thermostat_kinetic:16.8f} eV\n")
+        handle.write(f"  total energy ETOTAL    = {total_energy:16.8f} eV\n\n")
+        if neb_mode:
+            handle.write(f"  tangential force (eV/A) {tangential_force:16.6f}\n")
+            handle.write(" TANGENT                                        CHAIN-FORCE (eV/Angst)\n")
+            handle.write(" -------------------------------------------------------------------------------\n")
+            for tangent, chain_force in zip(tangent_vectors, chain_force_vectors):
+                handle.write(
+                    f" {tangent[0]:12.6f} {tangent[1]:12.6f} {tangent[2]:12.6f}"
+                    f" {chain_force[0]:16.6f} {chain_force[1]:12.6f} {chain_force[2]:12.6f}\n"
+                )
+            handle.write(" -------------------------------------------------------------------------------\n\n")
+            handle.write(" CHAIN + TOTAL  (eV/Angst)\n")
+            handle.write(" ----------------------------------------------\n")
+            handle.write(
+                f" {chain_plus_total[0]:12.5f} {chain_plus_total[1]:12.5f} {chain_plus_total[2]:12.5f}\n"
+            )
+            handle.write(" ----------------------------------------------\n\n")
+
+
+def _append_oszicar_compat_step(
+    recorder: _VaspCompatRecorder,
+    step_index: int,
+    *,
+    potential_energy: float,
+    total_energy: float,
+    kinetic_energy: float,
+    thermostat_potential: float,
+    thermostat_kinetic: float,
+    temperature: float,
+    forces: np.ndarray | None = None,
+) -> None:
+    """Append one ionic step to ``OSZICAR``."""
+
+    delta = 0.0 if recorder.previous_energy is None else potential_energy - recorder.previous_energy
+    recorder.previous_energy = potential_energy
+
+    with open("OSZICAR", "a", encoding="utf-8") as handle:
+        if recorder.write_oszicar_pseudo_scf:
+            if not recorder.oszicar_scf_header_written:
+                handle.write("       N       E                     dE             d eps       ncg     rms          rms(c)\n")
+                recorder.oszicar_scf_header_written = True
+            if forces is not None and forces.size:
+                force_rms = float(np.sqrt(np.mean(np.sum(forces * forces, axis=1))))
+                ncg = max(1, int(12 * len(forces)))
+            else:
+                force_rms = 0.0
+                ncg = 1
+            handle.write(
+                f"DAV: {1:3d} {potential_energy:21.12E} "
+                f"{_format_oszicar_residual(0.0):>14s} {_format_oszicar_residual(0.0):>14s} "
+                f"{ncg:7d} {_format_oszicar_residual(force_rms):>12s}\n"
+            )
+
+        if recorder.ibrion == 0:
+            handle.write(
+                f"{step_index:7d} T={temperature:8.1f} "
+                f"E= {_format_oszicar_energy(total_energy)} "
+                f"F= {_format_oszicar_energy(potential_energy)} "
+                f"E0= {_format_oszicar_energy(potential_energy)}  "
+                f"EK= {_format_oszicar_energy(kinetic_energy)} "
+                f"SP= {_format_oszicar_energy(thermostat_potential)} "
+                f"SK= {_format_oszicar_energy(thermostat_kinetic)}\n"
+            )
+        else:
+            handle.write(
+                f"{step_index:4d} F= {_format_oszicar_energy(potential_energy)} "
+                f"E0= {_format_oszicar_energy(potential_energy)}  "
+                f"d E = {_format_oszicar_energy(delta)}\n"
+            )
+
+
+def _record_vasp_compat_step(
+    recorder: _VaspCompatRecorder,
+    atoms,
+    *,
+    step_index: int,
+    potential_energy: float,
+    total_energy: float,
+    kinetic_energy: float = 0.0,
+    thermostat_potential: float = 0.0,
+    thermostat_kinetic: float = 0.0,
+    temperature: float = 0.0,
+    sc_time: float = 0.0,
+    neb_chain: _NebChainApproximation | None = None,
+) -> None:
+    """Capture step data and append compatibility records."""
+
+    forces = _safe_get_forces(atoms)
+    stress_matrix = _safe_get_stress_matrix(atoms, mode=recorder.stress_mode)
+    if recorder.neb_mode and neb_chain is None:
+        neb_chain = _estimate_neb_chain_approximation(
+            positions=np.asarray(atoms.get_positions(), dtype=float),
+            forces=forces,
+            prev_positions=recorder.neb_prev_positions,
+            next_positions=recorder.neb_next_positions,
+        )
+    _append_outcar_compat_step(
+        step_index,
+        atoms,
+        forces,
+        stress_matrix,
+        potential_energy,
+        total_energy,
+        kinetic_energy,
+        thermostat_potential,
+        thermostat_kinetic,
+        recorder.neb_mode,
+        neb_chain=neb_chain,
+    )
+    _append_oszicar_compat_step(
+        recorder,
+        step_index,
+        potential_energy=potential_energy,
+        total_energy=total_energy,
+        kinetic_energy=kinetic_energy,
+        thermostat_potential=thermostat_potential,
+        thermostat_kinetic=thermostat_kinetic,
+        temperature=temperature,
+        forces=forces,
+    )
+    recorder.steps.append(
+        _VasprunStep(
+            cell=_matrix_to_nested_list(atoms.get_cell().array),
+            scaled_positions=_matrix_to_nested_list(atoms.get_scaled_positions()),
+            forces=forces.tolist(),
+            stress=None if stress_matrix is None else stress_matrix.tolist(),
+            potential_energy=float(potential_energy),
+            total_energy=float(total_energy),
+            kinetic_energy=float(kinetic_energy),
+            thermostat_potential=float(thermostat_potential),
+            thermostat_kinetic=float(thermostat_kinetic),
+            temperature=float(temperature),
+            sc_time=float(sc_time),
+        )
+    )
+
+
+def _append_structure_xml(
+    parent,
+    *,
+    cell: list[list[float]],
+    scaled_positions: list[list[float]],
+    name: str | None = None,
+):
+    """Append a minimal VASP-like ``structure`` node."""
+
+    attrs = {"name": name} if name is not None else {}
+    structure = ET.SubElement(parent, "structure", attrs)
+    crystal = ET.SubElement(structure, "crystal")
+
+    basis = ET.SubElement(crystal, "varray", {"name": "basis"})
+    cell_array = np.asarray(cell, dtype=float)
+    for vector in cell_array:
+        ET.SubElement(basis, "v").text = (
+            f"{vector[0]:16.8f} {vector[1]:16.8f} {vector[2]:16.8f}"
+        )
+
+    volume = float(abs(np.linalg.det(cell_array)))
+    ET.SubElement(crystal, "i", {"name": "volume"}).text = f"{volume:16.8f}"
+
+    rec_basis = ET.SubElement(crystal, "varray", {"name": "rec_basis"})
+    if abs(np.linalg.det(cell_array)) > 1e-14:
+        reciprocal = np.linalg.inv(cell_array).T
+    else:
+        reciprocal = np.zeros((3, 3), dtype=float)
+    for vector in reciprocal:
+        ET.SubElement(rec_basis, "v").text = (
+            f"{vector[0]:16.8f} {vector[1]:16.8f} {vector[2]:16.8f}"
+        )
+
+    positions = ET.SubElement(structure, "varray", {"name": "positions"})
+    for row in scaled_positions:
+        ET.SubElement(positions, "v").text = f"{row[0]:16.8f} {row[1]:16.8f} {row[2]:16.8f}"
+
+    return structure
+
+
+def _build_atominfo_xml(parent, symbols: List[str]) -> None:
+    """Append a compact ``atominfo`` section."""
+
+    atominfo = ET.SubElement(parent, "atominfo")
+    ET.SubElement(atominfo, "atoms").text = str(len(symbols))
+
+    counts: OrderedDict[str, int] = OrderedDict()
+    for symbol in symbols:
+        counts[symbol] = counts.get(symbol, 0) + 1
+    ET.SubElement(atominfo, "types").text = str(len(counts))
+
+    atom_array = ET.SubElement(atominfo, "array", {"name": "atoms"})
+    ET.SubElement(atom_array, "field", {"type": "string"}).text = "element"
+    atom_set = ET.SubElement(atom_array, "set")
+    for symbol in symbols:
+        row = ET.SubElement(atom_set, "rc")
+        ET.SubElement(row, "c").text = symbol
+
+    type_array = ET.SubElement(atominfo, "array", {"name": "atomtypes"})
+    ET.SubElement(type_array, "field", {"type": "int"}).text = "atomspertype"
+    ET.SubElement(type_array, "field", {"type": "string"}).text = "element"
+    ET.SubElement(type_array, "field", {"type": "float"}).text = "mass"
+    ET.SubElement(type_array, "field", {"type": "float"}).text = "valence"
+    ET.SubElement(type_array, "field", {"type": "string"}).text = "pseudopotential"
+    type_set = ET.SubElement(type_array, "set")
+    for symbol, count in counts.items():
+        row = ET.SubElement(type_set, "rc")
+        ET.SubElement(row, "c").text = str(count)
+        ET.SubElement(row, "c").text = symbol
+        ET.SubElement(row, "c").text = f"{1.0:8.4f}"
+        ET.SubElement(row, "c").text = f"{0.0:8.4f}"
+        ET.SubElement(row, "c").text = f"PAW_PBE {symbol}"
+
+
+def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
+    """Write a minimal ``vasprun.xml`` with ionic-step data."""
+
+    root = ET.Element("modeling")
+    generator = ET.SubElement(root, "generator")
+    ET.SubElement(generator, "i", {"name": "program", "type": "string"}).text = "VPMDK"
+    ET.SubElement(generator, "i", {"name": "version", "type": "string"}).text = "0"
+
+    incar = ET.SubElement(root, "incar")
+    ET.SubElement(incar, "i", {"name": "IBRION", "type": "int"}).text = str(recorder.ibrion)
+    if recorder.isif is not None:
+        ET.SubElement(incar, "i", {"name": "ISIF", "type": "int"}).text = str(recorder.isif)
+    ET.SubElement(incar, "i", {"name": "NSW", "type": "int"}).text = str(len(recorder.steps))
+    if recorder.potim is not None:
+        ET.SubElement(incar, "i", {"name": "POTIM", "type": "float"}).text = f"{recorder.potim:.6f}"
+    if recorder.mdalgo is not None:
+        ET.SubElement(incar, "i", {"name": "MDALGO", "type": "int"}).text = str(recorder.mdalgo)
+
+    _append_structure_xml(
+        root,
+        name="primitive_cell",
+        cell=recorder.initial_cell,
+        scaled_positions=recorder.initial_scaled_positions,
+    )
+    primitive_index = ET.SubElement(root, "varray", {"name": "primitive_index"})
+    for index in range(1, len(recorder.symbols) + 1):
+        ET.SubElement(primitive_index, "v").text = f"{index:9d} "
+
+    _append_kpoints_xml(root)
+
+    parameters = ET.SubElement(root, "parameters")
+    electronic = ET.SubElement(parameters, "separator", {"name": "electronic"})
+    ET.SubElement(electronic, "i", {"name": "NELM", "type": "int"}).text = "1"
+    ET.SubElement(electronic, "i", {"name": "NBANDS", "type": "int"}).text = str(
+        max(1, 4 * len(recorder.symbols))
+    )
+    ionic = ET.SubElement(parameters, "separator", {"name": "ionic"})
+    ET.SubElement(ionic, "i", {"name": "IBRION", "type": "int"}).text = str(recorder.ibrion)
+    if recorder.isif is not None:
+        ET.SubElement(ionic, "i", {"name": "ISIF", "type": "int"}).text = str(recorder.isif)
+    ET.SubElement(ionic, "i", {"name": "NSW", "type": "int"}).text = str(len(recorder.steps))
+    if recorder.potim is not None:
+        ET.SubElement(ionic, "i", {"name": "POTIM", "type": "float"}).text = f"{recorder.potim:.6f}"
+
+    _build_atominfo_xml(root, recorder.symbols)
+    _append_structure_xml(
+        root,
+        name="initialpos",
+        cell=recorder.initial_cell,
+        scaled_positions=recorder.initial_scaled_positions,
+    )
+
+    for step in recorder.steps:
+        calculation = ET.SubElement(root, "calculation")
+        _append_structure_xml(
+            calculation,
+            cell=step.cell,
+            scaled_positions=step.scaled_positions,
+        )
+
+        forces = ET.SubElement(calculation, "varray", {"name": "forces"})
+        for row in step.forces:
+            ET.SubElement(forces, "v").text = f"{row[0]:16.8f} {row[1]:16.8f} {row[2]:16.8f}"
+        if step.stress is not None:
+            stress = ET.SubElement(calculation, "varray", {"name": "stress"})
+            for row in step.stress:
+                ET.SubElement(stress, "v").text = f"{row[0]:16.8f} {row[1]:16.8f} {row[2]:16.8f}"
+
+        energy = ET.SubElement(calculation, "energy")
+        ET.SubElement(energy, "i", {"name": "e_fr_energy"}).text = f"{step.potential_energy:16.8f}"
+        ET.SubElement(energy, "i", {"name": "e_wo_entrp"}).text = f"{step.potential_energy:16.8f}"
+        ET.SubElement(energy, "i", {"name": "e_0_energy"}).text = f"{step.potential_energy:16.8f}"
+        ET.SubElement(energy, "i", {"name": "kinetic"}).text = f"{step.kinetic_energy:16.8f}"
+        ET.SubElement(energy, "i", {"name": "nosepot"}).text = f"{step.thermostat_potential:16.8f}"
+        ET.SubElement(energy, "i", {"name": "nosekinetic"}).text = f"{step.thermostat_kinetic:16.8f}"
+        ET.SubElement(energy, "i", {"name": "total"}).text = f"{step.total_energy:16.8f}"
+        ET.SubElement(calculation, "time", {"name": "totalsc"}).text = (
+            f"{step.sc_time:8.2f} {step.sc_time:8.2f}"
+        )
+
+    _append_structure_xml(
+        root,
+        name="finalpos",
+        cell=_matrix_to_nested_list(final_atoms.get_cell().array),
+        scaled_positions=_matrix_to_nested_list(final_atoms.get_scaled_positions()),
+    )
+
+    tree = ET.ElementTree(root)
+    ET.indent(tree, space=" ")
+    tree.write("vasprun.xml", encoding="utf-8", xml_declaration=True)
 
 
 def read_structure(poscar_path: str, potcar_path: str | None = None):
@@ -1303,13 +2088,13 @@ def _build_calculator_from_init_factory(calculator, bcar_tags: Dict[str, str]):
     closure = getattr(init, "__closure__", None)
     if not closure:
         return None
-    nnp = bcar_tags.get("NNP", "")
+    mlp = _resolve_mlp_tag(bcar_tags, default="")
     for cell in closure:
         factory = cell.cell_contents
         if not callable(factory):
             continue
         try:
-            candidate = factory(nnp)
+            candidate = factory(mlp)
         except TypeError:
             try:
                 candidate = factory()
@@ -1337,15 +2122,15 @@ def _attach_fallback_calculator(calculator, bcar_tags: Dict[str, str]):
 def get_calculator(bcar_tags: Dict[str, str], *, structure=None):
     """Return ASE calculator based on BCAR tags."""
 
-    nnp = bcar_tags.get("NNP", "CHGNET").upper()
-    if nnp in _SIMPLE_CALCULATORS:
-        calculator_attr, message = _SIMPLE_CALCULATORS[nnp]
+    mlp = _resolve_mlp_tag(bcar_tags)
+    if mlp in _SIMPLE_CALCULATORS:
+        calculator_attr, message = _SIMPLE_CALCULATORS[mlp]
         calculator_cls = globals().get(calculator_attr)
         return _build_simple_model_calculator(calculator_cls, bcar_tags, message)
 
-    builder_entry = _CALCULATOR_BUILDERS.get(nnp)
+    builder_entry = _CALCULATOR_BUILDERS.get(mlp)
     if builder_entry is None:
-        raise ValueError(f"Unsupported NNP type: {nnp}")
+        raise ValueError(f"Unsupported MLP type: {mlp}")
     if callable(builder_entry):
         builder = builder_entry
         builder_name = getattr(builder_entry, "__name__", "")
@@ -1373,6 +2158,45 @@ def _format_energy_value(value: float) -> str:
     return f"{formatted}E{exponent:+03d}"
 
 
+def _format_oszicar_energy(value: float) -> str:
+    """Return right-aligned OSZICAR energy token."""
+
+    return f"{_format_energy_value(value):>15s}"
+
+
+def _format_oszicar_residual(value: float) -> str:
+    """Return VASP-like residual notation used in electronic step lines."""
+
+    return f"{value:+.3E}".replace("+0.", "+.").replace("-0.", "-.")
+
+
+def _append_outcar_footer(recorder: _VaspCompatRecorder) -> None:
+    """Append simplified VASP-like timing/memory footer to ``OUTCAR``."""
+
+    elapsed = max(time.perf_counter() - recorder.started_at, 0.0)
+    peak_memory_kb = 0.0
+    if resource is not None:
+        try:
+            peak_memory_kb = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+            if sys.platform.startswith("darwin"):
+                peak_memory_kb /= 1024.0
+        except Exception:
+            peak_memory_kb = 0.0
+
+    with open("OUTCAR", "a", encoding="utf-8") as handle:
+        handle.write(" General timing and accounting informations for this job:\n")
+        handle.write(" ========================================================\n")
+        handle.write(
+            f"   Total CPU time used (sec):{elapsed:16.3f}\n"
+            f"   User time (sec):{elapsed:25.3f}\n"
+            f"   System time (sec):{0.0:23.3f}\n"
+            f"   Elapsed time (sec):{elapsed:22.3f}\n"
+            f"   Maximum memory used (kb):{peak_memory_kb:15.1f}\n"
+            f"   Average memory used (kb):{peak_memory_kb:15.1f}\n"
+            f"   Number of ionic steps:{len(recorder.steps):21d}\n\n"
+        )
+
+
 def _extract_numeric_attribute(obj, names: Iterable[str]) -> float:
     """Return first numeric attribute or method result from ``names``."""
 
@@ -1395,10 +2219,49 @@ def _extract_numeric_attribute(obj, names: Iterable[str]) -> float:
     return 0.0
 
 
-def run_single_point(atoms, calculator):
+def run_single_point(
+    atoms,
+    calculator,
+    *,
+    isif: int | None = None,
+    oszicar_pseudo_scf: bool = False,
+    neb_mode: bool = False,
+    neb_prev_positions: np.ndarray | None = None,
+    neb_next_positions: np.ndarray | None = None,
+):
     atoms.calc = _resolve_calculator(calculator)
+    recorder = _initialize_vasp_compat_outputs(
+        atoms,
+        ibrion=-1,
+        isif=isif,
+        write_oszicar_pseudo_scf=oszicar_pseudo_scf,
+        neb_mode=neb_mode,
+        neb_prev_positions=neb_prev_positions,
+        neb_next_positions=neb_next_positions,
+    )
     energy = atoms.get_potential_energy()
     delta = 0.0
+    kinetic_energy = 0.0
+    temperature = 0.0
+    try:
+        kinetic_energy = float(atoms.get_kinetic_energy())
+    except Exception:
+        kinetic_energy = 0.0
+    try:
+        temperature = float(atoms.get_temperature())
+    except Exception:
+        temperature = 0.0
+    _record_vasp_compat_step(
+        recorder,
+        atoms,
+        step_index=1,
+        potential_energy=energy,
+        total_energy=energy + kinetic_energy,
+        kinetic_energy=kinetic_energy,
+        temperature=temperature,
+    )
+    _write_vasprun_xml(recorder, atoms)
+    _append_outcar_footer(recorder)
     print(
         f"{1:4d} F= {_format_energy_value(energy)} "
         f"E0= {_format_energy_value(energy)}  d E ={_format_energy_value(delta)}"
@@ -1426,6 +2289,7 @@ class IncarSettings:
     ibrion: int = -1
     ediffg: float = -0.02
     isif: int = 2
+    stress_isif: int = 2
     pstress: float | None = None
     tebeg: float = 300.0
     teend: float = 300.0
@@ -1467,12 +2331,16 @@ SUPPORTED_INCAR_TAGS = {
     "CSVR_PERIOD",
     "NHC_NCHAINS",
     "MAGMOM",
+    "IMAGES",
+    "LCLIMB",
+    "SPRING",
 }
 
 SUPPORTED_ISIF_VALUES = {0, 1, 2, 3, 4, 5, 6, 7, 8}
 
 
 _NUMERIC_RE = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
+_NEB_IMAGE_DIR_RE = re.compile(r"^\d+$")
 
 
 def _load_incar(path: str):
@@ -1489,6 +2357,243 @@ def _warn_for_unsupported_incar_tags(incar) -> None:
     for key in getattr(incar, "keys", lambda: [])():
         if key not in SUPPORTED_INCAR_TAGS:
             print(f"INCAR tag {key} is not supported and will be ignored")
+
+
+def _is_truthy_flag(value) -> bool:
+    """Return whether ``value`` expresses a truthy INCAR-style flag."""
+
+    if value is None:
+        return False
+    token = str(value).strip().strip(".").upper()
+    return token in {"T", "TRUE", "1", "YES", "Y"}
+
+
+def _is_neb_like_incar(incar) -> bool:
+    """Detect whether INCAR appears to describe a NEB-style calculation."""
+
+    if not hasattr(incar, "get"):
+        return False
+
+    images_value = incar.get("IMAGES")
+    if images_value is not None:
+        match = _NUMERIC_RE.search(str(images_value))
+        if match is not None:
+            try:
+                if int(float(match.group(0))) > 0:
+                    return True
+            except ValueError:
+                pass
+
+    if "SPRING" in getattr(incar, "keys", lambda: [])():
+        return True
+
+    if _is_truthy_flag(incar.get("LCLIMB")):
+        return True
+
+    return False
+
+
+def _parse_neb_image_count(incar) -> int | None:
+    """Return ``IMAGES`` value when parseable and non-negative."""
+
+    if not hasattr(incar, "get"):
+        return None
+    raw_value = incar.get("IMAGES")
+    if raw_value is None:
+        return None
+    parsed = _parse_optional_float(raw_value, key="IMAGES")
+    if parsed is None:
+        return None
+    count = int(parsed)
+    if count < 0:
+        print(f"Warning: IMAGES={raw_value} is invalid; ignoring NEB image count hint.")
+        return None
+    return count
+
+
+def _discover_neb_image_directories(workdir: str) -> List[str]:
+    """Return numbered NEB image directories sorted by numeric index."""
+
+    try:
+        entries = os.listdir(workdir)
+    except OSError:
+        return []
+
+    indexed_dirs: list[tuple[int, str]] = []
+    for entry in entries:
+        if _NEB_IMAGE_DIR_RE.fullmatch(entry) is None:
+            continue
+        path = os.path.join(workdir, entry)
+        if os.path.isdir(path):
+            indexed_dirs.append((int(entry), path))
+    indexed_dirs.sort(key=lambda item: item[0])
+    return [path for _, path in indexed_dirs]
+
+
+def _resolve_neb_image_structure_path(image_dir: str, *, prefer_contcar: bool = False) -> str:
+    """Return structure path for one NEB image (POSCAR/CONTCAR)."""
+
+    poscar_path = os.path.join(image_dir, "POSCAR")
+    contcar_path = os.path.join(image_dir, "CONTCAR")
+    candidates = (
+        (contcar_path, poscar_path) if prefer_contcar else (poscar_path, contcar_path)
+    )
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    raise FileNotFoundError(
+        f"Neither POSCAR nor CONTCAR found in NEB image directory: {image_dir}"
+    )
+
+
+def _parse_vasprun_varray_rows(varray) -> np.ndarray:
+    """Return numeric rows from a ``vasprun.xml`` ``varray`` element."""
+
+    rows: list[list[float]] = []
+    for vector in varray.findall("v"):
+        parts = str(vector.text or "").split()
+        if not parts:
+            continue
+        rows.append([float(value) for value in parts])
+    return np.asarray(rows, dtype=float)
+
+
+def _read_last_vasprun_step(path: str) -> tuple[float, np.ndarray | None, np.ndarray | None]:
+    """Return ``(energy, forces, stress)`` from last ``calculation`` in ``vasprun.xml``."""
+
+    root = ET.parse(path).getroot()
+    calculations = root.findall("calculation")
+    if not calculations:
+        raise ValueError("vasprun.xml has no <calculation> blocks")
+    calculation = calculations[-1]
+
+    energy_value: float | None = None
+    energy = calculation.find("energy")
+    if energy is not None:
+        for name in ("e_wo_entrp", "e_fr_energy", "e_0_energy", "total"):
+            node = energy.find(f"./i[@name='{name}']")
+            if node is None or node.text is None:
+                continue
+            try:
+                energy_value = float(node.text)
+                break
+            except ValueError:
+                continue
+    if energy_value is None:
+        raise ValueError("Unable to parse energy from vasprun.xml")
+
+    forces_varray = calculation.find("./varray[@name='forces']")
+    forces = _parse_vasprun_varray_rows(forces_varray) if forces_varray is not None else None
+
+    stress_varray = calculation.find("./varray[@name='stress']")
+    stress = _parse_vasprun_varray_rows(stress_varray) if stress_varray is not None else None
+    if stress is not None and stress.shape != (3, 3):
+        stress = None
+
+    return energy_value, forces, stress
+
+
+def _collect_neb_image_results(
+    image_dirs: list[str], *, potcar_path: str | None
+) -> list[_NebImageResult]:
+    """Collect final structures/energies/forces for each NEB image directory."""
+
+    results: list[_NebImageResult] = []
+    for image_dir in image_dirs:
+        image_name = os.path.basename(image_dir)
+        structure_path = _resolve_neb_image_structure_path(image_dir, prefer_contcar=True)
+        structure = read_structure(structure_path, potcar_path)
+        atoms = AseAtomsAdaptor.get_atoms(structure)
+        atoms.wrap()
+
+        potential_energy = 0.0
+        forces = np.zeros((len(atoms), 3), dtype=float)
+        stress: np.ndarray | None = None
+        vasprun_path = os.path.join(image_dir, "vasprun.xml")
+        if os.path.exists(vasprun_path):
+            try:
+                potential_energy, parsed_forces, parsed_stress = _read_last_vasprun_step(vasprun_path)
+                if parsed_forces is None or parsed_forces.shape != (len(atoms), 3):
+                    raise ValueError(
+                        f"Unexpected forces shape in {vasprun_path}: "
+                        f"{None if parsed_forces is None else parsed_forces.shape}"
+                    )
+                forces = parsed_forces
+                if parsed_stress is not None:
+                    stress = parsed_stress
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to parse NEB image vasprun.xml for {image_name}: {vasprun_path}"
+                ) from exc
+
+        results.append(
+            _NebImageResult(
+                image_name=image_name,
+                atoms=atoms,
+                potential_energy=float(potential_energy),
+                forces=forces,
+                stress=stress,
+            )
+        )
+    return results
+
+
+def _write_neb_parent_aggregate_outputs(
+    *,
+    workdir: str,
+    settings: IncarSettings,
+    image_results: list[_NebImageResult],
+    oszicar_pseudo_scf: bool = False,
+) -> None:
+    """Write parent-level NEB ``OUTCAR``/``OSZICAR``/``vasprun.xml`` summaries."""
+
+    if not image_results:
+        return
+
+    first_atoms = image_results[0].atoms.copy()
+    recorder = _initialize_vasp_compat_outputs(
+        first_atoms,
+        ibrion=settings.ibrion,
+        isif=settings.stress_isif,
+        potim=settings.potim,
+        mdalgo=settings.mdalgo if settings.ibrion == 0 else None,
+        neb_mode=True,
+        write_oszicar_pseudo_scf=oszicar_pseudo_scf,
+    )
+    image_positions = [np.asarray(image.atoms.get_positions(), dtype=float) for image in image_results]
+    for image_index, image in enumerate(image_results):
+        step_index = image_index + 1
+        atoms_step = image.atoms.copy()
+        prev_positions = image_positions[image_index - 1] if image_index > 0 else None
+        next_positions = (
+            image_positions[image_index + 1] if image_index + 1 < len(image_positions) else None
+        )
+        neb_chain = _estimate_neb_chain_approximation(
+            positions=np.asarray(atoms_step.get_positions(), dtype=float),
+            forces=np.asarray(image.forces, dtype=float),
+            prev_positions=prev_positions,
+            next_positions=next_positions,
+        )
+        calculator_kwargs: Dict[str, Any] = {
+            "energy": image.potential_energy,
+            "forces": image.forces,
+        }
+        if image.stress is not None:
+            calculator_kwargs["stress"] = _full_to_voigt_stress(np.asarray(image.stress, dtype=float))
+        atoms_step.calc = SinglePointCalculator(atoms_step, **calculator_kwargs)
+        _record_vasp_compat_step(
+            recorder,
+            atoms_step,
+            step_index=step_index,
+            potential_energy=image.potential_energy,
+            total_energy=image.potential_energy,
+            sc_time=0.0,
+            neb_chain=neb_chain,
+        )
+
+    final_atoms = image_results[-1].atoms.copy()
+    _write_vasprun_xml(recorder, final_atoms)
+    _append_outcar_footer(recorder)
 
 
 def _parse_optional_float(value, *, key: str):
@@ -1580,14 +2685,19 @@ def _load_incar_settings(incar) -> IncarSettings:
         elif smass > 0:
             mdalgo = 2
     thermostat_params = _extract_thermostat_parameters(incar)
-    requested_isif = int(float(incar.get("ISIF", 2)))
+    default_isif = 0 if ibrion == 0 else 2
+    requested_isif = int(float(incar.get("ISIF", default_isif)))
     normalized_isif = _normalize_isif(requested_isif)
+    stress_isif = (
+        requested_isif if requested_isif in SUPPORTED_ISIF_VALUES else normalized_isif
+    )
 
     return IncarSettings(
         nsw=nsw,
         ibrion=ibrion,
         ediffg=ediffg,
         isif=normalized_isif,
+        stress_isif=stress_isif,
         pstress=pstress,
         tebeg=tebeg,
         teend=teend,
@@ -1610,6 +2720,13 @@ def _should_write_lammps_trajectory(bcar_tags: Dict[str, str]) -> bool:
 
     value = str(bcar_tags.get("WRITE_LAMMPS_TRAJ", "0")).lower()
     return value in {"1", "true", "yes", "on"}
+
+
+def _should_write_oszicar_pseudo_scf(bcar_tags: Dict[str, str]) -> bool:
+    """Return ``True`` when BCAR requests pseudo electronic steps in OSZICAR."""
+
+    raw = bcar_tags.get("WRITE_OSZICAR_PSEUDO_SCF", bcar_tags.get("WRITE_PSEUDO_SCF", "0"))
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _get_lammps_trajectory_interval(bcar_tags: Dict[str, str]) -> int:
@@ -1741,6 +2858,20 @@ def _temporarily_freeze_atoms(atoms, freeze_required: bool):
             atoms.set_constraint()
         else:
             atoms.set_constraint(original_constraints)
+
+
+@contextmanager
+def _working_directory(path: str):
+    """Temporarily change the current working directory."""
+
+    original_cwd = os.getcwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(original_cwd)
+
+
 def run_relaxation(
     atoms,
     calculator,
@@ -1750,8 +2881,23 @@ def run_relaxation(
     isif: int = 2,
     pstress: float | None = None,
     energy_tolerance: float | None = None,
+    ibrion: int = 2,
+    stress_isif: int | None = None,
+    neb_mode: bool = False,
+    neb_prev_positions: np.ndarray | None = None,
+    neb_next_positions: np.ndarray | None = None,
+    oszicar_pseudo_scf: bool = False,
 ):
     atoms.calc = _resolve_calculator(calculator)
+    recorder = _initialize_vasp_compat_outputs(
+        atoms,
+        ibrion=ibrion,
+        isif=isif if stress_isif is None else stress_isif,
+        neb_mode=neb_mode,
+        write_oszicar_pseudo_scf=oszicar_pseudo_scf,
+        neb_prev_positions=neb_prev_positions,
+        neb_next_positions=neb_next_positions,
+    )
     energies: List[float] = []
     previous_energy: float | None = None
     step_counter = 0
@@ -1773,6 +2919,13 @@ def run_relaxation(
             delta = 0.0 if previous_energy is None else energy - previous_energy
             previous_energy = energy
             step_counter += 1
+            _record_vasp_compat_step(
+                recorder,
+                target,
+                step_index=step_counter,
+                potential_energy=energy,
+                total_energy=energy,
+            )
             print(
                 f"{step_counter:4d} F= {_format_energy_value(energy)} "
                 f"E0= {_format_energy_value(energy)}  d E ={_format_energy_value(delta)}"
@@ -1793,6 +2946,17 @@ def run_relaxation(
 
     target_atoms = getattr(relax_object, "atoms", atoms)
     target_atoms.wrap()
+    if not recorder.steps:
+        fallback_energy = target_atoms.get_potential_energy()
+        _record_vasp_compat_step(
+            recorder,
+            target_atoms,
+            step_index=1,
+            potential_energy=fallback_energy,
+            total_energy=fallback_energy,
+        )
+    _write_vasprun_xml(recorder, target_atoms)
+    _append_outcar_footer(recorder)
     write("CONTCAR", target_atoms, direct=True)
     if write_energy_csv:
         with open("energy.csv", "w", newline="") as csvfile:
@@ -1982,11 +3146,27 @@ def run_md(
     teend: float | None = None,
     smass: float | None = None,
     thermostat_params: Dict[str, float] | None = None,
+    isif: int | None = 0,
+    oszicar_pseudo_scf: bool = False,
+    neb_mode: bool = False,
+    neb_prev_positions: np.ndarray | None = None,
+    neb_next_positions: np.ndarray | None = None,
     write_lammps_traj: bool = False,
     lammps_traj_interval: int = 1,
     lammps_traj_path: str = "lammps.lammpstrj",
 ):
     atoms.calc = _resolve_calculator(calculator)
+    recorder = _initialize_vasp_compat_outputs(
+        atoms,
+        ibrion=0,
+        isif=isif,
+        potim=timestep,
+        mdalgo=mdalgo,
+        write_oszicar_pseudo_scf=oszicar_pseudo_scf,
+        neb_mode=neb_mode,
+        neb_prev_positions=neb_prev_positions,
+        neb_next_positions=neb_next_positions,
+    )
     if temperature <= 0:
         velocities = atoms.get_velocities()
         if velocities is None:
@@ -2050,6 +3230,17 @@ def run_md(
             f"SP= {_format_energy_value(thermostat_potential)} "
             f"SK= {_format_energy_value(thermostat_kinetic)}"
         )
+        _record_vasp_compat_step(
+            recorder,
+            atoms,
+            step_index=md_step,
+            potential_energy=potential_energy,
+            total_energy=total_energy,
+            kinetic_energy=kinetic_energy,
+            thermostat_potential=thermostat_potential,
+            thermostat_kinetic=thermostat_kinetic,
+            temperature=temperature_inst,
+        )
 
     for i in range(steps):
         dyn.run(1)
@@ -2061,13 +3252,140 @@ def run_md(
         if steps > 1 and i + 1 < steps and target_end != temperature:
             next_temp = temperature + (target_end - temperature) * (i + 1) / (steps - 1)
             update_temperature(next_temp)
+    if not recorder.steps:
+        potential_energy = atoms.get_potential_energy()
+        kinetic_energy = 0.0
+        try:
+            kinetic_energy = atoms.get_kinetic_energy()
+        except Exception:
+            kinetic_energy = 0.0
+        _record_vasp_compat_step(
+            recorder,
+            atoms,
+            step_index=1,
+            potential_energy=potential_energy,
+            total_energy=potential_energy + kinetic_energy,
+            kinetic_energy=kinetic_energy,
+            temperature=float(temperature),
+        )
     atoms.wrap()
+    _write_vasprun_xml(recorder, atoms)
+    _append_outcar_footer(recorder)
     write("CONTCAR", atoms, direct=True)
     return atoms.get_potential_energy()
 
 
+def run_neb_images(
+    *,
+    workdir: str,
+    incar,
+    settings: IncarSettings,
+    bcar: Dict[str, str],
+    potcar_path: str | None,
+    write_energy_csv: bool,
+    write_lammps_traj: bool,
+    lammps_traj_interval: int,
+    oszicar_pseudo_scf: bool,
+) -> None:
+    """Run independent per-image calculations for a NEB-like directory layout."""
+
+    workdir_abs = os.path.abspath(workdir)
+    potcar_path_abs = os.path.abspath(potcar_path) if potcar_path else None
+    image_dirs = _discover_neb_image_directories(workdir_abs)
+    if len(image_dirs) < 2:
+        raise RuntimeError(
+            "NEB mode requires numbered image directories (for example 00, 01, 02)."
+        )
+
+    images_hint = _parse_neb_image_count(incar)
+    if images_hint is not None:
+        expected_dirs = images_hint + 2
+        if expected_dirs != len(image_dirs):
+            print(
+                f"Warning: IMAGES={images_hint} implies {expected_dirs} image directories, "
+                f"but found {len(image_dirs)} under {workdir_abs}. Proceeding with discovered directories."
+            )
+
+    total_images = len(image_dirs)
+    image_reference_positions: list[np.ndarray] = []
+    for image_dir in image_dirs:
+        structure_path = _resolve_neb_image_structure_path(image_dir)
+        structure = read_structure(structure_path, potcar_path_abs)
+        image_atoms = AseAtomsAdaptor.get_atoms(structure)
+        image_atoms.wrap()
+        image_reference_positions.append(np.asarray(image_atoms.get_positions(), dtype=float))
+
+    for image_index, image_dir in enumerate(image_dirs, start=1):
+        image_name = os.path.basename(image_dir)
+        structure_path = _resolve_neb_image_structure_path(image_dir)
+        structure = read_structure(structure_path, potcar_path_abs)
+        atoms = AseAtomsAdaptor.get_atoms(structure)
+        atoms.wrap()
+        _apply_initial_magnetization(atoms, incar)
+        calculator = get_calculator(bcar, structure=structure)
+        neb_prev_positions = image_reference_positions[image_index - 2] if image_index > 1 else None
+        neb_next_positions = image_reference_positions[image_index] if image_index < total_images else None
+
+        print(f"Running NEB image {image_name} ({image_index}/{total_images})")
+        with _working_directory(image_dir):
+            if settings.nsw <= 0 or settings.ibrion < 0:
+                run_single_point(
+                    atoms,
+                    calculator,
+                    isif=settings.stress_isif,
+                    oszicar_pseudo_scf=oszicar_pseudo_scf,
+                    neb_mode=True,
+                    neb_prev_positions=neb_prev_positions,
+                    neb_next_positions=neb_next_positions,
+                )
+            elif settings.ibrion == 0:
+                run_md(
+                    atoms,
+                    calculator,
+                    settings.nsw,
+                    settings.tebeg,
+                    settings.potim,
+                    mdalgo=settings.mdalgo,
+                    teend=settings.teend,
+                    smass=settings.smass,
+                    thermostat_params=settings.thermostat_params,
+                    isif=settings.stress_isif,
+                    oszicar_pseudo_scf=oszicar_pseudo_scf,
+                    neb_mode=True,
+                    neb_prev_positions=neb_prev_positions,
+                    neb_next_positions=neb_next_positions,
+                    write_lammps_traj=write_lammps_traj,
+                    lammps_traj_interval=lammps_traj_interval,
+                )
+            else:
+                run_relaxation(
+                    atoms,
+                    calculator,
+                    settings.nsw,
+                    settings.force_limit,
+                    write_energy_csv,
+                    isif=settings.isif,
+                    pstress=settings.pstress,
+                    energy_tolerance=settings.energy_tolerance,
+                    ibrion=settings.ibrion,
+                    stress_isif=settings.stress_isif,
+                    neb_mode=True,
+                    neb_prev_positions=neb_prev_positions,
+                    neb_next_positions=neb_next_positions,
+                    oszicar_pseudo_scf=oszicar_pseudo_scf,
+                )
+    with _working_directory(workdir_abs):
+        image_results = _collect_neb_image_results(image_dirs, potcar_path=potcar_path_abs)
+        _write_neb_parent_aggregate_outputs(
+            workdir=workdir_abs,
+            settings=settings,
+            image_results=image_results,
+            oszicar_pseudo_scf=oszicar_pseudo_scf,
+        )
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Run NNP with VASP style inputs")
+    parser = argparse.ArgumentParser(description="Run MLP with VASP style inputs")
     parser.add_argument("--dir", default=".", help="Input directory")
     args = parser.parse_args()
     workdir = args.dir
@@ -2079,30 +3397,61 @@ def main():
 
     for fname in ["KPOINTS", "WAVECAR", "CHGCAR"]:
         if os.path.exists(os.path.join(workdir, fname)):
-            print(f"Note: {fname} detected but not used in NNP calculations.")
-
-    if not os.path.exists(poscar_path):
-        print("POSCAR not found.")
-        sys.exit(1)
-
-    structure = read_structure(poscar_path, potcar_path if os.path.exists(potcar_path) else None)
-    atoms = AseAtomsAdaptor.get_atoms(structure)
-    atoms.wrap()
+            print(f"Note: {fname} detected but not used in MLP calculations.")
 
     incar = _load_incar(incar_path)
-    _apply_initial_magnetization(atoms, incar)
     bcar = parse_key_value_file(bcar_path) if os.path.exists(bcar_path) else {}
 
     _warn_for_unsupported_incar_tags(incar)
     settings = _load_incar_settings(incar)
+    neb_mode = _is_neb_like_incar(incar)
 
-    calculator = get_calculator(bcar, structure=structure)
     write_energy_csv = _should_write_energy_csv(bcar)
     write_lammps_traj = _should_write_lammps_trajectory(bcar)
+    write_oszicar_pseudo_scf = _should_write_oszicar_pseudo_scf(bcar)
     lammps_traj_interval = _get_lammps_trajectory_interval(bcar) if write_lammps_traj else 1
+    potcar_for_structure = potcar_path if os.path.exists(potcar_path) else None
+
+    if neb_mode:
+        neb_image_dirs = _discover_neb_image_directories(workdir)
+        if neb_image_dirs:
+            run_neb_images(
+                workdir=workdir,
+                incar=incar,
+                settings=settings,
+                bcar=bcar,
+                potcar_path=potcar_for_structure,
+                write_energy_csv=write_energy_csv,
+                write_lammps_traj=write_lammps_traj,
+                lammps_traj_interval=lammps_traj_interval,
+                oszicar_pseudo_scf=write_oszicar_pseudo_scf,
+            )
+            print("Calculation completed.")
+            return
+
+    if not os.path.exists(poscar_path):
+        if neb_mode:
+            print(
+                "POSCAR not found. In NEB mode provide either a top-level POSCAR or "
+                "numbered image directories (00, 01, ...)."
+            )
+        else:
+            print("POSCAR not found.")
+        sys.exit(1)
+
+    structure = read_structure(poscar_path, potcar_for_structure)
+    atoms = AseAtomsAdaptor.get_atoms(structure)
+    atoms.wrap()
+    _apply_initial_magnetization(atoms, incar)
+    calculator = get_calculator(bcar, structure=structure)
 
     if settings.nsw <= 0 or settings.ibrion < 0:
-        run_single_point(atoms, calculator)
+        run_single_point(
+            atoms,
+            calculator,
+            isif=settings.stress_isif,
+            oszicar_pseudo_scf=write_oszicar_pseudo_scf,
+        )
     elif settings.ibrion == 0:
         run_md(
             atoms,
@@ -2114,6 +3463,8 @@ def main():
             teend=settings.teend,
             smass=settings.smass,
             thermostat_params=settings.thermostat_params,
+            isif=settings.stress_isif,
+            oszicar_pseudo_scf=write_oszicar_pseudo_scf,
             write_lammps_traj=write_lammps_traj,
             lammps_traj_interval=lammps_traj_interval,
         )
@@ -2127,6 +3478,10 @@ def main():
             isif=settings.isif,
             pstress=settings.pstress,
             energy_tolerance=settings.energy_tolerance,
+            ibrion=settings.ibrion,
+            stress_isif=settings.stress_isif,
+            neb_mode=neb_mode,
+            oszicar_pseudo_scf=write_oszicar_pseudo_scf,
         )
 
     print("Calculation completed.")

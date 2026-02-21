@@ -1,0 +1,164 @@
+<?xml version='1.0' encoding='utf-8'?>
+<modeling>
+ <generator>
+  <i name="program" type="string">VPMDK</i>
+  <i name="version" type="string">0</i>
+ </generator>
+ <incar>
+  <i name="IBRION" type="int">2</i>
+  <i name="ISIF" type="int">2</i>
+  <i name="NSW" type="int">1</i>
+ </incar>
+ <structure name="primitive_cell">
+  <crystal>
+   <varray name="basis">
+    <v>      3.86697459       0.00000000       0.00000000</v>
+    <v>      1.93348730       3.34889823       0.00000000</v>
+    <v>      1.93348730       1.11629941       3.15737153</v>
+   </varray>
+   <i name="volume">     40.88829091</i>
+   <varray name="rec_basis">
+    <v>      0.25860010      -0.14930283      -0.10557305</v>
+    <v>      0.00000000       0.29860567      -0.10557305</v>
+    <v>      0.00000000       0.00000000       0.31671914</v>
+   </varray>
+  </crystal>
+  <varray name="positions">
+   <v>      0.74999998       0.74999998       0.75000000</v>
+   <v>      0.50000001       0.49999999       0.50000000</v>
+  </varray>
+ </structure>
+ <varray name="primitive_index">
+  <v>        1 </v>
+  <v>        2 </v>
+ </varray>
+ <kpoints>
+  <generation param="Gamma" />
+  <varray name="kpointlist">
+   <v>       0.00000000       0.00000000       0.00000000 </v>
+  </varray>
+  <varray name="weights">
+   <v>       1.00000000 </v>
+  </varray>
+ </kpoints>
+ <parameters>
+  <separator name="electronic">
+   <i name="NELM" type="int">1</i>
+   <i name="NBANDS" type="int">8</i>
+  </separator>
+  <separator name="ionic">
+   <i name="IBRION" type="int">2</i>
+   <i name="ISIF" type="int">2</i>
+   <i name="NSW" type="int">1</i>
+  </separator>
+ </parameters>
+ <atominfo>
+  <atoms>2</atoms>
+  <types>1</types>
+  <array name="atoms">
+   <field type="string">element</field>
+   <set>
+    <rc>
+     <c>Si</c>
+    </rc>
+    <rc>
+     <c>Si</c>
+    </rc>
+   </set>
+  </array>
+  <array name="atomtypes">
+   <field type="int">atomspertype</field>
+   <field type="string">element</field>
+   <field type="float">mass</field>
+   <field type="float">valence</field>
+   <field type="string">pseudopotential</field>
+   <set>
+    <rc>
+     <c>2</c>
+     <c>Si</c>
+     <c>  1.0000</c>
+     <c>  0.0000</c>
+     <c>PAW_PBE Si</c>
+    </rc>
+   </set>
+  </array>
+ </atominfo>
+ <structure name="initialpos">
+  <crystal>
+   <varray name="basis">
+    <v>      3.86697459       0.00000000       0.00000000</v>
+    <v>      1.93348730       3.34889823       0.00000000</v>
+    <v>      1.93348730       1.11629941       3.15737153</v>
+   </varray>
+   <i name="volume">     40.88829091</i>
+   <varray name="rec_basis">
+    <v>      0.25860010      -0.14930283      -0.10557305</v>
+    <v>      0.00000000       0.29860567      -0.10557305</v>
+    <v>      0.00000000       0.00000000       0.31671914</v>
+   </varray>
+  </crystal>
+  <varray name="positions">
+   <v>      0.74999998       0.74999998       0.75000000</v>
+   <v>      0.50000001       0.49999999       0.50000000</v>
+  </varray>
+ </structure>
+ <calculation>
+  <structure>
+   <crystal>
+    <varray name="basis">
+     <v>      3.86697459       0.00000000       0.00000000</v>
+     <v>      1.93348730       3.34889823       0.00000000</v>
+     <v>      1.93348730       1.11629941       3.15737153</v>
+    </varray>
+    <i name="volume">     40.88829091</i>
+    <varray name="rec_basis">
+     <v>      0.25860010      -0.14930283      -0.10557305</v>
+     <v>      0.00000000       0.29860567      -0.10557305</v>
+     <v>      0.00000000       0.00000000       0.31671914</v>
+    </varray>
+   </crystal>
+   <varray name="positions">
+    <v>      0.74999998       0.74999998       0.75000000</v>
+    <v>      0.50000001       0.49999999       0.50000000</v>
+   </varray>
+  </structure>
+  <varray name="forces">
+   <v>      0.00000156       0.00000013       0.00000037</v>
+   <v>     -0.00000156      -0.00000013      -0.00000037</v>
+  </varray>
+  <varray name="stress">
+   <v>      0.00331120      -0.00000001      -0.00000001</v>
+   <v>     -0.00000001       0.00331120      -0.00000000</v>
+   <v>     -0.00000001      -0.00000000       0.00331122</v>
+  </varray>
+  <energy>
+   <i name="e_fr_energy">    -10.82431400</i>
+   <i name="e_wo_entrp">    -10.82431400</i>
+   <i name="e_0_energy">    -10.82431400</i>
+   <i name="kinetic">      0.00000000</i>
+   <i name="nosepot">      0.00000000</i>
+   <i name="nosekinetic">      0.00000000</i>
+   <i name="total">    -10.82431400</i>
+  </energy>
+  <time name="totalsc">    0.00     0.00</time>
+ </calculation>
+ <structure name="finalpos">
+  <crystal>
+   <varray name="basis">
+    <v>      3.86697459       0.00000000       0.00000000</v>
+    <v>      1.93348730       3.34889823       0.00000000</v>
+    <v>      1.93348730       1.11629941       3.15737153</v>
+   </varray>
+   <i name="volume">     40.88829091</i>
+   <varray name="rec_basis">
+    <v>      0.25860010      -0.14930283      -0.10557305</v>
+    <v>      0.00000000       0.29860567      -0.10557305</v>
+    <v>      0.00000000       0.00000000       0.31671914</v>
+   </varray>
+  </crystal>
+  <varray name="positions">
+   <v>      0.74999998       0.74999998       0.75000000</v>
+   <v>      0.50000001       0.49999999       0.50000000</v>
+  </varray>
+ </structure>
+</modeling>

@@ -63,6 +63,15 @@ def test_run_md_executes_multiple_steps(tmp_path, load_atoms):
     assert "CONTCAR" in written
     assert captured["dyn"].steps == [1, 1, 1]
     assert updates == [525.0, 600.0]
+    outcar = (tmp_path / "OUTCAR").read_text()
+    assert "direct lattice vectors                 reciprocal lattice vectors" in outcar
+    assert "k-points in reciprocal lattice and weights" in outcar
+    assert "FORCES: max atom, RMS" in outcar
+    assert "total drift:" in outcar
+    assert "energy  without entropy=" in outcar
+    assert "General timing and accounting informations for this job" in outcar
+    assert (tmp_path / "OSZICAR").exists()
+    assert (tmp_path / "vasprun.xml").exists()
 
 
 def test_get_lammps_interval_rejects_nonpositive():

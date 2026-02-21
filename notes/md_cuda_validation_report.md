@@ -41,7 +41,7 @@ issues/fixes. Matlantis was explicitly excluded from this validation.
 
 - Conda env: `codex_pt`
 - BCAR (key fields):
-  - `NNP=CHGNET`
+  - `MLP=CHGNET`
   - `DEVICE=cuda`
 - Logs: `calc_gpu/chgnet/run.log`
 - Outcome: CUDA MD completed without issues.
@@ -52,7 +52,7 @@ issues/fixes. Matlantis was explicitly excluded from this validation.
 - Special handling:
   - `PYTHONPATH` shim used to ensure correct module discovery.
 - BCAR:
-  - `NNP=SEVENNET`
+  - `MLP=SEVENNET`
   - `DEVICE=cuda`
 - Logs: `calc_gpu/sevennet/run.log`
 - Outcome: CUDA MD completed.
@@ -61,7 +61,7 @@ issues/fixes. Matlantis was explicitly excluded from this validation.
 
 - Conda env: `codex_pt`
 - BCAR:
-  - `NNP=MATTERSIM`
+  - `MLP=MATTERSIM`
   - `DEVICE=cuda`
 - Logs: `calc_gpu/mattersim/run.log`
 - Outcome: CUDA MD completed.
@@ -72,7 +72,7 @@ issues/fixes. Matlantis was explicitly excluded from this validation.
 - Model:
   - `/mnt/d/lin_temp/codex/mace/mace_mp_small.model`
 - BCAR:
-  - `NNP=MACE`
+  - `MLP=MACE`
   - `MODEL=/mnt/d/lin_temp/codex/mace/mace_mp_small.model`
   - `DEVICE=cuda`
 - Logs: `calc_gpu/mace/run.log`
@@ -84,7 +84,7 @@ issues/fixes. Matlantis was explicitly excluded from this validation.
 - Model:
   - `/mnt/d/lin_temp/codex/orb/orb-v3-conservative-20-omat-20250404.ckpt`
 - BCAR:
-  - `NNP=ORB`
+  - `MLP=ORB`
   - `MODEL=/mnt/d/lin_temp/codex/orb/orb-v3-conservative-20-omat-20250404.ckpt`
   - `DEVICE=cuda`
 - Notes:
@@ -106,7 +106,7 @@ issues/fixes. Matlantis was explicitly excluded from this validation.
   - `DGLBACKEND=pytorch`
   - `LD_LIBRARY_PATH` updated to include conda CUDA libs
 - BCAR:
-  - `NNP=MATGL`
+  - `MLP=MATGL`
   - `MODEL=/mnt/d/lin_temp/codex/matgl/M3GNet-MP-2021.2.8-PES`
   - `DEVICE=cuda`
 - Logs: `calc_gpu/matgl/run.log`
@@ -123,7 +123,7 @@ issues/fixes. Matlantis was explicitly excluded from this validation.
 - Fixes:
   - Installed `cuda-nvcc=12.1` in `codex_grace` to provide `ptxas`.
 - BCAR:
-  - `NNP=GRACE`
+  - `MLP=GRACE`
   - `MODEL=/mnt/d/lin_temp/codex/grace/GRACE-2L-MP-r6`
   - `DEVICE=cuda`
 - Logs: `calc_gpu/grace/run.log`
@@ -135,7 +135,7 @@ issues/fixes. Matlantis was explicitly excluded from this validation.
 - Model:
   - `/mnt/d/lin_temp/codex/deepmd/DPA-3.1-3M.pt`
 - BCAR:
-  - `NNP=DEEPMD`
+  - `MLP=DEEPMD`
   - `MODEL=/mnt/d/lin_temp/codex/deepmd/DPA-3.1-3M.pt`
   - `DEEPMD_HEAD=MP_traj_v024_alldata_mixu`
   - `DEVICE=cuda`
@@ -159,7 +159,7 @@ issues/fixes. Matlantis was explicitly excluded from this validation.
 - Compiled model:
   - `/mnt/d/lin_temp/codex/nequip/NequIP-OAM-L-0.1.nequip.pth`
 - BCAR:
-  - `NNP=NEQUIP`
+  - `MLP=NEQUIP`
   - `MODEL=/mnt/d/lin_temp/codex/nequip/NequIP-OAM-L-0.1.nequip.pth`
   - `DEVICE=cuda`
 - Logs: `calc_gpu/nequip/run.log`
@@ -175,7 +175,7 @@ issues/fixes. Matlantis was explicitly excluded from this validation.
 - Compiled model:
   - `/mnt/d/lin_temp/codex/allegro/Allegro-OAM-L-0.1.nequip.pth`
 - BCAR:
-  - `NNP=ALLEGRO`
+  - `MLP=ALLEGRO`
   - `MODEL=/mnt/d/lin_temp/codex/allegro/Allegro-OAM-L-0.1.nequip.pth`
   - `DEVICE=cuda`
 - Logs: `calc_gpu/allegro/run.log`
@@ -187,7 +187,7 @@ issues/fixes. Matlantis was explicitly excluded from this validation.
 - Model:
   - `/mnt/d/lin_temp/codex/fairchem_v1/schnet_200k.pt`
 - BCAR:
-  - `NNP=FAIRCHEM_V1`
+  - `MLP=FAIRCHEM_V1`
   - `MODEL=/mnt/d/lin_temp/codex/fairchem_v1/schnet_200k.pt`
   - `FAIRCHEM_CONFIG=/path/to/config.yml`
   - `DEVICE=cuda`
@@ -202,7 +202,7 @@ issues/fixes. Matlantis was explicitly excluded from this validation.
 - Model:
   - UMA checkpoint (model name): `uma-s-1`
 - BCAR:
-  - `NNP=FAIRCHEM_V2`
+  - `MLP=FAIRCHEM_V2`
   - `MODEL=uma-s-1`
   - `FAIRCHEM_TASK=omat`
   - `DEVICE=cuda`

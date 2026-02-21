@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
+import numpy as np
+import xml.etree.ElementTree as ET
 
 import vpmdk
 from tests.conftest import DummyCalculator
@@ -37,6 +40,317 @@ def test_relaxation_isif2_moves_ions_without_changing_cell(
 
     assert not arrays_close(atoms.get_positions(), initial_positions)
     assert arrays_close(atoms.cell.array, initial_cell)
+    outcar = (tmp_path / "OUTCAR").read_text()
+    assert "direct lattice vectors                 reciprocal lattice vectors" in outcar
+    assert "k-points in reciprocal lattice and weights" in outcar
+    assert "FORCES: max atom, RMS" in outcar
+    assert "total drift:" in outcar
+    assert "energy  without entropy=" in outcar
+    assert "General timing and accounting informations for this job" in outcar
+    assert (tmp_path / "OSZICAR").exists()
+    assert (tmp_path / "vasprun.xml").exists()
+
+
+def test_relaxation_neb_mode_writes_projection_line(tmp_path: Path, load_atoms):
+    atoms = load_atoms()
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+
+        def attach(self, *args, **kwargs):
+            pass
+
+        def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            target.positions += 0.01
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyBFGS)
+    monkeypatch.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_relaxation(
+            atoms,
+            DummyCalculator(),
+            steps=1,
+            fmax=0.01,
+            isif=2,
+            neb_mode=True,
+        )
+    finally:
+        monkeypatch.undo()
+
+    outcar = (tmp_path / "OUTCAR").read_text()
+    assert "NEB: projections on to tangent" in outcar
+    assert "tangential force (eV/A)" in outcar
+    assert "CHAIN + TOTAL  (eV/Angst)" in outcar
+
+
+def test_estimate_neb_chain_approximation_uses_neighbor_displacements():
+    positions = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float)
+    prev = np.array([[-1.0, 0.0, 0.0], [0.0, 0.0, 0.0]], dtype=float)
+    nxt = np.array([[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]], dtype=float)
+    forces = np.array([[2.0, 0.0, 0.0], [4.0, 0.0, 0.0]], dtype=float)
+
+    approx = vpmdk._estimate_neb_chain_approximation(
+        positions=positions,
+        forces=forces,
+        prev_positions=prev,
+        next_positions=nxt,
+    )
+
+    assert approx is not None
+    assert pytest.approx(approx.tangential_force, rel=1e-12) == 4.242640687119286
+    assert np.allclose(
+        approx.chain_force_vectors,
+        np.array([[3.0, 0.0, 0.0], [3.0, 0.0, 0.0]], dtype=float),
+        atol=1e-12,
+    )
+    assert np.allclose(approx.chain_plus_total, np.array([12.0, 0.0, 0.0], dtype=float), atol=1e-12)
+
+
+def test_relaxation_neb_chain_block_uses_neighbor_approximation(tmp_path: Path, load_atoms):
+    atoms = load_atoms()
+
+    class ForceDummyCalculator(DummyCalculator):
+        def calculate(self, atoms=None, properties=("energy",), system_changes=()):
+            super().calculate(atoms=atoms, properties=properties, system_changes=system_changes)
+            count = len(atoms) if atoms is not None else 0
+            self.results["forces"] = np.tile(np.array([[1.0, 0.0, 0.0]], dtype=float), (count, 1))
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+            self._callbacks = []
+
+        def attach(self, callback, *args, **kwargs):
+            self._callbacks.append(callback)
+
+        def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            target.positions += 0.01
+            for callback in self._callbacks:
+                callback()
+
+    neighbor_delta = np.array([0.2, 0.0, 0.0], dtype=float)
+    prev_positions = atoms.get_positions() - neighbor_delta
+    next_positions = atoms.get_positions() + neighbor_delta
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyBFGS)
+    monkeypatch.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_relaxation(
+            atoms,
+            ForceDummyCalculator(),
+            steps=1,
+            fmax=0.01,
+            isif=2,
+            neb_mode=True,
+            neb_prev_positions=prev_positions,
+            neb_next_positions=next_positions,
+        )
+    finally:
+        monkeypatch.undo()
+
+    outcar = (tmp_path / "OUTCAR").read_text()
+    match = re.search(r"tangential force \(eV/A\)\s+([-+0-9.]+)", outcar)
+    assert match is not None
+    assert abs(float(match.group(1))) > 1.0e-6
+    assert " 4.00000" in outcar
+
+
+def test_relaxation_oszicar_pseudo_scf_is_off_by_default(tmp_path: Path, load_atoms):
+    atoms = load_atoms()
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+            self._callbacks = []
+
+        def attach(self, callback, *args, **kwargs):
+            self._callbacks.append(callback)
+
+        def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            target.positions += 0.01
+            for callback in self._callbacks:
+                callback()
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyBFGS)
+    monkeypatch.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_relaxation(
+            atoms,
+            DummyCalculator(),
+            steps=1,
+            fmax=0.01,
+            isif=2,
+        )
+    finally:
+        monkeypatch.undo()
+
+    oszicar = (tmp_path / "OSZICAR").read_text()
+    assert "DAV:" not in oszicar
+    assert "N       E" not in oszicar
+
+
+def test_relaxation_oszicar_pseudo_scf_is_written_when_enabled(tmp_path: Path, load_atoms):
+    atoms = load_atoms()
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+            self._callbacks = []
+
+        def attach(self, callback, *args, **kwargs):
+            self._callbacks.append(callback)
+
+        def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            target.positions += 0.01
+            for callback in self._callbacks:
+                callback()
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyBFGS)
+    monkeypatch.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_relaxation(
+            atoms,
+            DummyCalculator(),
+            steps=1,
+            fmax=0.01,
+            isif=2,
+            oszicar_pseudo_scf=True,
+        )
+    finally:
+        monkeypatch.undo()
+
+    oszicar = (tmp_path / "OSZICAR").read_text()
+    assert "DAV:" in oszicar
+    assert "N       E" in oszicar
+
+
+def test_relaxation_writes_stress_block_when_isif_allows(tmp_path: Path, load_atoms):
+    atoms = load_atoms()
+    class StressDummyCalculator(DummyCalculator):
+        def calculate(self, atoms=None, properties=("energy",), system_changes=()):
+            super().calculate(atoms=atoms, properties=properties, system_changes=system_changes)
+            self.results["stress"] = np.zeros(6, dtype=float)
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+
+        def attach(self, *args, **kwargs):
+            pass
+
+        def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            target.positions += 0.01
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyBFGS)
+    monkeypatch.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_relaxation(
+            atoms,
+            StressDummyCalculator(),
+            steps=1,
+            fmax=0.01,
+            isif=2,
+            stress_isif=2,
+        )
+    finally:
+        monkeypatch.undo()
+
+    outcar = (tmp_path / "OUTCAR").read_text()
+    assert "FORCE on cell =-STRESS in cart. coord." in outcar
+    assert "external pressure" in outcar
+
+
+def test_relaxation_omits_stress_block_when_isif_zero(tmp_path: Path, load_atoms):
+    atoms = load_atoms()
+    class StressDummyCalculator(DummyCalculator):
+        def calculate(self, atoms=None, properties=("energy",), system_changes=()):
+            super().calculate(atoms=atoms, properties=properties, system_changes=system_changes)
+            self.results["stress"] = np.zeros(6, dtype=float)
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+
+        def attach(self, *args, **kwargs):
+            pass
+
+        def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            target.positions += 0.01
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyBFGS)
+    monkeypatch.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_relaxation(
+            atoms,
+            StressDummyCalculator(),
+            steps=1,
+            fmax=0.01,
+            isif=2,
+            stress_isif=0,
+        )
+    finally:
+        monkeypatch.undo()
+
+    outcar = (tmp_path / "OUTCAR").read_text()
+    assert "FORCE on cell =-STRESS in cart. coord." not in outcar
+
+
+def test_relaxation_vasprun_includes_kpoints_and_timing(tmp_path: Path, load_atoms):
+    atoms = load_atoms()
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+
+        def attach(self, *args, **kwargs):
+            pass
+
+        def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            target.positions += 0.01
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyBFGS)
+    monkeypatch.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_relaxation(
+            atoms,
+            DummyCalculator(),
+            steps=1,
+            fmax=0.01,
+            isif=2,
+            stress_isif=2,
+        )
+    finally:
+        monkeypatch.undo()
+
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    assert root.find("kpoints") is not None
+    assert root.find("./structure[@name='primitive_cell']") is not None
+    assert root.find("./varray[@name='primitive_index']") is not None
+    first_calc = root.find("calculation")
+    assert first_calc is not None
+    assert first_calc.find("./time[@name='totalsc']") is not None
 
 
 def test_relaxation_isif3_moves_ions_and_cell(tmp_path: Path, load_atoms, arrays_close):
