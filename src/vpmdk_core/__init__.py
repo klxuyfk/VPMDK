@@ -3322,7 +3322,8 @@ def run_neb_images(
         atoms = AseAtomsAdaptor.get_atoms(structure)
         atoms.wrap()
         _apply_initial_magnetization(atoms, incar)
-        calculator = get_calculator(bcar, structure=structure)
+        with _working_directory(workdir_abs):
+            calculator = get_calculator(bcar, structure=structure)
         neb_prev_positions = image_reference_positions[image_index - 2] if image_index > 1 else None
         neb_next_positions = image_reference_positions[image_index] if image_index < total_images else None
 
