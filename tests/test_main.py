@@ -947,6 +947,70 @@ def test_main_neb_runner_parent_aggregate_supports_relative_workdir(
     assert len(root.findall("calculation")) == 3
 
 
+def test_main_neb_runner_initializes_calculator_from_run_dir_for_relative_model_path(
+    tmp_path: Path, prepare_inputs
+):
+    run_dir = tmp_path / "runs" / "neb_model"
+    run_dir.mkdir(parents=True)
+    prepare_inputs(
+        run_dir,
+        potential="NEQUIP",
+        incar_overrides={"NSW": "1", "IBRION": "2", "IMAGES": "1"},
+        extra_bcar={"MODEL": "./model/nequip.pth"},
+    )
+
+    poscar_text = (run_dir / "POSCAR").read_text()
+    for image in ("00", "01", "02"):
+        image_dir = run_dir / image
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(poscar_text)
+
+    model_dir = run_dir / "model"
+    model_dir.mkdir()
+    (model_dir / "nequip.pth").write_text("dummy")
+
+    seen_cwds: list[Path] = []
+    seen_models: list[str | None] = []
+
+    def fake_get_calculator(tags, *, structure=None):
+        seen_cwds.append(Path.cwd())
+        seen_models.append(tags.get("MODEL"))
+        return DummyCalculator()
+
+    def fake_run_relaxation(
+        atoms,
+        calculator,
+        steps,
+        fmax,
+        write_energy_csv=False,
+        isif=2,
+        pstress=None,
+        energy_tolerance=None,
+        ibrion=2,
+        stress_isif=None,
+        neb_mode=False,
+        neb_prev_positions=None,
+        neb_next_positions=None,
+        oszicar_pseudo_scf=False,
+    ):
+        return 0.0
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "get_calculator", fake_get_calculator)
+    monkeypatch.setattr(vpmdk, "run_relaxation", fake_run_relaxation)
+    monkeypatch.setattr(vpmdk, "_collect_neb_image_results", lambda *_, **__: [])
+    monkeypatch.setattr(vpmdk, "_write_neb_parent_aggregate_outputs", lambda **_: None)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", "runs/neb_model"])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen_cwds == [run_dir, run_dir, run_dir]
+    assert seen_models == ["./model/nequip.pth"] * 3
+
+
 def test_main_neb_runner_passes_absolute_potcar_to_collect_results(
     tmp_path: Path, prepare_inputs
 ):
