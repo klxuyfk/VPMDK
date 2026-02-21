@@ -54,7 +54,7 @@ The script reads a subset of common VASP `INCAR` settings. Other tags are ignore
 | `NSW` | Number of ionic steps. | `0` (single-point calculation). |
 | `IBRION` | Ionic movement algorithm. | `<0` performs a single-point calculation without moving ions, `0` runs molecular dynamics, positive values trigger a BFGS geometry optimisation with a fixed cell. Defaults to `-1`. |
 | `ISIF` | Controls whether the cell changes during relaxations. | `2` keeps the cell fixed (default). `3` relaxes ions and the full cell, `4` keeps the volume constant while optimising ions and the cell shape, `5` optimises the cell shape at constant volume with fixed ions, `6` changes only the cell, `7` enables isotropic cell changes with fixed ions, and `8` couples ionic relaxations to isotropic volume changes. Stress output follows VASP-style semantics: `ISIF<=0` omits stress blocks, `ISIF=1` writes trace-only pressure information, and `ISIF>=2` writes the full stress tensor block. Unsupported values fall back to `2` behavior with a warning. |
-| `EDIFFG` | Convergence criterion for relaxations. | `<0`: force criterion using `abs(EDIFFG)` in eV/Å (default `-0.02`). `>0`: energy criterion using `EDIFFG` in eV (`|ΔE|` between ionic steps). |
+| `EDIFFG` | Convergence criterion for relaxations. | `<0`: force criterion using `abs(EDIFFG)` in eV/Å (default `-0.02`). `>0`: energy criterion using `EDIFFG` in eV (`abs(ΔE)` between ionic steps). |
 | `TEBEG` | Initial temperature in kelvin for molecular dynamics (`IBRION=0`). | `300`. |
 | `TEEND` | Final temperature in kelvin when ramping MD runs. | Same as `TEBEG`. Temperature is linearly ramped between `TEBEG` and `TEEND` over the MD steps. |
 | `POTIM` | Time step in femtoseconds for molecular dynamics (`IBRION=0`). | `2`. |
