@@ -79,8 +79,10 @@ def _assert_outputs(calc_dir: Path) -> None:
 
 @pytest.mark.integration
 def test_md_chgnet_required(tmp_path: Path, data_dir: Path) -> None:
+    if vpmdk.CHGNetCalculator is None:
+        pytest.skip("chgnet is not installed.")
     _require_cuda()
-    bcar = "NNP=CHGNET\nDEVICE=cuda\n"
+    bcar = "MLP=CHGNET\nDEVICE=cuda\n"
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)
     _assert_outputs(tmp_path)
@@ -94,7 +96,7 @@ def test_md_mace_required(tmp_path: Path, data_dir: Path) -> None:
         pytest.skip("Set VPMDK_MACE_MODEL to run MACE integration.")
     if not Path(model_path).exists():
         pytest.fail(f"MACE model not found: {model_path}")
-    bcar = f"NNP=MACE\nMODEL={model_path}\nDEVICE=cuda\n"
+    bcar = f"MLP=MACE\nMODEL={model_path}\nDEVICE=cuda\n"
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)
     _assert_outputs(tmp_path)
@@ -110,7 +112,7 @@ def test_md_matgl_optional(tmp_path: Path, data_dir: Path) -> None:
         pytest.skip("Set VPMDK_MATGL_MODEL to run MatGL integration.")
     if not Path(model_path).exists():
         pytest.fail(f"MatGL model not found: {model_path}")
-    bcar = f"NNP=MATGL\nMODEL={model_path}\nDEVICE=cuda\n"
+    bcar = f"MLP=MATGL\nMODEL={model_path}\nDEVICE=cuda\n"
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)
     _assert_outputs(tmp_path)
@@ -126,7 +128,7 @@ def test_md_grace_optional(tmp_path: Path, data_dir: Path) -> None:
         pytest.skip("Set VPMDK_GRACE_MODEL to run GRACE integration.")
     if not Path(model_path).exists():
         pytest.fail(f"GRACE model not found: {model_path}")
-    bcar = f"NNP=GRACE\nMODEL={model_path}\nDEVICE=cuda\n"
+    bcar = f"MLP=GRACE\nMODEL={model_path}\nDEVICE=cuda\n"
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)
     _assert_outputs(tmp_path)
@@ -143,7 +145,7 @@ def test_md_deepmd_optional(tmp_path: Path, data_dir: Path) -> None:
     if not Path(model_path).exists():
         pytest.fail(f"DeePMD model not found: {model_path}")
     head = os.environ.get("VPMDK_DEEPMD_HEAD", "")
-    bcar_lines = ["NNP=DEEPMD", f"MODEL={model_path}", "DEVICE=cuda"]
+    bcar_lines = ["MLP=DEEPMD", f"MODEL={model_path}", "DEVICE=cuda"]
     if head:
         bcar_lines.append(f"DEEPMD_HEAD={head}")
     bcar = "\n".join(bcar_lines) + "\n"
@@ -162,7 +164,7 @@ def test_md_nequip_optional(tmp_path: Path, data_dir: Path) -> None:
         pytest.skip("Set VPMDK_NEQUIP_MODEL to run NequIP integration.")
     if not Path(model_path).exists():
         pytest.fail(f"NequIP model not found: {model_path}")
-    bcar = f"NNP=NEQUIP\nMODEL={model_path}\nDEVICE=cuda\n"
+    bcar = f"MLP=NEQUIP\nMODEL={model_path}\nDEVICE=cuda\n"
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)
     _assert_outputs(tmp_path)
@@ -178,7 +180,7 @@ def test_md_allegro_optional(tmp_path: Path, data_dir: Path) -> None:
         pytest.skip("Set VPMDK_ALLEGRO_MODEL to run Allegro integration.")
     if not Path(model_path).exists():
         pytest.fail(f"Allegro model not found: {model_path}")
-    bcar = f"NNP=ALLEGRO\nMODEL={model_path}\nDEVICE=cuda\n"
+    bcar = f"MLP=ALLEGRO\nMODEL={model_path}\nDEVICE=cuda\n"
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)
     _assert_outputs(tmp_path)
@@ -194,7 +196,7 @@ def test_md_orb_optional(tmp_path: Path, data_dir: Path) -> None:
         pytest.skip("Set VPMDK_ORB_MODEL to run ORB integration.")
     if not Path(model_path).exists():
         pytest.fail(f"ORB model not found: {model_path}")
-    bcar = f"NNP=ORB\nMODEL={model_path}\nDEVICE=cuda\n"
+    bcar = f"MLP=ORB\nMODEL={model_path}\nDEVICE=cuda\n"
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)
     _assert_outputs(tmp_path)
@@ -211,7 +213,7 @@ def test_md_fairchem_v2_optional(tmp_path: Path, data_dir: Path) -> None:
     if os.path.sep in model_value and not Path(model_value).exists():
         pytest.fail(f"FAIRChem model not found: {model_value}")
     task = os.environ.get("VPMDK_FAIRCHEM_TASK", "")
-    bcar_lines = ["NNP=FAIRCHEM_V2", f"MODEL={model_value}", "DEVICE=cuda"]
+    bcar_lines = ["MLP=FAIRCHEM_V2", f"MODEL={model_value}", "DEVICE=cuda"]
     if task:
         bcar_lines.append(f"FAIRCHEM_TASK={task}")
     bcar = "\n".join(bcar_lines) + "\n"

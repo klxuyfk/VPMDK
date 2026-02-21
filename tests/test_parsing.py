@@ -28,7 +28,7 @@ def test_incar_parsing_handles_case_whitespace_and_comments(tmp_path: Path):
 def test_bcar_parsing_handles_case_whitespace_and_comments(tmp_path: Path):
     bcar_content = """
     # initial comment
-      nnp = mace   # inline comment
+      mlp = mace   # inline comment
     Model = /path/to/model.nn  ! trailing comment
     WRITE_energy_csv = On
     """
@@ -37,9 +37,129 @@ def test_bcar_parsing_handles_case_whitespace_and_comments(tmp_path: Path):
 
     tags = vpmdk.parse_key_value_file(str(path))
 
-    assert tags["NNP"] == "mace"
+    assert tags["MLP"] == "mace"
     assert tags["MODEL"] == "/path/to/model.nn"
     assert tags["WRITE_ENERGY_CSV"] == "On"
+
+
+def test_bcar_parsing_maps_legacy_nnp_to_mlp(tmp_path: Path):
+    path = tmp_path / "BCAR"
+    path.write_text("NNP=CHGNET\n")
+
+    tags = vpmdk.parse_key_value_file(str(path))
+
+    assert tags["MLP"] == "CHGNET"
+    assert tags["NNP"] == "CHGNET"
+
+
+def test_bcar_parsing_prefers_mlp_over_legacy_nnp(tmp_path: Path):
+    path = tmp_path / "BCAR"
+    path.write_text("MLP=MATGL\nNNP=CHGNET\n")
+
+    tags = vpmdk.parse_key_value_file(str(path))
+
+    assert tags["MLP"] == "MATGL"
+    assert tags["NNP"] == "CHGNET"
+
+
+def test_get_calculator_accepts_legacy_nnp_tag(monkeypatch: pytest.MonkeyPatch):
+    class DummyCHGNet:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(vpmdk, "CHGNetCalculator", DummyCHGNet)
+
+    calculator = vpmdk.get_calculator({"NNP": "CHGNET"})
+
+    assert isinstance(calculator, DummyCHGNet)
+
+
+def test_get_calculator_rejects_explicit_empty_backend_tags(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class DummyCHGNet:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(vpmdk, "CHGNetCalculator", DummyCHGNet)
+
+    with pytest.raises(ValueError, match="MLP"):
+        vpmdk.get_calculator({"MLP": ""})
+
+    with pytest.raises(ValueError, match="NNP"):
+        vpmdk.get_calculator({"NNP": "  "})
+
+
+@pytest.mark.parametrize(
+    "tags, expected",
+    [
+        ({"WRITE_OSZICAR_PSEUDO_SCF": "1"}, True),
+        ({"WRITE_OSZICAR_PSEUDO_SCF": "on"}, True),
+        ({"WRITE_PSEUDO_SCF": "yes"}, True),
+        ({}, False),
+        ({"WRITE_OSZICAR_PSEUDO_SCF": "off"}, False),
+    ],
+)
+def test_should_write_oszicar_pseudo_scf(tags, expected):
+    assert vpmdk._should_write_oszicar_pseudo_scf(tags) is expected
+
+
+def test_collect_neb_image_results_prefers_contcar_for_geometry(tmp_path: Path):
+    image_dir = tmp_path / "00"
+    image_dir.mkdir()
+
+    poscar_text = """Si2
+1.0
+        3.8669745922         0.0000000000         0.0000000000
+        1.9334872961         3.3488982326         0.0000000000
+        1.9334872961         1.1162994109         3.1573715331
+   Si
+    2
+Direct
+     0.750000000         0.750000000         0.750000000
+     0.500000000         0.500000000         0.500000000
+"""
+    contcar_text = """Si2
+1.0
+        3.8669745922         0.0000000000         0.0000000000
+        1.9334872961         3.3488982326         0.0000000000
+        1.9334872961         1.1162994109         3.1573715331
+   Si
+    2
+Direct
+     0.250000000         0.750000000         0.750000000
+     0.500000000         0.500000000         0.500000000
+"""
+    (image_dir / "POSCAR").write_text(poscar_text)
+    (image_dir / "CONTCAR").write_text(contcar_text)
+
+    results = vpmdk._collect_neb_image_results([str(image_dir)], potcar_path=None)
+
+    assert len(results) == 1
+    scaled = results[0].atoms.get_scaled_positions()
+    assert scaled[0][0] == pytest.approx(0.25, rel=1e-12, abs=1e-12)
+
+
+def test_collect_neb_image_results_raises_on_malformed_vasprun(tmp_path: Path):
+    image_dir = tmp_path / "00"
+    image_dir.mkdir()
+
+    poscar_text = """Si2
+1.0
+        3.8669745922         0.0000000000         0.0000000000
+        1.9334872961         3.3488982326         0.0000000000
+        1.9334872961         1.1162994109         3.1573715331
+   Si
+    2
+Direct
+     0.750000000         0.750000000         0.750000000
+     0.500000000         0.500000000         0.500000000
+"""
+    (image_dir / "POSCAR").write_text(poscar_text)
+    (image_dir / "vasprun.xml").write_text("<modeling><calculation></modeling>")
+
+    with pytest.raises(RuntimeError, match="Failed to parse NEB image vasprun.xml"):
+        vpmdk._collect_neb_image_results([str(image_dir)], potcar_path=None)
 
 
 @pytest.mark.parametrize(
@@ -98,7 +218,7 @@ def test_build_orb_calculator_uses_bcar_tags(monkeypatch: pytest.MonkeyPatch):
 
     calculator = vpmdk._build_orb_calculator(
         {
-            "NNP": "ORB",
+            "MLP": "ORB",
             "MODEL": "weights.ckpt",
             "DEVICE": "cuda:1",
             "ORB_MODEL": "custom",
@@ -129,7 +249,7 @@ def test_build_chgnet_calculator_respects_device(
     monkeypatch.setattr(vpmdk, "CHGNetCalculator", DummyCHGNet)
 
     calculator = vpmdk._build_chgnet_calculator(
-        {"NNP": "CHGNET", "MODEL": str(model_path), "DEVICE": "cpu"}
+        {"MLP": "CHGNET", "MODEL": str(model_path), "DEVICE": "cpu"}
     )
 
     assert isinstance(calculator, DummyCHGNet)
@@ -154,7 +274,7 @@ def test_build_m3gnet_calculator_respects_device(
     monkeypatch.setattr(vpmdk, "_USING_LEGACY_M3GNET", False)
 
     calculator = vpmdk._build_m3gnet_calculator(
-        {"NNP": "M3GNET", "MODEL": str(model_path), "DEVICE": "cuda:0"}
+        {"MLP": "M3GNET", "MODEL": str(model_path), "DEVICE": "cuda:0"}
     )
 
     assert isinstance(calculator, DummyM3GNet)
@@ -177,7 +297,7 @@ def test_build_deepmd_calculator_infers_type_map(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(vpmdk, "DeePMDCalculator", DummyDeePMD)
 
     calculator = vpmdk._build_deepmd_calculator(
-        {"NNP": "DEEPMD", "MODEL": str(model_path)}, structure=structure
+        {"MLP": "DEEPMD", "MODEL": str(model_path)}, structure=structure
     )
 
     assert isinstance(calculator, DummyDeePMD)

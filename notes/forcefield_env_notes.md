@@ -8,7 +8,7 @@ with your PyTorch/JAX builds.
 ## FAIRChem v1 vs v2 (non-compatible)
 
 FAIRChem 1.x and 2.x are not compatible in the same environment. Use separate
-environments and select `NNP=FAIRCHEM_V1` or `NNP=FAIRCHEM`/`FAIRCHEM_V2` as
+environments and select `MLP=FAIRCHEM_V1` or `MLP=FAIRCHEM`/`FAIRCHEM_V2` as
 appropriate. For a detailed v1 recipe (with SciPy pinning and PyG extras),
 see `notes/fairchem_v1_env_setup.md`.
 
@@ -28,7 +28,7 @@ export HF_HOME=/path/to/hf-cache
 `FAIRCHEM_TASK` is often required to select the correct head.
 
 ```text
-NNP=FAIRCHEM_V2
+MLP=FAIRCHEM_V2
 MODEL=uma-s-1
 FAIRCHEM_TASK=omat
 ```
@@ -56,7 +56,7 @@ export DGLBACKEND=pytorch
 ```
 
 ```text
-NNP=MATGL
+MLP=MATGL
 MODEL=/path/to/M3GNet-MP-2021.2.8-PES
 ```
 
@@ -97,7 +97,7 @@ probing. If you see `MPI` load errors, adjust this setting.
 ### 3. Use `DEEPMD_HEAD` for multi-head checkpoints
 
 ```text
-NNP=DEEPMD
+MLP=DEEPMD
 MODEL=/path/to/DPA-*.pt
 DEEPMD_HEAD=MP_traj_v024_alldata_mixu
 ```
@@ -121,7 +121,7 @@ nequip-compile \
 ### 2. Use the compiled model in BCAR
 
 ```text
-NNP=NEQUIP
+MLP=NEQUIP
 MODEL=/path/to/model.pth
 ```
 
@@ -133,6 +133,6 @@ MODEL=/path/to/model.pth
 local checkpoints are often faster for repeated testing.
 
 ```text
-NNP=ORB
+MLP=ORB
 MODEL=/path/to/orb-model.ckpt
 ```
