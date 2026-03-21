@@ -786,6 +786,43 @@ def test_main_single_point_writes_contcar_into_selected_run_dir(
     assert not (tmp_path / "vasprun.xml").exists()
 
 
+def test_main_initializes_non_neb_calculator_from_selected_run_dir_for_relative_model_path(
+    tmp_path: Path, prepare_inputs
+):
+    run_dir = tmp_path / "runs" / "single_model"
+    run_dir.mkdir(parents=True)
+    prepare_inputs(
+        run_dir,
+        potential="NEQUIP",
+        incar_overrides={"NSW": "0"},
+        extra_bcar={"MODEL": "./model/nequip.pth"},
+    )
+
+    model_dir = run_dir / "model"
+    model_dir.mkdir()
+    (model_dir / "nequip.pth").write_text("dummy")
+
+    seen: dict[str, object] = {}
+
+    def fake_get_calculator(tags, *, structure=None):
+        seen["cwd"] = Path.cwd()
+        seen["model"] = tags.get("MODEL")
+        return DummyCalculator()
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "get_calculator", fake_get_calculator)
+    monkeypatch.setattr(vpmdk, "run_single_point", lambda *_, **__: 0.0)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", "runs/single_model"])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen.get("cwd") == run_dir
+    assert seen.get("model") == "./model/nequip.pth"
+
+
 def test_main_md_writes_outputs_into_selected_run_dir(tmp_path: Path, prepare_inputs):
     run_dir = tmp_path / "run"
     run_dir.mkdir()

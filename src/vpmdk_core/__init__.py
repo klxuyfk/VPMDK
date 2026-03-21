@@ -3658,7 +3658,8 @@ def main():
         atoms = AseAtomsAdaptor.get_atoms(structure)
         atoms.wrap()
         _apply_initial_magnetization(atoms, incar)
-        calculator = get_calculator(bcar, structure=structure)
+        with _working_directory(workdir_abs):
+            calculator = get_calculator(bcar, structure=structure)
 
         if settings.nsw <= 0 or settings.ibrion < 0:
             with _working_directory(workdir_abs):
