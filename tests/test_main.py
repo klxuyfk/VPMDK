@@ -659,6 +659,38 @@ def test_main_suppresses_pseudo_scf_incar_warnings_when_enabled(
     assert not any("INCAR tag EDIFF is not supported" in message for message in messages)
 
 
+def test_main_default_vasprun_does_not_echo_ignored_pseudo_scf_tags(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0", "NELM": "37", "NELMIN": "4", "EDIFF": "5E-07"},
+    )
+
+    messages: list[str] = []
+
+    def fake_print(*args, **kwargs):
+        sep = kwargs.get("sep", " ")
+        end = kwargs.get("end", "\n")
+        messages.append(sep.join(str(a) for a in args) + end)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr("builtins.print", fake_print)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    assert any("INCAR tag NELM is not supported" in message for message in messages)
+    assert root.find("./incar/i[@name='NELM']") is None
+    assert root.find("./parameters/separator[@name='electronic']/i[@name='NELM']").text.strip() == "60"
+
+
 def test_main_pseudo_scf_uses_selected_run_incar_from_dir_argument(
     tmp_path: Path, prepare_inputs
 ):
@@ -720,6 +752,30 @@ def test_main_pseudo_scf_uses_selected_run_incar_from_dir_argument(
     assert root.find("./incar/i[@name='NELM']").text.strip() == "37"
     assert root.find("./incar/i[@name='NELMIN']").text.strip() == "4"
     assert root.find("./incar/i[@name='EDIFF']").text.strip() == "5.00000000E-07"
+
+
+def test_main_single_point_writes_contcar_into_selected_run_dir(
+    tmp_path: Path, prepare_inputs
+):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    prepare_inputs(
+        run_dir,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0"},
+    )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(run_dir)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert (run_dir / "CONTCAR").exists()
+    assert not (tmp_path / "CONTCAR").exists()
 
 
 def test_main_runs_neb_images_from_numbered_directories(tmp_path: Path, prepare_inputs):

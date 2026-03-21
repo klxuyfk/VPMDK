@@ -208,11 +208,11 @@ def test_relaxation_oszicar_pseudo_scf_is_off_by_default(tmp_path: Path, load_at
     assert "Voluntary context switches" in outcar
     assert electronic is not None
     assert root.find("./parameters/separator[@name='electronic convergence']") is None
+    assert root.find("./incar/i[@name='NELM']") is None
     assert electronic.find("./i[@name='NELM']") is not None
     assert electronic.find("./i[@name='NELMIN']") is None
     assert electronic.find("./i[@name='EDIFF']") is None
     assert electronic.find("./i[@name='NBANDS']") is None
-    assert root.find("./incar/i[@name='NELM']") is not None
     assert root.find("./incar/i[@name='NELMIN']") is None
     assert root.find(".//scstep/energy") is not None
     assert root.find("./calculation/time[@name='totalsc']") is not None
