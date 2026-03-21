@@ -218,6 +218,7 @@ def test_relaxation_oszicar_pseudo_scf_is_off_by_default(tmp_path: Path, load_at
 
 def test_relaxation_oszicar_pseudo_scf_is_written_when_enabled(tmp_path: Path, load_atoms):
     atoms = load_atoms()
+    (tmp_path / "INCAR").write_text("NELM = 37\nNELMIN = 4\nNELMDL = -3\nEDIFF = 5E-07\n")
 
     class DummyBFGS:
         def __init__(self, obj, logfile=None):
@@ -255,15 +256,52 @@ def test_relaxation_oszicar_pseudo_scf_is_written_when_enabled(tmp_path: Path, l
     electronic = root.find("./parameters/separator[@name='electronic']")
     assert "DAV:" in oszicar
     assert "N       E" in oszicar
-    assert "NELM   =" in outcar
+    assert "NELM   =     37;" in outcar
     assert "Iteration      1(   1)" in outcar
     assert electronic is not None
     assert root.find("./parameters/separator[@name='electronic convergence']") is None
     assert electronic.find("./i[@name='NBANDS']") is not None
-    assert electronic.find("./i[@name='NELM']") is not None
+    assert electronic.find("./i[@name='NELM']").text.strip() == "37"
+    assert electronic.find("./i[@name='NELMIN']").text.strip() == "4"
+    assert electronic.find("./i[@name='NELMDL']").text.strip() == "-3"
+    assert electronic.find("./i[@name='EDIFF']").text.strip() == "5.00000000E-07"
+    assert root.find("./incar/i[@name='NELM']").text.strip() == "37"
+    assert root.find("./incar/i[@name='NELMIN']").text.strip() == "4"
+    assert root.find("./incar/i[@name='NELMDL']").text.strip() == "-3"
+    assert root.find("./incar/i[@name='EDIFF']").text.strip() == "5.00000000E-07"
     assert root.find(".//scstep") is not None
     assert root.find(".//i[@name='NELM']") is not None
     assert root.find("./calculation/time[@name='totalsc']") is not None
+
+
+def test_single_point_oszicar_pseudo_scf_reads_local_incar_when_enabled(
+    tmp_path: Path, load_atoms
+):
+    atoms = load_atoms()
+    (tmp_path / "INCAR").write_text("NELM = 41\nNELMIN = 3\nNELMDL = -2\nEDIFF = 1E-06\n")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    try:
+        vpmdk.run_single_point(
+            atoms,
+            DummyCalculator(),
+            oszicar_pseudo_scf=True,
+        )
+    finally:
+        monkeypatch.undo()
+
+    outcar = (tmp_path / "OUTCAR").read_text()
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    electronic = root.find("./parameters/separator[@name='electronic']")
+    assert "NELM   =     41;" in outcar
+    assert electronic is not None
+    assert electronic.find("./i[@name='NELM']").text.strip() == "41"
+    assert electronic.find("./i[@name='NELMIN']").text.strip() == "3"
+    assert electronic.find("./i[@name='NELMDL']").text.strip() == "-2"
+    assert root.find("./incar/i[@name='EDIFF']").text.strip() == "1.00000000E-06"
+
+
 def test_relaxation_writes_stress_block_when_isif_allows(tmp_path: Path, load_atoms):
     atoms = load_atoms()
     class StressDummyCalculator(DummyCalculator):
