@@ -1182,10 +1182,10 @@ def _format_outcar_ediff(value: float) -> str:
 
     if value == 0.0:
         return "0.0E+00"
-    mantissa_text, exponent_text = f"{value:.1E}".split("E")
-    mantissa = float(mantissa_text) / 10.0
+    mantissa_text, exponent_text = f"{value:.8E}".split("E")
+    digits = mantissa_text.replace(".", "").rstrip("0")
     exponent = int(exponent_text) + 1
-    return f"{mantissa:.1f}E{exponent:+03d}"
+    return f"0.{digits or '0'}E{exponent:+03d}"
 
 
 def _initialize_vasp_compat_outputs(
@@ -2549,12 +2549,16 @@ def _load_incar(path: str):
 def _warn_for_unsupported_incar_tags(incar, *, pseudo_scf_enabled: bool = False) -> None:
     """Emit warnings for INCAR options that are silently ignored."""
 
-    supported_tags = (
-        SUPPORTED_INCAR_TAGS | _PSEUDO_SCF_INCAR_TAGS
-        if pseudo_scf_enabled
-        else SUPPORTED_INCAR_TAGS
-    )
+    supported_tags = SUPPORTED_INCAR_TAGS
     for key in getattr(incar, "keys", lambda: [])():
+        if key in supported_tags:
+            continue
+        if pseudo_scf_enabled and key in _PSEUDO_SCF_INCAR_TAGS:
+            print(
+                f"Warning: INCAR tag {key} does not affect the run and is used only "
+                "for pseudo-SCF compatibility output"
+            )
+            continue
         if key not in supported_tags:
             print(f"INCAR tag {key} is not supported and will be ignored")
 

@@ -104,6 +104,19 @@ def test_should_write_pseudo_scf(tags, expected):
     assert vpmdk._should_write_pseudo_scf(tags) is expected
 
 
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (0.0, "0.0E+00"),
+        (5.0e-7, "0.5E-06"),
+        (2.5e-6, "0.25E-05"),
+        (1.0e-4, "0.1E-03"),
+    ],
+)
+def test_format_outcar_ediff_preserves_value(value: float, expected: str):
+    assert vpmdk._format_outcar_ediff(value) == expected
+
+
 def test_collect_neb_image_results_prefers_contcar_for_geometry(tmp_path: Path):
     image_dir = tmp_path / "00"
     image_dir.mkdir()
