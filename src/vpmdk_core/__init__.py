@@ -1656,7 +1656,8 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
 
     for step in recorder.steps:
         calculation = ET.SubElement(root, "calculation")
-        _append_pseudo_scf_xml_step(calculation, step)
+        if recorder.pseudo_scf.enabled:
+            _append_pseudo_scf_xml_step(calculation, step)
         _append_structure_xml(
             calculation,
             cell=step.cell,
@@ -1679,9 +1680,10 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
         ET.SubElement(energy, "i", {"name": "nosepot"}).text = f"{step.thermostat_potential:16.8f}"
         ET.SubElement(energy, "i", {"name": "nosekinetic"}).text = f"{step.thermostat_kinetic:16.8f}"
         ET.SubElement(energy, "i", {"name": "total"}).text = f"{step.total_energy:16.8f}"
-        ET.SubElement(calculation, "time", {"name": "totalsc"}).text = (
-            f"{step.sc_time:8.2f} {step.sc_time:8.2f}"
-        )
+        if recorder.pseudo_scf.enabled:
+            ET.SubElement(calculation, "time", {"name": "totalsc"}).text = (
+                f"{step.sc_time:8.2f} {step.sc_time:8.2f}"
+            )
 
     _append_structure_xml(
         root,
@@ -2407,7 +2409,6 @@ def run_single_point(
     calculator,
     *,
     isif: int | None = None,
-    contcar_path: str = "CONTCAR",
     oszicar_pseudo_scf: bool = False,
     neb_mode: bool = False,
     neb_prev_positions: np.ndarray | None = None,
@@ -2446,7 +2447,7 @@ def run_single_point(
     )
     _write_vasprun_xml(recorder, atoms)
     _append_outcar_footer(recorder)
-    write(contcar_path, atoms, direct=True)
+    write("CONTCAR", atoms, direct=True)
     print(
         f"{1:4d} F= {_format_energy_value(energy)} "
         f"E0= {_format_energy_value(energy)}  d E ={_format_energy_value(delta)}"
@@ -3650,13 +3651,13 @@ def main():
         calculator = get_calculator(bcar, structure=structure)
 
         if settings.nsw <= 0 or settings.ibrion < 0:
-            run_single_point(
-                atoms,
-                calculator,
-                isif=settings.stress_isif,
-                contcar_path=os.path.join(os.path.abspath(workdir), "CONTCAR"),
-                oszicar_pseudo_scf=write_pseudo_scf,
-            )
+            with _working_directory(os.path.abspath(workdir)):
+                run_single_point(
+                    atoms,
+                    calculator,
+                    isif=settings.stress_isif,
+                    oszicar_pseudo_scf=write_pseudo_scf,
+                )
         elif settings.ibrion == 0:
             run_md(
                 atoms,

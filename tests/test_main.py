@@ -775,7 +775,13 @@ def test_main_single_point_writes_contcar_into_selected_run_dir(
         monkeypatch.undo()
 
     assert (run_dir / "CONTCAR").exists()
+    assert (run_dir / "OUTCAR").exists()
+    assert (run_dir / "OSZICAR").exists()
+    assert (run_dir / "vasprun.xml").exists()
     assert not (tmp_path / "CONTCAR").exists()
+    assert not (tmp_path / "OUTCAR").exists()
+    assert not (tmp_path / "OSZICAR").exists()
+    assert not (tmp_path / "vasprun.xml").exists()
 
 
 def test_main_runs_neb_images_from_numbered_directories(tmp_path: Path, prepare_inputs):
