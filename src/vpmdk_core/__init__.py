@@ -790,6 +790,33 @@ class _VasprunStep:
     sc_time: float = 0.0
 
 
+@dataclass(frozen=True)
+class _PseudoScfSettings:
+    """Pseudo electronic-step settings used for VASP-compatibility output."""
+
+    enabled: bool = False
+    nelm: int = 60
+    nelmin: int = 2
+    nelmdl: int = 0
+    ediff: float = 1.0e-4
+
+
+_PSEUDO_SCF_INCAR_TAGS = frozenset({"NELM", "NELMIN", "NELMDL", "EDIFF"})
+_ACTIVE_PSEUDO_SCF_SETTINGS: _PseudoScfSettings | None = None
+
+
+@dataclass(frozen=True)
+class _VaspInputPaths:
+    """Selected run input paths reused by compatibility writers."""
+
+    incar_path: str | None = None
+    potcar_path: str | None = None
+    kpoints_path: str | None = None
+
+
+_ACTIVE_VASP_INPUT_PATHS: _VaspInputPaths | None = None
+
+
 @dataclass
 class _VaspCompatRecorder:
     """State tracker for VASP-like ``OUTCAR``/``OSZICAR``/``vasprun.xml`` output."""
@@ -803,7 +830,7 @@ class _VaspCompatRecorder:
     isif: int | None = None
     stress_mode: str = "none"
     neb_mode: bool = False
-    write_oszicar_pseudo_scf: bool = False
+    pseudo_scf: _PseudoScfSettings = field(default_factory=_PseudoScfSettings)
     oszicar_scf_header_written: bool = False
     neb_prev_positions: np.ndarray | None = None
     neb_next_positions: np.ndarray | None = None
@@ -1013,13 +1040,14 @@ def _extract_potcar_titles(path: str) -> list[str]:
 def _append_outcar_metadata_header(handle, atoms) -> None:
     """Append VASP-like metadata/header blocks to ``OUTCAR``."""
 
-    incar_lines = _read_non_comment_lines("INCAR")
+    paths = _ACTIVE_VASP_INPUT_PATHS or _VaspInputPaths("INCAR", "POTCAR", "KPOINTS")
+    incar_lines = _read_non_comment_lines(paths.incar_path) if paths.incar_path else []
     if incar_lines:
         handle.write(" INCAR:\n")
         for line in incar_lines:
             handle.write(f"   {line}\n")
 
-    potcar_titles = _extract_potcar_titles("POTCAR")
+    potcar_titles = _extract_potcar_titles(paths.potcar_path) if paths.potcar_path else []
     if potcar_titles:
         for title in potcar_titles:
             handle.write(f" POTCAR:    {title}\n")
@@ -1042,7 +1070,7 @@ def _append_outcar_metadata_header(handle, atoms) -> None:
             f"   {recip[0]:12.9f} {recip[1]:12.9f} {recip[2]:12.9f}\n"
         )
 
-    kp_lines = _read_non_comment_lines("KPOINTS")
+    kp_lines = _read_non_comment_lines(paths.kpoints_path) if paths.kpoints_path else []
     kpoint_label = "Gamma"
     if len(kp_lines) >= 3:
         kpoint_label = kp_lines[2]
@@ -1063,6 +1091,103 @@ def _append_kpoints_xml(parent) -> None:
     ET.SubElement(weights, "v").text = "       1.00000000 "
 
 
+def _pseudo_scf_settings_from_incar(incar, *, enabled: bool) -> _PseudoScfSettings:
+    """Return pseudo-SCF settings derived from the selected run ``INCAR``."""
+
+    if not enabled:
+        return _PseudoScfSettings(enabled=False)
+
+    if not hasattr(incar, "get"):
+        return _PseudoScfSettings(enabled=enabled)
+
+    def _parse_int_tag(key: str, default: int) -> int:
+        raw = incar.get(key, default)
+        try:
+            return int(float(raw))
+        except (TypeError, ValueError):
+            return default
+
+    def _parse_float_tag(key: str, default: float) -> float:
+        raw = incar.get(key, default)
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return default
+
+    nelm = max(1, _parse_int_tag("NELM", 60))
+    nelmin = min(max(1, _parse_int_tag("NELMIN", 2)), nelm)
+    nelmdl = _parse_int_tag("NELMDL", 0)
+    ediff = max(_parse_float_tag("EDIFF", 1.0e-4), 0.0)
+    return _PseudoScfSettings(
+        enabled=enabled,
+        nelm=nelm,
+        nelmin=nelmin,
+        nelmdl=nelmdl,
+        ediff=ediff,
+    )
+
+
+@contextmanager
+def _active_pseudo_scf_settings(settings: _PseudoScfSettings):
+    """Temporarily expose pseudo-SCF settings to nested output writers."""
+
+    global _ACTIVE_PSEUDO_SCF_SETTINGS
+    previous = _ACTIVE_PSEUDO_SCF_SETTINGS
+    _ACTIVE_PSEUDO_SCF_SETTINGS = settings
+    try:
+        yield
+    finally:
+        _ACTIVE_PSEUDO_SCF_SETTINGS = previous
+
+
+@contextmanager
+def _active_vasp_input_paths(paths: _VaspInputPaths):
+    """Temporarily expose selected run input paths to compatibility writers."""
+
+    global _ACTIVE_VASP_INPUT_PATHS
+    previous = _ACTIVE_VASP_INPUT_PATHS
+    _ACTIVE_VASP_INPUT_PATHS = paths
+    try:
+        yield
+    finally:
+        _ACTIVE_VASP_INPUT_PATHS = previous
+
+
+def _selected_incar_path() -> str:
+    """Return the active run ``INCAR`` path or the caller's local ``INCAR``."""
+
+    paths = _ACTIVE_VASP_INPUT_PATHS or _VaspInputPaths()
+    return paths.incar_path or "INCAR"
+
+
+def _resolve_pseudo_scf_settings(*, enabled: bool) -> _PseudoScfSettings:
+    """Return pseudo-SCF settings from the active run or selected ``INCAR``."""
+
+    if _ACTIVE_PSEUDO_SCF_SETTINGS is not None:
+        active = _ACTIVE_PSEUDO_SCF_SETTINGS
+        return _PseudoScfSettings(
+            enabled=enabled,
+            nelm=active.nelm,
+            nelmin=active.nelmin,
+            nelmdl=active.nelmdl,
+            ediff=active.ediff,
+        )
+    if not enabled:
+        return _PseudoScfSettings(enabled=False)
+    return _pseudo_scf_settings_from_incar(_load_incar(_selected_incar_path()), enabled=True)
+
+
+def _format_outcar_ediff(value: float) -> str:
+    """Return VASP-like scientific notation for ``EDIFF`` lines in ``OUTCAR``."""
+
+    if value == 0.0:
+        return "0.0E+00"
+    mantissa_text, exponent_text = f"{value:.8E}".split("E")
+    digits = mantissa_text.replace(".", "").rstrip("0")
+    exponent = int(exponent_text) + 1
+    return f"0.{digits or '0'}E{exponent:+03d}"
+
+
 def _initialize_vasp_compat_outputs(
     atoms,
     *,
@@ -1077,6 +1202,7 @@ def _initialize_vasp_compat_outputs(
 ) -> _VaspCompatRecorder:
     """Initialize compatibility outputs and return recorder state."""
 
+    pseudo_scf = _resolve_pseudo_scf_settings(enabled=write_oszicar_pseudo_scf)
     initial_cell = _matrix_to_nested_list(atoms.get_cell().array)
     initial_scaled_positions = _matrix_to_nested_list(atoms.get_scaled_positions())
     current_positions = np.asarray(atoms.get_positions(), dtype=float)
@@ -1096,7 +1222,7 @@ def _initialize_vasp_compat_outputs(
         isif=isif,
         stress_mode=_stress_mode_from_isif(isif),
         neb_mode=neb_mode,
-        write_oszicar_pseudo_scf=write_oszicar_pseudo_scf,
+        pseudo_scf=pseudo_scf,
         neb_prev_positions=prev_positions,
         neb_next_positions=next_positions,
     )
@@ -1110,6 +1236,16 @@ def _initialize_vasp_compat_outputs(
             handle.write(f"   MDALGO = {mdalgo:6d}\n")
         if potim is not None:
             handle.write(f"   POTIM  = {potim:6.4f}    time-step for ionic-motion\n")
+        if pseudo_scf.enabled:
+            handle.write(" Electronic Relaxation 1\n")
+            handle.write(
+                f"   NELM   = {pseudo_scf.nelm:6d};   NELMIN={pseudo_scf.nelmin:3d};"
+                f" NELMDL={pseudo_scf.nelmdl:3d}     # of ELM steps \n"
+            )
+            handle.write(
+                f"   EDIFF  = {_format_outcar_ediff(pseudo_scf.ediff):>10s}"
+                "   stopping-criterion for ELM\n"
+            )
         handle.write(f"   ICHAIN = {0:6d}\n")
         handle.write(
             f"   number of dos      NEDOS =    301   number of ions     NIONS = {len(atoms):6d}\n"
@@ -1128,6 +1264,7 @@ def _append_outcar_compat_step(
     atoms,
     forces: np.ndarray,
     stress_matrix: np.ndarray | None,
+    pseudo_scf: _PseudoScfSettings,
     potential_energy: float,
     total_energy: float,
     kinetic_energy: float,
@@ -1149,7 +1286,10 @@ def _append_outcar_compat_step(
 
     with open("OUTCAR", "a", encoding="utf-8") as handle:
         handle.write(
-            f"--------------------------------------- Iteration {step_index:6d}(   1)  ---------------------------------------\n"
+            f"\n--------------------------------------- Ionic step {step_index:8d}  -------------------------------------------\n\n"
+        )
+        handle.write(
+            f"\n--------------------------------------- Iteration {step_index:6d}(   1)  ---------------------------------------\n"
         )
         handle.write(" POSITION                                       TOTAL-FORCE (eV/Angst)\n")
         handle.write(" -----------------------------------------------------------------------------------\n")
@@ -1263,7 +1403,7 @@ def _append_oszicar_compat_step(
     recorder.previous_energy = potential_energy
 
     with open("OSZICAR", "a", encoding="utf-8") as handle:
-        if recorder.write_oszicar_pseudo_scf:
+        if recorder.pseudo_scf.enabled:
             if not recorder.oszicar_scf_header_written:
                 handle.write("       N       E                     dE             d eps       ncg     rms          rms(c)\n")
                 recorder.oszicar_scf_header_written = True
@@ -1327,6 +1467,7 @@ def _record_vasp_compat_step(
         atoms,
         forces,
         stress_matrix,
+        recorder.pseudo_scf,
         potential_energy,
         total_energy,
         kinetic_energy,
@@ -1437,6 +1578,20 @@ def _build_atominfo_xml(parent, symbols: List[str]) -> None:
         ET.SubElement(row, "c").text = f"PAW_PBE {symbol}"
 
 
+def _append_pseudo_scf_xml_step(parent, step: _VasprunStep) -> None:
+    """Append one minimal ``scstep`` block for VASP XML reader compatibility."""
+
+    scstep = ET.SubElement(parent, "scstep")
+    ET.SubElement(scstep, "time", {"name": "dav"}).text = f"{step.sc_time:8.2f} {step.sc_time:8.2f}"
+    ET.SubElement(scstep, "time", {"name": "total"}).text = (
+        f"{step.sc_time:8.2f} {step.sc_time:8.2f}"
+    )
+    energy = ET.SubElement(scstep, "energy")
+    ET.SubElement(energy, "i", {"name": "e_fr_energy"}).text = f"{step.potential_energy:16.8f}"
+    ET.SubElement(energy, "i", {"name": "e_wo_entrp"}).text = f"{step.potential_energy:16.8f}"
+    ET.SubElement(energy, "i", {"name": "e_0_energy"}).text = f"{step.potential_energy:16.8f}"
+
+
 def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
     """Write a minimal ``vasprun.xml`` with ionic-step data."""
 
@@ -1450,6 +1605,13 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
     if recorder.isif is not None:
         ET.SubElement(incar, "i", {"name": "ISIF", "type": "int"}).text = str(recorder.isif)
     ET.SubElement(incar, "i", {"name": "NSW", "type": "int"}).text = str(len(recorder.steps))
+    if recorder.pseudo_scf.enabled:
+        ET.SubElement(incar, "i", {"name": "NELM", "type": "int"}).text = str(recorder.pseudo_scf.nelm)
+        ET.SubElement(incar, "i", {"name": "NELMIN", "type": "int"}).text = str(recorder.pseudo_scf.nelmin)
+        ET.SubElement(incar, "i", {"name": "NELMDL", "type": "int"}).text = str(recorder.pseudo_scf.nelmdl)
+        ET.SubElement(incar, "i", {"name": "EDIFF", "type": "float"}).text = (
+            f"{recorder.pseudo_scf.ediff:.8E}"
+        )
     if recorder.potim is not None:
         ET.SubElement(incar, "i", {"name": "POTIM", "type": "float"}).text = f"{recorder.potim:.6f}"
     if recorder.mdalgo is not None:
@@ -1469,10 +1631,22 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
 
     parameters = ET.SubElement(root, "parameters")
     electronic = ET.SubElement(parameters, "separator", {"name": "electronic"})
-    ET.SubElement(electronic, "i", {"name": "NELM", "type": "int"}).text = "1"
-    ET.SubElement(electronic, "i", {"name": "NBANDS", "type": "int"}).text = str(
-        max(1, 4 * len(recorder.symbols))
+    ET.SubElement(electronic, "i", {"name": "NELM", "type": "int"}).text = str(
+        recorder.pseudo_scf.nelm
     )
+    if recorder.pseudo_scf.enabled:
+        ET.SubElement(electronic, "i", {"name": "NELMDL", "type": "int"}).text = str(
+            recorder.pseudo_scf.nelmdl
+        )
+        ET.SubElement(electronic, "i", {"name": "NELMIN", "type": "int"}).text = str(
+            recorder.pseudo_scf.nelmin
+        )
+        ET.SubElement(electronic, "i", {"name": "EDIFF", "type": "float"}).text = (
+            f"{recorder.pseudo_scf.ediff:.8E}"
+        )
+        ET.SubElement(electronic, "i", {"name": "NBANDS", "type": "int"}).text = str(
+            max(1, 4 * len(recorder.symbols))
+        )
     ionic = ET.SubElement(parameters, "separator", {"name": "ionic"})
     ET.SubElement(ionic, "i", {"name": "IBRION", "type": "int"}).text = str(recorder.ibrion)
     if recorder.isif is not None:
@@ -1491,6 +1665,8 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
 
     for step in recorder.steps:
         calculation = ET.SubElement(root, "calculation")
+        if recorder.pseudo_scf.enabled:
+            _append_pseudo_scf_xml_step(calculation, step)
         _append_structure_xml(
             calculation,
             cell=step.cell,
@@ -1513,9 +1689,10 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
         ET.SubElement(energy, "i", {"name": "nosepot"}).text = f"{step.thermostat_potential:16.8f}"
         ET.SubElement(energy, "i", {"name": "nosekinetic"}).text = f"{step.thermostat_kinetic:16.8f}"
         ET.SubElement(energy, "i", {"name": "total"}).text = f"{step.total_energy:16.8f}"
-        ET.SubElement(calculation, "time", {"name": "totalsc"}).text = (
-            f"{step.sc_time:8.2f} {step.sc_time:8.2f}"
-        )
+        if recorder.pseudo_scf.enabled:
+            ET.SubElement(calculation, "time", {"name": "totalsc"}).text = (
+                f"{step.sc_time:8.2f} {step.sc_time:8.2f}"
+            )
 
     _append_structure_xml(
         root,
@@ -2175,13 +2352,26 @@ def _append_outcar_footer(recorder: _VaspCompatRecorder) -> None:
 
     elapsed = max(time.perf_counter() - recorder.started_at, 0.0)
     peak_memory_kb = 0.0
+    minor_page_faults = 0
+    major_page_faults = 0
+    voluntary_context_switches = 0
+    involuntary_context_switches = 0
     if resource is not None:
         try:
-            peak_memory_kb = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+            usage = resource.getrusage(resource.RUSAGE_SELF)
+            peak_memory_kb = float(usage.ru_maxrss)
             if sys.platform.startswith("darwin"):
                 peak_memory_kb /= 1024.0
+            minor_page_faults = int(getattr(usage, "ru_minflt", 0))
+            major_page_faults = int(getattr(usage, "ru_majflt", 0))
+            voluntary_context_switches = int(getattr(usage, "ru_nvcsw", 0))
+            involuntary_context_switches = int(getattr(usage, "ru_nivcsw", 0))
         except Exception:
             peak_memory_kb = 0.0
+            minor_page_faults = 0
+            major_page_faults = 0
+            voluntary_context_switches = 0
+            involuntary_context_switches = 0
 
     with open("OUTCAR", "a", encoding="utf-8") as handle:
         handle.write(" General timing and accounting informations for this job:\n")
@@ -2194,6 +2384,10 @@ def _append_outcar_footer(recorder: _VaspCompatRecorder) -> None:
             f"   Maximum memory used (kb):{peak_memory_kb:15.1f}\n"
             f"   Average memory used (kb):{peak_memory_kb:15.1f}\n"
             f"   Number of ionic steps:{len(recorder.steps):21d}\n\n"
+            f"   Minor page faults:{minor_page_faults:25d}\n"
+            f"   Major page faults:{major_page_faults:25d}\n"
+            f"   Voluntary context switches:{voluntary_context_switches:15d}\n"
+            f"   Involuntary context switches:{involuntary_context_switches:13d}\n\n"
         )
 
 
@@ -2262,6 +2456,7 @@ def run_single_point(
     )
     _write_vasprun_xml(recorder, atoms)
     _append_outcar_footer(recorder)
+    write("CONTCAR", atoms, direct=True)
     print(
         f"{1:4d} F= {_format_energy_value(energy)} "
         f"E0= {_format_energy_value(energy)}  d E ={_format_energy_value(delta)}"
@@ -2351,11 +2546,20 @@ def _load_incar(path: str):
     return {}
 
 
-def _warn_for_unsupported_incar_tags(incar) -> None:
+def _warn_for_unsupported_incar_tags(incar, *, pseudo_scf_enabled: bool = False) -> None:
     """Emit warnings for INCAR options that are silently ignored."""
 
+    supported_tags = SUPPORTED_INCAR_TAGS
     for key in getattr(incar, "keys", lambda: [])():
-        if key not in SUPPORTED_INCAR_TAGS:
+        if key in supported_tags:
+            continue
+        if pseudo_scf_enabled and key in _PSEUDO_SCF_INCAR_TAGS:
+            print(
+                f"Warning: INCAR tag {key} does not affect the run and is used only "
+                "for pseudo-SCF compatibility output"
+            )
+            continue
+        if key not in supported_tags:
             print(f"INCAR tag {key} is not supported and will be ignored")
 
 
@@ -2722,11 +2926,17 @@ def _should_write_lammps_trajectory(bcar_tags: Dict[str, str]) -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
-def _should_write_oszicar_pseudo_scf(bcar_tags: Dict[str, str]) -> bool:
-    """Return ``True`` when BCAR requests pseudo electronic steps in OSZICAR."""
+def _should_write_pseudo_scf(bcar_tags: Dict[str, str]) -> bool:
+    """Return ``True`` when BCAR requests pseudo electronic-step compatibility output."""
 
-    raw = bcar_tags.get("WRITE_OSZICAR_PSEUDO_SCF", bcar_tags.get("WRITE_PSEUDO_SCF", "0"))
+    raw = bcar_tags.get("WRITE_PSEUDO_SCF", bcar_tags.get("WRITE_OSZICAR_PSEUDO_SCF", "0"))
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _should_write_oszicar_pseudo_scf(bcar_tags: Dict[str, str]) -> bool:
+    """Backward-compatible alias for :func:`_should_write_pseudo_scf`."""
+
+    return _should_write_pseudo_scf(bcar_tags)
 
 
 def _get_lammps_trajectory_interval(bcar_tags: Dict[str, str]) -> int:
@@ -3291,6 +3501,12 @@ def run_neb_images(
 
     workdir_abs = os.path.abspath(workdir)
     potcar_path_abs = os.path.abspath(potcar_path) if potcar_path else None
+    pseudo_scf_settings = _pseudo_scf_settings_from_incar(incar, enabled=oszicar_pseudo_scf)
+    input_paths = _VaspInputPaths(
+        incar_path=os.path.join(workdir_abs, "INCAR"),
+        potcar_path=potcar_path_abs or os.path.join(workdir_abs, "POTCAR"),
+        kpoints_path=os.path.join(workdir_abs, "KPOINTS"),
+    )
     image_dirs = _discover_neb_image_directories(workdir_abs)
     if len(image_dirs) < 2:
         raise RuntimeError(
@@ -3306,40 +3522,166 @@ def run_neb_images(
                 f"but found {len(image_dirs)} under {workdir_abs}. Proceeding with discovered directories."
             )
 
-    total_images = len(image_dirs)
-    image_reference_positions: list[np.ndarray] = []
-    for image_dir in image_dirs:
-        structure_path = _resolve_neb_image_structure_path(image_dir)
-        structure = read_structure(structure_path, potcar_path_abs)
-        image_atoms = AseAtomsAdaptor.get_atoms(structure)
-        image_atoms.wrap()
-        image_reference_positions.append(np.asarray(image_atoms.get_positions(), dtype=float))
+    with _active_pseudo_scf_settings(pseudo_scf_settings), _active_vasp_input_paths(input_paths):
+        total_images = len(image_dirs)
+        image_reference_positions: list[np.ndarray] = []
+        for image_dir in image_dirs:
+            structure_path = _resolve_neb_image_structure_path(image_dir)
+            structure = read_structure(structure_path, potcar_path_abs)
+            image_atoms = AseAtomsAdaptor.get_atoms(structure)
+            image_atoms.wrap()
+            image_reference_positions.append(np.asarray(image_atoms.get_positions(), dtype=float))
 
-    for image_index, image_dir in enumerate(image_dirs, start=1):
-        image_name = os.path.basename(image_dir)
-        structure_path = _resolve_neb_image_structure_path(image_dir)
-        structure = read_structure(structure_path, potcar_path_abs)
+        for image_index, image_dir in enumerate(image_dirs, start=1):
+            image_name = os.path.basename(image_dir)
+            structure_path = _resolve_neb_image_structure_path(image_dir)
+            structure = read_structure(structure_path, potcar_path_abs)
+            atoms = AseAtomsAdaptor.get_atoms(structure)
+            atoms.wrap()
+            _apply_initial_magnetization(atoms, incar)
+            with _working_directory(workdir_abs):
+                calculator = get_calculator(bcar, structure=structure)
+            neb_prev_positions = image_reference_positions[image_index - 2] if image_index > 1 else None
+            neb_next_positions = image_reference_positions[image_index] if image_index < total_images else None
+
+            print(f"Running NEB image {image_name} ({image_index}/{total_images})")
+            with _working_directory(image_dir):
+                if settings.nsw <= 0 or settings.ibrion < 0:
+                    run_single_point(
+                        atoms,
+                        calculator,
+                        isif=settings.stress_isif,
+                        oszicar_pseudo_scf=oszicar_pseudo_scf,
+                        neb_mode=True,
+                        neb_prev_positions=neb_prev_positions,
+                        neb_next_positions=neb_next_positions,
+                    )
+                elif settings.ibrion == 0:
+                    run_md(
+                        atoms,
+                        calculator,
+                        settings.nsw,
+                        settings.tebeg,
+                        settings.potim,
+                        mdalgo=settings.mdalgo,
+                        teend=settings.teend,
+                        smass=settings.smass,
+                        thermostat_params=settings.thermostat_params,
+                        isif=settings.stress_isif,
+                        oszicar_pseudo_scf=oszicar_pseudo_scf,
+                        neb_mode=True,
+                        neb_prev_positions=neb_prev_positions,
+                        neb_next_positions=neb_next_positions,
+                        write_lammps_traj=write_lammps_traj,
+                        lammps_traj_interval=lammps_traj_interval,
+                    )
+                else:
+                    run_relaxation(
+                        atoms,
+                        calculator,
+                        settings.nsw,
+                        settings.force_limit,
+                        write_energy_csv,
+                        isif=settings.isif,
+                        pstress=settings.pstress,
+                        energy_tolerance=settings.energy_tolerance,
+                        ibrion=settings.ibrion,
+                        stress_isif=settings.stress_isif,
+                        neb_mode=True,
+                        neb_prev_positions=neb_prev_positions,
+                        neb_next_positions=neb_next_positions,
+                        oszicar_pseudo_scf=oszicar_pseudo_scf,
+                    )
+        with _working_directory(workdir_abs):
+            image_results = _collect_neb_image_results(image_dirs, potcar_path=potcar_path_abs)
+            _write_neb_parent_aggregate_outputs(
+                workdir=workdir_abs,
+                settings=settings,
+                image_results=image_results,
+                oszicar_pseudo_scf=oszicar_pseudo_scf,
+            )
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Run MLP with VASP style inputs")
+    parser.add_argument("--dir", default=".", help="Input directory")
+    args = parser.parse_args()
+    workdir = args.dir
+    workdir_abs = os.path.abspath(workdir)
+
+    poscar_path = os.path.join(workdir, "POSCAR")
+    incar_path = os.path.join(workdir, "INCAR")
+    potcar_path = os.path.join(workdir, "POTCAR")
+    kpoints_path = os.path.join(workdir, "KPOINTS")
+    bcar_path = os.path.join(workdir, "BCAR")
+
+    for fname in ["KPOINTS", "WAVECAR", "CHGCAR"]:
+        if os.path.exists(os.path.join(workdir, fname)):
+            print(f"Note: {fname} detected but not used in MLP calculations.")
+
+    incar = _load_incar(incar_path)
+    bcar = parse_key_value_file(bcar_path) if os.path.exists(bcar_path) else {}
+
+    write_energy_csv = _should_write_energy_csv(bcar)
+    write_lammps_traj = _should_write_lammps_trajectory(bcar)
+    write_pseudo_scf = _should_write_pseudo_scf(bcar)
+    pseudo_scf_settings = _pseudo_scf_settings_from_incar(incar, enabled=write_pseudo_scf)
+    _warn_for_unsupported_incar_tags(incar, pseudo_scf_enabled=write_pseudo_scf)
+    settings = _load_incar_settings(incar)
+    neb_mode = _is_neb_like_incar(incar)
+    lammps_traj_interval = _get_lammps_trajectory_interval(bcar) if write_lammps_traj else 1
+    potcar_for_structure = potcar_path if os.path.exists(potcar_path) else None
+    input_paths = _VaspInputPaths(
+        incar_path=os.path.abspath(incar_path),
+        potcar_path=os.path.abspath(potcar_path),
+        kpoints_path=os.path.abspath(kpoints_path),
+    )
+
+    with _active_pseudo_scf_settings(pseudo_scf_settings), _active_vasp_input_paths(input_paths):
+        if neb_mode:
+            neb_image_dirs = _discover_neb_image_directories(workdir)
+            if neb_image_dirs:
+                run_neb_images(
+                    workdir=workdir,
+                    incar=incar,
+                    settings=settings,
+                    bcar=bcar,
+                    potcar_path=potcar_for_structure,
+                    write_energy_csv=write_energy_csv,
+                    write_lammps_traj=write_lammps_traj,
+                    lammps_traj_interval=lammps_traj_interval,
+                    oszicar_pseudo_scf=write_pseudo_scf,
+                )
+                print("Calculation completed.")
+                return
+
+        if not os.path.exists(poscar_path):
+            if neb_mode:
+                print(
+                    "POSCAR not found. In NEB mode provide either a top-level POSCAR or "
+                    "numbered image directories (00, 01, ...)."
+                )
+            else:
+                print("POSCAR not found.")
+            sys.exit(1)
+
+        structure = read_structure(poscar_path, potcar_for_structure)
         atoms = AseAtomsAdaptor.get_atoms(structure)
         atoms.wrap()
         _apply_initial_magnetization(atoms, incar)
         with _working_directory(workdir_abs):
             calculator = get_calculator(bcar, structure=structure)
-        neb_prev_positions = image_reference_positions[image_index - 2] if image_index > 1 else None
-        neb_next_positions = image_reference_positions[image_index] if image_index < total_images else None
 
-        print(f"Running NEB image {image_name} ({image_index}/{total_images})")
-        with _working_directory(image_dir):
-            if settings.nsw <= 0 or settings.ibrion < 0:
+        if settings.nsw <= 0 or settings.ibrion < 0:
+            with _working_directory(workdir_abs):
                 run_single_point(
                     atoms,
                     calculator,
                     isif=settings.stress_isif,
-                    oszicar_pseudo_scf=oszicar_pseudo_scf,
-                    neb_mode=True,
-                    neb_prev_positions=neb_prev_positions,
-                    neb_next_positions=neb_next_positions,
+                    oszicar_pseudo_scf=write_pseudo_scf,
                 )
-            elif settings.ibrion == 0:
+        elif settings.ibrion == 0:
+            with _working_directory(workdir_abs):
                 run_md(
                     atoms,
                     calculator,
@@ -3351,14 +3693,12 @@ def run_neb_images(
                     smass=settings.smass,
                     thermostat_params=settings.thermostat_params,
                     isif=settings.stress_isif,
-                    oszicar_pseudo_scf=oszicar_pseudo_scf,
-                    neb_mode=True,
-                    neb_prev_positions=neb_prev_positions,
-                    neb_next_positions=neb_next_positions,
+                    oszicar_pseudo_scf=write_pseudo_scf,
                     write_lammps_traj=write_lammps_traj,
                     lammps_traj_interval=lammps_traj_interval,
                 )
-            else:
+        else:
+            with _working_directory(workdir_abs):
                 run_relaxation(
                     atoms,
                     calculator,
@@ -3370,120 +3710,9 @@ def run_neb_images(
                     energy_tolerance=settings.energy_tolerance,
                     ibrion=settings.ibrion,
                     stress_isif=settings.stress_isif,
-                    neb_mode=True,
-                    neb_prev_positions=neb_prev_positions,
-                    neb_next_positions=neb_next_positions,
-                    oszicar_pseudo_scf=oszicar_pseudo_scf,
+                    neb_mode=neb_mode,
+                    oszicar_pseudo_scf=write_pseudo_scf,
                 )
-    with _working_directory(workdir_abs):
-        image_results = _collect_neb_image_results(image_dirs, potcar_path=potcar_path_abs)
-        _write_neb_parent_aggregate_outputs(
-            workdir=workdir_abs,
-            settings=settings,
-            image_results=image_results,
-            oszicar_pseudo_scf=oszicar_pseudo_scf,
-        )
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Run MLP with VASP style inputs")
-    parser.add_argument("--dir", default=".", help="Input directory")
-    args = parser.parse_args()
-    workdir = args.dir
-
-    poscar_path = os.path.join(workdir, "POSCAR")
-    incar_path = os.path.join(workdir, "INCAR")
-    potcar_path = os.path.join(workdir, "POTCAR")
-    bcar_path = os.path.join(workdir, "BCAR")
-
-    for fname in ["KPOINTS", "WAVECAR", "CHGCAR"]:
-        if os.path.exists(os.path.join(workdir, fname)):
-            print(f"Note: {fname} detected but not used in MLP calculations.")
-
-    incar = _load_incar(incar_path)
-    bcar = parse_key_value_file(bcar_path) if os.path.exists(bcar_path) else {}
-
-    _warn_for_unsupported_incar_tags(incar)
-    settings = _load_incar_settings(incar)
-    neb_mode = _is_neb_like_incar(incar)
-
-    write_energy_csv = _should_write_energy_csv(bcar)
-    write_lammps_traj = _should_write_lammps_trajectory(bcar)
-    write_oszicar_pseudo_scf = _should_write_oszicar_pseudo_scf(bcar)
-    lammps_traj_interval = _get_lammps_trajectory_interval(bcar) if write_lammps_traj else 1
-    potcar_for_structure = potcar_path if os.path.exists(potcar_path) else None
-
-    if neb_mode:
-        neb_image_dirs = _discover_neb_image_directories(workdir)
-        if neb_image_dirs:
-            run_neb_images(
-                workdir=workdir,
-                incar=incar,
-                settings=settings,
-                bcar=bcar,
-                potcar_path=potcar_for_structure,
-                write_energy_csv=write_energy_csv,
-                write_lammps_traj=write_lammps_traj,
-                lammps_traj_interval=lammps_traj_interval,
-                oszicar_pseudo_scf=write_oszicar_pseudo_scf,
-            )
-            print("Calculation completed.")
-            return
-
-    if not os.path.exists(poscar_path):
-        if neb_mode:
-            print(
-                "POSCAR not found. In NEB mode provide either a top-level POSCAR or "
-                "numbered image directories (00, 01, ...)."
-            )
-        else:
-            print("POSCAR not found.")
-        sys.exit(1)
-
-    structure = read_structure(poscar_path, potcar_for_structure)
-    atoms = AseAtomsAdaptor.get_atoms(structure)
-    atoms.wrap()
-    _apply_initial_magnetization(atoms, incar)
-    calculator = get_calculator(bcar, structure=structure)
-
-    if settings.nsw <= 0 or settings.ibrion < 0:
-        run_single_point(
-            atoms,
-            calculator,
-            isif=settings.stress_isif,
-            oszicar_pseudo_scf=write_oszicar_pseudo_scf,
-        )
-    elif settings.ibrion == 0:
-        run_md(
-            atoms,
-            calculator,
-            settings.nsw,
-            settings.tebeg,
-            settings.potim,
-            mdalgo=settings.mdalgo,
-            teend=settings.teend,
-            smass=settings.smass,
-            thermostat_params=settings.thermostat_params,
-            isif=settings.stress_isif,
-            oszicar_pseudo_scf=write_oszicar_pseudo_scf,
-            write_lammps_traj=write_lammps_traj,
-            lammps_traj_interval=lammps_traj_interval,
-        )
-    else:
-        run_relaxation(
-            atoms,
-            calculator,
-            settings.nsw,
-            settings.force_limit,
-            write_energy_csv,
-            isif=settings.isif,
-            pstress=settings.pstress,
-            energy_tolerance=settings.energy_tolerance,
-            ibrion=settings.ibrion,
-            stress_isif=settings.stress_isif,
-            neb_mode=neb_mode,
-            oszicar_pseudo_scf=write_oszicar_pseudo_scf,
-        )
 
     print("Calculation completed.")
 

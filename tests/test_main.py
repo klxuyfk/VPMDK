@@ -112,6 +112,7 @@ def test_single_point_energy_for_all_potentials(
         "NequIPCalculator",
         SimpleNamespace(from_deployed_model=lambda *a, **k: factory("NEQUIP")),
     )
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
     try:
         vpmdk.main()
@@ -120,6 +121,7 @@ def test_single_point_energy_for_all_potentials(
 
     assert created and created[-1][0] == potential
     assert created[-1][1].called == 1
+    assert (tmp_path / "CONTCAR").exists()
 
 
 def test_main_transfers_magmom_to_atoms(tmp_path: Path, prepare_inputs, arrays_close):
@@ -555,12 +557,12 @@ def test_main_enables_neb_mode_when_images_present(tmp_path: Path, prepare_input
     assert seen.get("neb_mode") is True
 
 
-def test_main_passes_oszicar_pseudo_scf_flag_from_bcar(tmp_path: Path, prepare_inputs):
+def test_main_passes_pseudo_scf_flag_from_bcar(tmp_path: Path, prepare_inputs):
     prepare_inputs(
         tmp_path,
         potential="CHGNET",
         incar_overrides={"NSW": "2", "IBRION": "2"},
-        extra_bcar={"WRITE_OSZICAR_PSEUDO_SCF": "on"},
+        extra_bcar={"WRITE_PSEUDO_SCF": "on"},
     )
 
     seen: dict[str, object] = {}
@@ -592,6 +594,291 @@ def test_main_passes_oszicar_pseudo_scf_flag_from_bcar(tmp_path: Path, prepare_i
         monkeypatch.undo()
 
     assert seen.get("oszicar_pseudo_scf") is True
+
+
+def test_main_warns_that_pseudo_scf_incar_tags_are_ignored_by_default(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0"},
+    )
+
+    messages: list[str] = []
+
+    def fake_print(*args, **kwargs):
+        sep = kwargs.get("sep", " ")
+        end = kwargs.get("end", "\n")
+        messages.append(sep.join(str(a) for a in args) + end)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "run_single_point", lambda *_, **__: 0.0)
+    monkeypatch.setattr("builtins.print", fake_print)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert any("INCAR tag NELM is not supported" in message for message in messages)
+    assert any("INCAR tag NELMIN is not supported" in message for message in messages)
+    assert any("INCAR tag EDIFF is not supported" in message for message in messages)
+
+
+def test_main_warns_that_pseudo_scf_incar_tags_only_affect_compat_output_when_enabled(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0"},
+        extra_bcar={"WRITE_PSEUDO_SCF": "on"},
+    )
+
+    messages: list[str] = []
+
+    def fake_print(*args, **kwargs):
+        sep = kwargs.get("sep", " ")
+        end = kwargs.get("end", "\n")
+        messages.append(sep.join(str(a) for a in args) + end)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "run_single_point", lambda *_, **__: 0.0)
+    monkeypatch.setattr("builtins.print", fake_print)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert not any("INCAR tag NELM is not supported" in message for message in messages)
+    assert not any("INCAR tag NELMIN is not supported" in message for message in messages)
+    assert not any("INCAR tag EDIFF is not supported" in message for message in messages)
+    assert any(
+        "INCAR tag NELM does not affect the run and is used only for pseudo-SCF compatibility output"
+        in message
+        for message in messages
+    )
+    assert any(
+        "INCAR tag NELMIN does not affect the run and is used only for pseudo-SCF compatibility output"
+        in message
+        for message in messages
+    )
+    assert any(
+        "INCAR tag EDIFF does not affect the run and is used only for pseudo-SCF compatibility output"
+        in message
+        for message in messages
+    )
+
+
+def test_main_default_vasprun_does_not_echo_ignored_pseudo_scf_tags(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0", "NELM": "37", "NELMIN": "4", "EDIFF": "5E-07"},
+    )
+
+    messages: list[str] = []
+
+    def fake_print(*args, **kwargs):
+        sep = kwargs.get("sep", " ")
+        end = kwargs.get("end", "\n")
+        messages.append(sep.join(str(a) for a in args) + end)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr("builtins.print", fake_print)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    assert any("INCAR tag NELM is not supported" in message for message in messages)
+    assert root.find("./incar/i[@name='NELM']") is None
+    assert root.find("./parameters/separator[@name='electronic']/i[@name='NELM']").text.strip() == "60"
+
+
+def test_main_pseudo_scf_uses_selected_run_incar_from_dir_argument(
+    tmp_path: Path, prepare_inputs
+):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    prepare_inputs(
+        run_dir,
+        potential="CHGNET",
+        incar_overrides={
+            "NSW": "1",
+            "IBRION": "2",
+            "ISIF": "2",
+            "NELM": "37",
+            "NELMIN": "4",
+            "EDIFF": "5E-07",
+        },
+        extra_bcar={"WRITE_PSEUDO_SCF": "on"},
+    )
+    (tmp_path / "INCAR").write_text("NELM = 12\nNELMIN = 1\nEDIFF = 1E-03\n")
+    (run_dir / "KPOINTS").write_text("selected\n0\nMonkhorst-Pack\n2 2 2\n0 0 0\n")
+    (tmp_path / "KPOINTS").write_text("cwd\n0\nGamma\n1 1 1\n0 0 0\n")
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+            self._callbacks = []
+
+        def attach(self, callback, *args, **kwargs):
+            self._callbacks.append(callback)
+
+        def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            target.positions += 0.01
+            for callback in self._callbacks:
+                callback()
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "BFGS", DummyBFGS)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(run_dir)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    outcar = (run_dir / "OUTCAR").read_text()
+    root = ET.parse(run_dir / "vasprun.xml").getroot()
+    assert "NELM   =     37;" in outcar
+    assert "NELM   =     12;" not in outcar
+    assert "   NELM = 37" in outcar
+    assert "   NELMIN = 4" in outcar
+    assert "   EDIFF = 5E-07" in outcar
+    assert "   NELM = 12" not in outcar
+    assert "   NELMIN = 1" not in outcar
+    assert "   EDIFF = 1E-03" not in outcar
+    assert "k-points in reciprocal lattice and weights: Monkhorst-Pack" in outcar
+    assert "k-points in reciprocal lattice and weights: Gamma" not in outcar
+    assert root.find("./incar/i[@name='NELM']").text.strip() == "37"
+    assert root.find("./incar/i[@name='NELMIN']").text.strip() == "4"
+    assert root.find("./incar/i[@name='EDIFF']").text.strip() == "5.00000000E-07"
+    assert not (tmp_path / "OUTCAR").exists()
+    assert not (tmp_path / "vasprun.xml").exists()
+
+
+def test_main_single_point_writes_contcar_into_selected_run_dir(
+    tmp_path: Path, prepare_inputs
+):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    prepare_inputs(
+        run_dir,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0"},
+    )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(run_dir)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert (run_dir / "CONTCAR").exists()
+    assert (run_dir / "OUTCAR").exists()
+    assert (run_dir / "OSZICAR").exists()
+    assert (run_dir / "vasprun.xml").exists()
+    assert not (tmp_path / "CONTCAR").exists()
+    assert not (tmp_path / "OUTCAR").exists()
+    assert not (tmp_path / "OSZICAR").exists()
+    assert not (tmp_path / "vasprun.xml").exists()
+
+
+def test_main_initializes_non_neb_calculator_from_selected_run_dir_for_relative_model_path(
+    tmp_path: Path, prepare_inputs
+):
+    run_dir = tmp_path / "runs" / "single_model"
+    run_dir.mkdir(parents=True)
+    prepare_inputs(
+        run_dir,
+        potential="NEQUIP",
+        incar_overrides={"NSW": "0"},
+        extra_bcar={"MODEL": "./model/nequip.pth"},
+    )
+
+    model_dir = run_dir / "model"
+    model_dir.mkdir()
+    (model_dir / "nequip.pth").write_text("dummy")
+
+    seen: dict[str, object] = {}
+
+    def fake_get_calculator(tags, *, structure=None):
+        seen["cwd"] = Path.cwd()
+        seen["model"] = tags.get("MODEL")
+        return DummyCalculator()
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "get_calculator", fake_get_calculator)
+    monkeypatch.setattr(vpmdk, "run_single_point", lambda *_, **__: 0.0)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", "runs/single_model"])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen.get("cwd") == run_dir
+    assert seen.get("model") == "./model/nequip.pth"
+
+
+def test_main_md_writes_outputs_into_selected_run_dir(tmp_path: Path, prepare_inputs):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    prepare_inputs(
+        run_dir,
+        potential="CHGNET",
+        incar_overrides={"NSW": "2", "IBRION": "0", "TEBEG": "300", "POTIM": "1.0"},
+    )
+
+    class DummyDynamics:
+        def run(self, n):
+            assert n == 1
+
+    def fake_selector(atoms, mdalgo, timestep, initial_temperature, smass, params):
+        return DummyDynamics(), lambda temp: None
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "_select_md_dynamics", fake_selector)
+    monkeypatch.setattr(
+        vpmdk.velocitydistribution,
+        "MaxwellBoltzmannDistribution",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(run_dir)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert (run_dir / "CONTCAR").exists()
+    assert (run_dir / "OUTCAR").exists()
+    assert (run_dir / "OSZICAR").exists()
+    assert (run_dir / "XDATCAR").exists()
+    assert (run_dir / "vasprun.xml").exists()
+    assert not (tmp_path / "CONTCAR").exists()
+    assert not (tmp_path / "OUTCAR").exists()
+    assert not (tmp_path / "OSZICAR").exists()
+    assert not (tmp_path / "XDATCAR").exists()
+    assert not (tmp_path / "vasprun.xml").exists()
 
 
 def test_main_runs_neb_images_from_numbered_directories(tmp_path: Path, prepare_inputs):
@@ -657,6 +944,59 @@ def test_main_runs_neb_images_from_numbered_directories(tmp_path: Path, prepare_
     assert [item["has_prev"] for item in seen] == [False, True, True]
     assert [item["has_next"] for item in seen] == [True, True, False]
     assert all(item["oszicar_pseudo_scf"] is False for item in seen)
+
+
+def test_run_neb_images_uses_parent_incar_for_pseudo_scf_settings(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={
+            "NSW": "0",
+            "IMAGES": "1",
+            "NELM": "37",
+            "NELMIN": "4",
+            "NELMDL": "-3",
+            "EDIFF": "5E-07",
+        },
+    )
+
+    poscar_text = (tmp_path / "POSCAR").read_text()
+    for image in ("00", "01", "02"):
+        image_dir = tmp_path / image
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(poscar_text)
+
+    incar = vpmdk._load_incar(str(tmp_path / "INCAR"))
+    settings = vpmdk._load_incar_settings(incar)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    try:
+        vpmdk.run_neb_images(
+            workdir=str(tmp_path),
+            incar=incar,
+            settings=settings,
+            bcar={"POTENTIAL": "CHGNET"},
+            potcar_path=str(tmp_path / "POTCAR"),
+            write_energy_csv=False,
+            write_lammps_traj=False,
+            lammps_traj_interval=1,
+            oszicar_pseudo_scf=True,
+        )
+    finally:
+        monkeypatch.undo()
+
+    outcar = (tmp_path / "00" / "OUTCAR").read_text()
+    root = ET.parse(tmp_path / "00" / "vasprun.xml").getroot()
+    assert "NELM   =     37;" in outcar
+    assert "   NELM = 37" in outcar
+    assert root.find("./incar/i[@name='NELM']").text.strip() == "37"
+    assert root.find("./incar/i[@name='NELMIN']").text.strip() == "4"
+    assert root.find("./incar/i[@name='NELMDL']").text.strip() == "-3"
+    assert root.find("./incar/i[@name='EDIFF']").text.strip() == "5.00000000E-07"
 
 
 def test_main_neb_runner_allows_missing_top_level_poscar(tmp_path: Path, prepare_inputs):
