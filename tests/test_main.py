@@ -112,6 +112,7 @@ def test_single_point_energy_for_all_potentials(
         "NequIPCalculator",
         SimpleNamespace(from_deployed_model=lambda *a, **k: factory("NEQUIP")),
     )
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
     try:
         vpmdk.main()
@@ -120,6 +121,7 @@ def test_single_point_energy_for_all_potentials(
 
     assert created and created[-1][0] == potential
     assert created[-1][1].called == 1
+    assert (tmp_path / "CONTCAR").exists()
 
 
 def test_main_transfers_magmom_to_atoms(tmp_path: Path, prepare_inputs, arrays_close):
