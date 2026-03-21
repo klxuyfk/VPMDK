@@ -678,6 +678,8 @@ def test_main_pseudo_scf_uses_selected_run_incar_from_dir_argument(
         extra_bcar={"WRITE_PSEUDO_SCF": "on"},
     )
     (tmp_path / "INCAR").write_text("NELM = 12\nNELMIN = 1\nEDIFF = 1E-03\n")
+    (run_dir / "KPOINTS").write_text("selected\n0\nMonkhorst-Pack\n2 2 2\n0 0 0\n")
+    (tmp_path / "KPOINTS").write_text("cwd\n0\nGamma\n1 1 1\n0 0 0\n")
 
     class DummyBFGS:
         def __init__(self, obj, logfile=None):
@@ -713,6 +715,8 @@ def test_main_pseudo_scf_uses_selected_run_incar_from_dir_argument(
     assert "   NELM = 12" not in outcar
     assert "   NELMIN = 1" not in outcar
     assert "   EDIFF = 1E-03" not in outcar
+    assert "k-points in reciprocal lattice and weights: Monkhorst-Pack" in outcar
+    assert "k-points in reciprocal lattice and weights: Gamma" not in outcar
     assert root.find("./incar/i[@name='NELM']").text.strip() == "37"
     assert root.find("./incar/i[@name='NELMIN']").text.strip() == "4"
     assert root.find("./incar/i[@name='EDIFF']").text.strip() == "5.00000000E-07"
