@@ -1094,6 +1094,9 @@ def _append_kpoints_xml(parent) -> None:
 def _pseudo_scf_settings_from_incar(incar, *, enabled: bool) -> _PseudoScfSettings:
     """Return pseudo-SCF settings derived from the selected run ``INCAR``."""
 
+    if not enabled:
+        return _PseudoScfSettings(enabled=False)
+
     if not hasattr(incar, "get"):
         return _PseudoScfSettings(enabled=enabled)
 
@@ -1593,8 +1596,8 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
     if recorder.isif is not None:
         ET.SubElement(incar, "i", {"name": "ISIF", "type": "int"}).text = str(recorder.isif)
     ET.SubElement(incar, "i", {"name": "NSW", "type": "int"}).text = str(len(recorder.steps))
-    ET.SubElement(incar, "i", {"name": "NELM", "type": "int"}).text = str(recorder.pseudo_scf.nelm)
     if recorder.pseudo_scf.enabled:
+        ET.SubElement(incar, "i", {"name": "NELM", "type": "int"}).text = str(recorder.pseudo_scf.nelm)
         ET.SubElement(incar, "i", {"name": "NELMIN", "type": "int"}).text = str(recorder.pseudo_scf.nelmin)
         ET.SubElement(incar, "i", {"name": "NELMDL", "type": "int"}).text = str(recorder.pseudo_scf.nelmdl)
         ET.SubElement(incar, "i", {"name": "EDIFF", "type": "float"}).text = (
@@ -2404,6 +2407,7 @@ def run_single_point(
     calculator,
     *,
     isif: int | None = None,
+    contcar_path: str = "CONTCAR",
     oszicar_pseudo_scf: bool = False,
     neb_mode: bool = False,
     neb_prev_positions: np.ndarray | None = None,
@@ -2442,7 +2446,7 @@ def run_single_point(
     )
     _write_vasprun_xml(recorder, atoms)
     _append_outcar_footer(recorder)
-    write("CONTCAR", atoms, direct=True)
+    write(contcar_path, atoms, direct=True)
     print(
         f"{1:4d} F= {_format_energy_value(energy)} "
         f"E0= {_format_energy_value(energy)}  d E ={_format_energy_value(delta)}"
@@ -3650,6 +3654,7 @@ def main():
                 atoms,
                 calculator,
                 isif=settings.stress_isif,
+                contcar_path=os.path.join(os.path.abspath(workdir), "CONTCAR"),
                 oszicar_pseudo_scf=write_pseudo_scf,
             )
         elif settings.ibrion == 0:
