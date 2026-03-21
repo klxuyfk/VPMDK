@@ -627,7 +627,7 @@ def test_main_warns_that_pseudo_scf_incar_tags_are_ignored_by_default(
     assert any("INCAR tag EDIFF is not supported" in message for message in messages)
 
 
-def test_main_suppresses_pseudo_scf_incar_warnings_when_enabled(
+def test_main_warns_that_pseudo_scf_incar_tags_only_affect_compat_output_when_enabled(
     tmp_path: Path, prepare_inputs
 ):
     prepare_inputs(
@@ -657,6 +657,21 @@ def test_main_suppresses_pseudo_scf_incar_warnings_when_enabled(
     assert not any("INCAR tag NELM is not supported" in message for message in messages)
     assert not any("INCAR tag NELMIN is not supported" in message for message in messages)
     assert not any("INCAR tag EDIFF is not supported" in message for message in messages)
+    assert any(
+        "INCAR tag NELM does not affect the run and is used only for pseudo-SCF compatibility output"
+        in message
+        for message in messages
+    )
+    assert any(
+        "INCAR tag NELMIN does not affect the run and is used only for pseudo-SCF compatibility output"
+        in message
+        for message in messages
+    )
+    assert any(
+        "INCAR tag EDIFF does not affect the run and is used only for pseudo-SCF compatibility output"
+        in message
+        for message in messages
+    )
 
 
 def test_main_default_vasprun_does_not_echo_ignored_pseudo_scf_tags(
