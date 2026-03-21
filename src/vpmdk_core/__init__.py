@@ -1153,8 +1153,15 @@ def _active_vasp_input_paths(paths: _VaspInputPaths):
         _ACTIVE_VASP_INPUT_PATHS = previous
 
 
+def _selected_incar_path() -> str:
+    """Return the active run ``INCAR`` path or the caller's local ``INCAR``."""
+
+    paths = _ACTIVE_VASP_INPUT_PATHS or _VaspInputPaths()
+    return paths.incar_path or "INCAR"
+
+
 def _resolve_pseudo_scf_settings(*, enabled: bool) -> _PseudoScfSettings:
-    """Return active pseudo-SCF settings without reparsing filesystem state."""
+    """Return pseudo-SCF settings from the active run or selected ``INCAR``."""
 
     if _ACTIVE_PSEUDO_SCF_SETTINGS is not None:
         active = _ACTIVE_PSEUDO_SCF_SETTINGS
@@ -1165,7 +1172,9 @@ def _resolve_pseudo_scf_settings(*, enabled: bool) -> _PseudoScfSettings:
             nelmdl=active.nelmdl,
             ediff=active.ediff,
         )
-    return _PseudoScfSettings(enabled=enabled)
+    if not enabled:
+        return _PseudoScfSettings(enabled=False)
+    return _pseudo_scf_settings_from_incar(_load_incar(_selected_incar_path()), enabled=True)
 
 
 def _format_outcar_ediff(value: float) -> str:
@@ -3587,6 +3596,7 @@ def main():
     parser.add_argument("--dir", default=".", help="Input directory")
     args = parser.parse_args()
     workdir = args.dir
+    workdir_abs = os.path.abspath(workdir)
 
     poscar_path = os.path.join(workdir, "POSCAR")
     incar_path = os.path.join(workdir, "INCAR")
@@ -3651,7 +3661,7 @@ def main():
         calculator = get_calculator(bcar, structure=structure)
 
         if settings.nsw <= 0 or settings.ibrion < 0:
-            with _working_directory(os.path.abspath(workdir)):
+            with _working_directory(workdir_abs):
                 run_single_point(
                     atoms,
                     calculator,
@@ -3659,36 +3669,38 @@ def main():
                     oszicar_pseudo_scf=write_pseudo_scf,
                 )
         elif settings.ibrion == 0:
-            run_md(
-                atoms,
-                calculator,
-                settings.nsw,
-                settings.tebeg,
-                settings.potim,
-                mdalgo=settings.mdalgo,
-                teend=settings.teend,
-                smass=settings.smass,
-                thermostat_params=settings.thermostat_params,
-                isif=settings.stress_isif,
-                oszicar_pseudo_scf=write_pseudo_scf,
-                write_lammps_traj=write_lammps_traj,
-                lammps_traj_interval=lammps_traj_interval,
-            )
+            with _working_directory(workdir_abs):
+                run_md(
+                    atoms,
+                    calculator,
+                    settings.nsw,
+                    settings.tebeg,
+                    settings.potim,
+                    mdalgo=settings.mdalgo,
+                    teend=settings.teend,
+                    smass=settings.smass,
+                    thermostat_params=settings.thermostat_params,
+                    isif=settings.stress_isif,
+                    oszicar_pseudo_scf=write_pseudo_scf,
+                    write_lammps_traj=write_lammps_traj,
+                    lammps_traj_interval=lammps_traj_interval,
+                )
         else:
-            run_relaxation(
-                atoms,
-                calculator,
-                settings.nsw,
-                settings.force_limit,
-                write_energy_csv,
-                isif=settings.isif,
-                pstress=settings.pstress,
-                energy_tolerance=settings.energy_tolerance,
-                ibrion=settings.ibrion,
-                stress_isif=settings.stress_isif,
-                neb_mode=neb_mode,
-                oszicar_pseudo_scf=write_pseudo_scf,
-            )
+            with _working_directory(workdir_abs):
+                run_relaxation(
+                    atoms,
+                    calculator,
+                    settings.nsw,
+                    settings.force_limit,
+                    write_energy_csv,
+                    isif=settings.isif,
+                    pstress=settings.pstress,
+                    energy_tolerance=settings.energy_tolerance,
+                    ibrion=settings.ibrion,
+                    stress_isif=settings.stress_isif,
+                    neb_mode=neb_mode,
+                    oszicar_pseudo_scf=write_pseudo_scf,
+                )
 
     print("Calculation completed.")
 

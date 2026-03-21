@@ -737,8 +737,8 @@ def test_main_pseudo_scf_uses_selected_run_incar_from_dir_argument(
     finally:
         monkeypatch.undo()
 
-    outcar = (tmp_path / "OUTCAR").read_text()
-    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    outcar = (run_dir / "OUTCAR").read_text()
+    root = ET.parse(run_dir / "vasprun.xml").getroot()
     assert "NELM   =     37;" in outcar
     assert "NELM   =     12;" not in outcar
     assert "   NELM = 37" in outcar
@@ -752,6 +752,8 @@ def test_main_pseudo_scf_uses_selected_run_incar_from_dir_argument(
     assert root.find("./incar/i[@name='NELM']").text.strip() == "37"
     assert root.find("./incar/i[@name='NELMIN']").text.strip() == "4"
     assert root.find("./incar/i[@name='EDIFF']").text.strip() == "5.00000000E-07"
+    assert not (tmp_path / "OUTCAR").exists()
+    assert not (tmp_path / "vasprun.xml").exists()
 
 
 def test_main_single_point_writes_contcar_into_selected_run_dir(
@@ -781,6 +783,49 @@ def test_main_single_point_writes_contcar_into_selected_run_dir(
     assert not (tmp_path / "CONTCAR").exists()
     assert not (tmp_path / "OUTCAR").exists()
     assert not (tmp_path / "OSZICAR").exists()
+    assert not (tmp_path / "vasprun.xml").exists()
+
+
+def test_main_md_writes_outputs_into_selected_run_dir(tmp_path: Path, prepare_inputs):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    prepare_inputs(
+        run_dir,
+        potential="CHGNET",
+        incar_overrides={"NSW": "2", "IBRION": "0", "TEBEG": "300", "POTIM": "1.0"},
+    )
+
+    class DummyDynamics:
+        def run(self, n):
+            assert n == 1
+
+    def fake_selector(atoms, mdalgo, timestep, initial_temperature, smass, params):
+        return DummyDynamics(), lambda temp: None
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "_select_md_dynamics", fake_selector)
+    monkeypatch.setattr(
+        vpmdk.velocitydistribution,
+        "MaxwellBoltzmannDistribution",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(run_dir)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert (run_dir / "CONTCAR").exists()
+    assert (run_dir / "OUTCAR").exists()
+    assert (run_dir / "OSZICAR").exists()
+    assert (run_dir / "XDATCAR").exists()
+    assert (run_dir / "vasprun.xml").exists()
+    assert not (tmp_path / "CONTCAR").exists()
+    assert not (tmp_path / "OUTCAR").exists()
+    assert not (tmp_path / "OSZICAR").exists()
+    assert not (tmp_path / "XDATCAR").exists()
     assert not (tmp_path / "vasprun.xml").exists()
 
 
