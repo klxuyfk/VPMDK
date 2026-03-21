@@ -805,6 +805,17 @@ _PSEUDO_SCF_INCAR_TAGS = frozenset({"NELM", "NELMIN", "NELMDL", "EDIFF"})
 _ACTIVE_PSEUDO_SCF_SETTINGS: _PseudoScfSettings | None = None
 
 
+@dataclass(frozen=True)
+class _VaspInputPaths:
+    """Selected run input paths reused by compatibility writers."""
+
+    incar_path: str | None = None
+    potcar_path: str | None = None
+
+
+_ACTIVE_VASP_INPUT_PATHS: _VaspInputPaths | None = None
+
+
 @dataclass
 class _VaspCompatRecorder:
     """State tracker for VASP-like ``OUTCAR``/``OSZICAR``/``vasprun.xml`` output."""
@@ -1028,13 +1039,14 @@ def _extract_potcar_titles(path: str) -> list[str]:
 def _append_outcar_metadata_header(handle, atoms) -> None:
     """Append VASP-like metadata/header blocks to ``OUTCAR``."""
 
-    incar_lines = _read_non_comment_lines("INCAR")
+    paths = _ACTIVE_VASP_INPUT_PATHS or _VaspInputPaths("INCAR", "POTCAR")
+    incar_lines = _read_non_comment_lines(paths.incar_path) if paths.incar_path else []
     if incar_lines:
         handle.write(" INCAR:\n")
         for line in incar_lines:
             handle.write(f"   {line}\n")
 
-    potcar_titles = _extract_potcar_titles("POTCAR")
+    potcar_titles = _extract_potcar_titles(paths.potcar_path) if paths.potcar_path else []
     if potcar_titles:
         for title in potcar_titles:
             handle.write(f" POTCAR:    {title}\n")
@@ -1081,11 +1093,8 @@ def _append_kpoints_xml(parent) -> None:
 def _pseudo_scf_settings_from_incar(incar, *, enabled: bool) -> _PseudoScfSettings:
     """Return pseudo-SCF settings derived from the selected run ``INCAR``."""
 
-    if not enabled:
-        return _PseudoScfSettings(enabled=False)
-
     if not hasattr(incar, "get"):
-        return _PseudoScfSettings(enabled=True)
+        return _PseudoScfSettings(enabled=enabled)
 
     def _parse_int_tag(key: str, default: int) -> int:
         raw = incar.get(key, default)
@@ -1106,7 +1115,7 @@ def _pseudo_scf_settings_from_incar(incar, *, enabled: bool) -> _PseudoScfSettin
     nelmdl = _parse_int_tag("NELMDL", 0)
     ediff = max(_parse_float_tag("EDIFF", 1.0e-4), 0.0)
     return _PseudoScfSettings(
-        enabled=True,
+        enabled=enabled,
         nelm=nelm,
         nelmin=nelmin,
         nelmdl=nelmdl,
@@ -1127,14 +1136,32 @@ def _active_pseudo_scf_settings(settings: _PseudoScfSettings):
         _ACTIVE_PSEUDO_SCF_SETTINGS = previous
 
 
+@contextmanager
+def _active_vasp_input_paths(paths: _VaspInputPaths):
+    """Temporarily expose selected run input paths to compatibility writers."""
+
+    global _ACTIVE_VASP_INPUT_PATHS
+    previous = _ACTIVE_VASP_INPUT_PATHS
+    _ACTIVE_VASP_INPUT_PATHS = paths
+    try:
+        yield
+    finally:
+        _ACTIVE_VASP_INPUT_PATHS = previous
+
+
 def _resolve_pseudo_scf_settings(*, enabled: bool) -> _PseudoScfSettings:
     """Return active pseudo-SCF settings without reparsing filesystem state."""
 
-    if not enabled:
-        return _PseudoScfSettings(enabled=False)
     if _ACTIVE_PSEUDO_SCF_SETTINGS is not None:
-        return _ACTIVE_PSEUDO_SCF_SETTINGS
-    return _PseudoScfSettings(enabled=True)
+        active = _ACTIVE_PSEUDO_SCF_SETTINGS
+        return _PseudoScfSettings(
+            enabled=enabled,
+            nelm=active.nelm,
+            nelmin=active.nelmin,
+            nelmdl=active.nelmdl,
+            ediff=active.ediff,
+        )
+    return _PseudoScfSettings(enabled=enabled)
 
 
 def _format_outcar_ediff(value: float) -> str:
@@ -1540,7 +1567,7 @@ def _build_atominfo_xml(parent, symbols: List[str]) -> None:
 
 
 def _append_pseudo_scf_xml_step(parent, step: _VasprunStep) -> None:
-    """Append one dummy ``scstep`` block for pseudo-SCF compatibility."""
+    """Append one minimal ``scstep`` block for VASP XML reader compatibility."""
 
     scstep = ET.SubElement(parent, "scstep")
     ET.SubElement(scstep, "time", {"name": "dav"}).text = f"{step.sc_time:8.2f} {step.sc_time:8.2f}"
@@ -1566,8 +1593,8 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
     if recorder.isif is not None:
         ET.SubElement(incar, "i", {"name": "ISIF", "type": "int"}).text = str(recorder.isif)
     ET.SubElement(incar, "i", {"name": "NSW", "type": "int"}).text = str(len(recorder.steps))
+    ET.SubElement(incar, "i", {"name": "NELM", "type": "int"}).text = str(recorder.pseudo_scf.nelm)
     if recorder.pseudo_scf.enabled:
-        ET.SubElement(incar, "i", {"name": "NELM", "type": "int"}).text = str(recorder.pseudo_scf.nelm)
         ET.SubElement(incar, "i", {"name": "NELMIN", "type": "int"}).text = str(recorder.pseudo_scf.nelmin)
         ET.SubElement(incar, "i", {"name": "NELMDL", "type": "int"}).text = str(recorder.pseudo_scf.nelmdl)
         ET.SubElement(incar, "i", {"name": "EDIFF", "type": "float"}).text = (
@@ -1592,10 +1619,10 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
 
     parameters = ET.SubElement(root, "parameters")
     electronic = ET.SubElement(parameters, "separator", {"name": "electronic"})
+    ET.SubElement(electronic, "i", {"name": "NELM", "type": "int"}).text = str(
+        recorder.pseudo_scf.nelm
+    )
     if recorder.pseudo_scf.enabled:
-        ET.SubElement(electronic, "i", {"name": "NELM", "type": "int"}).text = str(
-            recorder.pseudo_scf.nelm
-        )
         ET.SubElement(electronic, "i", {"name": "NELMDL", "type": "int"}).text = str(
             recorder.pseudo_scf.nelmdl
         )
@@ -1626,8 +1653,7 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
 
     for step in recorder.steps:
         calculation = ET.SubElement(root, "calculation")
-        if recorder.pseudo_scf.enabled:
-            _append_pseudo_scf_xml_step(calculation, step)
+        _append_pseudo_scf_xml_step(calculation, step)
         _append_structure_xml(
             calculation,
             cell=step.cell,
@@ -1650,10 +1676,9 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
         ET.SubElement(energy, "i", {"name": "nosepot"}).text = f"{step.thermostat_potential:16.8f}"
         ET.SubElement(energy, "i", {"name": "nosekinetic"}).text = f"{step.thermostat_kinetic:16.8f}"
         ET.SubElement(energy, "i", {"name": "total"}).text = f"{step.total_energy:16.8f}"
-        if recorder.pseudo_scf.enabled:
-            ET.SubElement(calculation, "time", {"name": "totalsc"}).text = (
-                f"{step.sc_time:8.2f} {step.sc_time:8.2f}"
-            )
+        ET.SubElement(calculation, "time", {"name": "totalsc"}).text = (
+            f"{step.sc_time:8.2f} {step.sc_time:8.2f}"
+        )
 
     _append_structure_xml(
         root,
@@ -3579,8 +3604,12 @@ def main():
     neb_mode = _is_neb_like_incar(incar)
     lammps_traj_interval = _get_lammps_trajectory_interval(bcar) if write_lammps_traj else 1
     potcar_for_structure = potcar_path if os.path.exists(potcar_path) else None
+    input_paths = _VaspInputPaths(
+        incar_path=os.path.abspath(incar_path),
+        potcar_path=os.path.abspath(potcar_path),
+    )
 
-    with _active_pseudo_scf_settings(pseudo_scf_settings):
+    with _active_pseudo_scf_settings(pseudo_scf_settings), _active_vasp_input_paths(input_paths):
         if neb_mode:
             neb_image_dirs = _discover_neb_image_directories(workdir)
             if neb_image_dirs:

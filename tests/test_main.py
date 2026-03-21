@@ -707,6 +707,12 @@ def test_main_pseudo_scf_uses_selected_run_incar_from_dir_argument(
     root = ET.parse(tmp_path / "vasprun.xml").getroot()
     assert "NELM   =     37;" in outcar
     assert "NELM   =     12;" not in outcar
+    assert "   NELM = 37" in outcar
+    assert "   NELMIN = 4" in outcar
+    assert "   EDIFF = 5E-07" in outcar
+    assert "   NELM = 12" not in outcar
+    assert "   NELMIN = 1" not in outcar
+    assert "   EDIFF = 1E-03" not in outcar
     assert root.find("./incar/i[@name='NELM']").text.strip() == "37"
     assert root.find("./incar/i[@name='NELMIN']").text.strip() == "4"
     assert root.find("./incar/i[@name='EDIFF']").text.strip() == "5.00000000E-07"
