@@ -1276,10 +1276,9 @@ def _append_outcar_compat_step(
         handle.write(
             f"\n--------------------------------------- Ionic step {step_index:8d}  -------------------------------------------\n\n"
         )
-        if pseudo_scf.enabled:
-            handle.write(
-                f"\n--------------------------------------- Iteration {step_index:6d}(   1)  ---------------------------------------\n"
-            )
+        handle.write(
+            f"\n--------------------------------------- Iteration {step_index:6d}(   1)  ---------------------------------------\n"
+        )
         handle.write(" POSITION                                       TOTAL-FORCE (eV/Angst)\n")
         handle.write(" -----------------------------------------------------------------------------------\n")
         for position, force in zip(positions, forces):
