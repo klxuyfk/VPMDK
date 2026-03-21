@@ -931,6 +931,59 @@ def test_main_runs_neb_images_from_numbered_directories(tmp_path: Path, prepare_
     assert all(item["oszicar_pseudo_scf"] is False for item in seen)
 
 
+def test_run_neb_images_uses_parent_incar_for_pseudo_scf_settings(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={
+            "NSW": "0",
+            "IMAGES": "1",
+            "NELM": "37",
+            "NELMIN": "4",
+            "NELMDL": "-3",
+            "EDIFF": "5E-07",
+        },
+    )
+
+    poscar_text = (tmp_path / "POSCAR").read_text()
+    for image in ("00", "01", "02"):
+        image_dir = tmp_path / image
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(poscar_text)
+
+    incar = vpmdk._load_incar(str(tmp_path / "INCAR"))
+    settings = vpmdk._load_incar_settings(incar)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    try:
+        vpmdk.run_neb_images(
+            workdir=str(tmp_path),
+            incar=incar,
+            settings=settings,
+            bcar={"POTENTIAL": "CHGNET"},
+            potcar_path=str(tmp_path / "POTCAR"),
+            write_energy_csv=False,
+            write_lammps_traj=False,
+            lammps_traj_interval=1,
+            oszicar_pseudo_scf=True,
+        )
+    finally:
+        monkeypatch.undo()
+
+    outcar = (tmp_path / "00" / "OUTCAR").read_text()
+    root = ET.parse(tmp_path / "00" / "vasprun.xml").getroot()
+    assert "NELM   =     37;" in outcar
+    assert "   NELM = 37" in outcar
+    assert root.find("./incar/i[@name='NELM']").text.strip() == "37"
+    assert root.find("./incar/i[@name='NELMIN']").text.strip() == "4"
+    assert root.find("./incar/i[@name='NELMDL']").text.strip() == "-3"
+    assert root.find("./incar/i[@name='EDIFF']").text.strip() == "5.00000000E-07"
+
+
 def test_main_neb_runner_allows_missing_top_level_poscar(tmp_path: Path, prepare_inputs):
     prepare_inputs(
         tmp_path,

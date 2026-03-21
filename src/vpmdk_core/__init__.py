@@ -3497,6 +3497,12 @@ def run_neb_images(
 
     workdir_abs = os.path.abspath(workdir)
     potcar_path_abs = os.path.abspath(potcar_path) if potcar_path else None
+    pseudo_scf_settings = _pseudo_scf_settings_from_incar(incar, enabled=oszicar_pseudo_scf)
+    input_paths = _VaspInputPaths(
+        incar_path=os.path.join(workdir_abs, "INCAR"),
+        potcar_path=potcar_path_abs or os.path.join(workdir_abs, "POTCAR"),
+        kpoints_path=os.path.join(workdir_abs, "KPOINTS"),
+    )
     image_dirs = _discover_neb_image_directories(workdir_abs)
     if len(image_dirs) < 2:
         raise RuntimeError(
@@ -3512,83 +3518,84 @@ def run_neb_images(
                 f"but found {len(image_dirs)} under {workdir_abs}. Proceeding with discovered directories."
             )
 
-    total_images = len(image_dirs)
-    image_reference_positions: list[np.ndarray] = []
-    for image_dir in image_dirs:
-        structure_path = _resolve_neb_image_structure_path(image_dir)
-        structure = read_structure(structure_path, potcar_path_abs)
-        image_atoms = AseAtomsAdaptor.get_atoms(structure)
-        image_atoms.wrap()
-        image_reference_positions.append(np.asarray(image_atoms.get_positions(), dtype=float))
+    with _active_pseudo_scf_settings(pseudo_scf_settings), _active_vasp_input_paths(input_paths):
+        total_images = len(image_dirs)
+        image_reference_positions: list[np.ndarray] = []
+        for image_dir in image_dirs:
+            structure_path = _resolve_neb_image_structure_path(image_dir)
+            structure = read_structure(structure_path, potcar_path_abs)
+            image_atoms = AseAtomsAdaptor.get_atoms(structure)
+            image_atoms.wrap()
+            image_reference_positions.append(np.asarray(image_atoms.get_positions(), dtype=float))
 
-    for image_index, image_dir in enumerate(image_dirs, start=1):
-        image_name = os.path.basename(image_dir)
-        structure_path = _resolve_neb_image_structure_path(image_dir)
-        structure = read_structure(structure_path, potcar_path_abs)
-        atoms = AseAtomsAdaptor.get_atoms(structure)
-        atoms.wrap()
-        _apply_initial_magnetization(atoms, incar)
+        for image_index, image_dir in enumerate(image_dirs, start=1):
+            image_name = os.path.basename(image_dir)
+            structure_path = _resolve_neb_image_structure_path(image_dir)
+            structure = read_structure(structure_path, potcar_path_abs)
+            atoms = AseAtomsAdaptor.get_atoms(structure)
+            atoms.wrap()
+            _apply_initial_magnetization(atoms, incar)
+            with _working_directory(workdir_abs):
+                calculator = get_calculator(bcar, structure=structure)
+            neb_prev_positions = image_reference_positions[image_index - 2] if image_index > 1 else None
+            neb_next_positions = image_reference_positions[image_index] if image_index < total_images else None
+
+            print(f"Running NEB image {image_name} ({image_index}/{total_images})")
+            with _working_directory(image_dir):
+                if settings.nsw <= 0 or settings.ibrion < 0:
+                    run_single_point(
+                        atoms,
+                        calculator,
+                        isif=settings.stress_isif,
+                        oszicar_pseudo_scf=oszicar_pseudo_scf,
+                        neb_mode=True,
+                        neb_prev_positions=neb_prev_positions,
+                        neb_next_positions=neb_next_positions,
+                    )
+                elif settings.ibrion == 0:
+                    run_md(
+                        atoms,
+                        calculator,
+                        settings.nsw,
+                        settings.tebeg,
+                        settings.potim,
+                        mdalgo=settings.mdalgo,
+                        teend=settings.teend,
+                        smass=settings.smass,
+                        thermostat_params=settings.thermostat_params,
+                        isif=settings.stress_isif,
+                        oszicar_pseudo_scf=oszicar_pseudo_scf,
+                        neb_mode=True,
+                        neb_prev_positions=neb_prev_positions,
+                        neb_next_positions=neb_next_positions,
+                        write_lammps_traj=write_lammps_traj,
+                        lammps_traj_interval=lammps_traj_interval,
+                    )
+                else:
+                    run_relaxation(
+                        atoms,
+                        calculator,
+                        settings.nsw,
+                        settings.force_limit,
+                        write_energy_csv,
+                        isif=settings.isif,
+                        pstress=settings.pstress,
+                        energy_tolerance=settings.energy_tolerance,
+                        ibrion=settings.ibrion,
+                        stress_isif=settings.stress_isif,
+                        neb_mode=True,
+                        neb_prev_positions=neb_prev_positions,
+                        neb_next_positions=neb_next_positions,
+                        oszicar_pseudo_scf=oszicar_pseudo_scf,
+                    )
         with _working_directory(workdir_abs):
-            calculator = get_calculator(bcar, structure=structure)
-        neb_prev_positions = image_reference_positions[image_index - 2] if image_index > 1 else None
-        neb_next_positions = image_reference_positions[image_index] if image_index < total_images else None
-
-        print(f"Running NEB image {image_name} ({image_index}/{total_images})")
-        with _working_directory(image_dir):
-            if settings.nsw <= 0 or settings.ibrion < 0:
-                run_single_point(
-                    atoms,
-                    calculator,
-                    isif=settings.stress_isif,
-                    oszicar_pseudo_scf=oszicar_pseudo_scf,
-                    neb_mode=True,
-                    neb_prev_positions=neb_prev_positions,
-                    neb_next_positions=neb_next_positions,
-                )
-            elif settings.ibrion == 0:
-                run_md(
-                    atoms,
-                    calculator,
-                    settings.nsw,
-                    settings.tebeg,
-                    settings.potim,
-                    mdalgo=settings.mdalgo,
-                    teend=settings.teend,
-                    smass=settings.smass,
-                    thermostat_params=settings.thermostat_params,
-                    isif=settings.stress_isif,
-                    oszicar_pseudo_scf=oszicar_pseudo_scf,
-                    neb_mode=True,
-                    neb_prev_positions=neb_prev_positions,
-                    neb_next_positions=neb_next_positions,
-                    write_lammps_traj=write_lammps_traj,
-                    lammps_traj_interval=lammps_traj_interval,
-                )
-            else:
-                run_relaxation(
-                    atoms,
-                    calculator,
-                    settings.nsw,
-                    settings.force_limit,
-                    write_energy_csv,
-                    isif=settings.isif,
-                    pstress=settings.pstress,
-                    energy_tolerance=settings.energy_tolerance,
-                    ibrion=settings.ibrion,
-                    stress_isif=settings.stress_isif,
-                    neb_mode=True,
-                    neb_prev_positions=neb_prev_positions,
-                    neb_next_positions=neb_next_positions,
-                    oszicar_pseudo_scf=oszicar_pseudo_scf,
-                )
-    with _working_directory(workdir_abs):
-        image_results = _collect_neb_image_results(image_dirs, potcar_path=potcar_path_abs)
-        _write_neb_parent_aggregate_outputs(
-            workdir=workdir_abs,
-            settings=settings,
-            image_results=image_results,
-            oszicar_pseudo_scf=oszicar_pseudo_scf,
-        )
+            image_results = _collect_neb_image_results(image_dirs, potcar_path=potcar_path_abs)
+            _write_neb_parent_aggregate_outputs(
+                workdir=workdir_abs,
+                settings=settings,
+                image_results=image_results,
+                oszicar_pseudo_scf=oszicar_pseudo_scf,
+            )
 
 
 def main():
