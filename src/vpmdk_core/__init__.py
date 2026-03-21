@@ -811,6 +811,7 @@ class _VaspInputPaths:
 
     incar_path: str | None = None
     potcar_path: str | None = None
+    kpoints_path: str | None = None
 
 
 _ACTIVE_VASP_INPUT_PATHS: _VaspInputPaths | None = None
@@ -1039,7 +1040,7 @@ def _extract_potcar_titles(path: str) -> list[str]:
 def _append_outcar_metadata_header(handle, atoms) -> None:
     """Append VASP-like metadata/header blocks to ``OUTCAR``."""
 
-    paths = _ACTIVE_VASP_INPUT_PATHS or _VaspInputPaths("INCAR", "POTCAR")
+    paths = _ACTIVE_VASP_INPUT_PATHS or _VaspInputPaths("INCAR", "POTCAR", "KPOINTS")
     incar_lines = _read_non_comment_lines(paths.incar_path) if paths.incar_path else []
     if incar_lines:
         handle.write(" INCAR:\n")
@@ -1069,7 +1070,7 @@ def _append_outcar_metadata_header(handle, atoms) -> None:
             f"   {recip[0]:12.9f} {recip[1]:12.9f} {recip[2]:12.9f}\n"
         )
 
-    kp_lines = _read_non_comment_lines("KPOINTS")
+    kp_lines = _read_non_comment_lines(paths.kpoints_path) if paths.kpoints_path else []
     kpoint_label = "Gamma"
     if len(kp_lines) >= 3:
         kpoint_label = kp_lines[2]
@@ -3586,6 +3587,7 @@ def main():
     poscar_path = os.path.join(workdir, "POSCAR")
     incar_path = os.path.join(workdir, "INCAR")
     potcar_path = os.path.join(workdir, "POTCAR")
+    kpoints_path = os.path.join(workdir, "KPOINTS")
     bcar_path = os.path.join(workdir, "BCAR")
 
     for fname in ["KPOINTS", "WAVECAR", "CHGCAR"]:
@@ -3607,6 +3609,7 @@ def main():
     input_paths = _VaspInputPaths(
         incar_path=os.path.abspath(incar_path),
         potcar_path=os.path.abspath(potcar_path),
+        kpoints_path=os.path.abspath(kpoints_path),
     )
 
     with _active_pseudo_scf_settings(pseudo_scf_settings), _active_vasp_input_paths(input_paths):
