@@ -1591,8 +1591,8 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
     _append_kpoints_xml(root)
 
     parameters = ET.SubElement(root, "parameters")
+    electronic = ET.SubElement(parameters, "separator", {"name": "electronic"})
     if recorder.pseudo_scf.enabled:
-        electronic = ET.SubElement(parameters, "separator", {"name": "electronic convergence"})
         ET.SubElement(electronic, "i", {"name": "NELM", "type": "int"}).text = str(
             recorder.pseudo_scf.nelm
         )
