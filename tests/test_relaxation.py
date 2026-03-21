@@ -204,7 +204,7 @@ def test_relaxation_oszicar_pseudo_scf_is_off_by_default(tmp_path: Path, load_at
     assert "DAV:" not in oszicar
     assert "N       E" not in oszicar
     assert "NELM   =" not in outcar
-    assert "Iteration      1(   1)" not in outcar
+    assert "Iteration      1(   1)" in outcar
     assert "Voluntary context switches" in outcar
     assert electronic is not None
     assert root.find("./parameters/separator[@name='electronic convergence']") is None
