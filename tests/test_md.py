@@ -70,6 +70,7 @@ def test_run_md_executes_multiple_steps(tmp_path, load_atoms):
     assert "total drift:" in outcar
     assert "energy  without entropy=" in outcar
     assert "General timing and accounting informations for this job" in outcar
+    assert "Voluntary context switches" in outcar
     assert (tmp_path / "OSZICAR").exists()
     assert (tmp_path / "vasprun.xml").exists()
 

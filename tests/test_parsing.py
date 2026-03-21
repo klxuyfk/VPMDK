@@ -93,15 +93,15 @@ def test_get_calculator_rejects_explicit_empty_backend_tags(
 @pytest.mark.parametrize(
     "tags, expected",
     [
-        ({"WRITE_OSZICAR_PSEUDO_SCF": "1"}, True),
-        ({"WRITE_OSZICAR_PSEUDO_SCF": "on"}, True),
-        ({"WRITE_PSEUDO_SCF": "yes"}, True),
+        ({"WRITE_PSEUDO_SCF": "1"}, True),
+        ({"WRITE_PSEUDO_SCF": "on"}, True),
+        ({"WRITE_OSZICAR_PSEUDO_SCF": "yes"}, True),
         ({}, False),
-        ({"WRITE_OSZICAR_PSEUDO_SCF": "off"}, False),
+        ({"WRITE_PSEUDO_SCF": "off"}, False),
     ],
 )
-def test_should_write_oszicar_pseudo_scf(tags, expected):
-    assert vpmdk._should_write_oszicar_pseudo_scf(tags) is expected
+def test_should_write_pseudo_scf(tags, expected):
+    assert vpmdk._should_write_pseudo_scf(tags) is expected
 
 
 def test_collect_neb_image_results_prefers_contcar_for_geometry(tmp_path: Path):

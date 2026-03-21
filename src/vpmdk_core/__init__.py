@@ -790,6 +790,17 @@ class _VasprunStep:
     sc_time: float = 0.0
 
 
+@dataclass(frozen=True)
+class _PseudoScfSettings:
+    """Pseudo electronic-step settings used for VASP-compatibility output."""
+
+    enabled: bool = False
+    nelm: int = 60
+    nelmin: int = 2
+    nelmdl: int = 0
+    ediff: float = 1.0e-4
+
+
 @dataclass
 class _VaspCompatRecorder:
     """State tracker for VASP-like ``OUTCAR``/``OSZICAR``/``vasprun.xml`` output."""
@@ -803,7 +814,7 @@ class _VaspCompatRecorder:
     isif: int | None = None
     stress_mode: str = "none"
     neb_mode: bool = False
-    write_oszicar_pseudo_scf: bool = False
+    pseudo_scf: _PseudoScfSettings = field(default_factory=_PseudoScfSettings)
     oszicar_scf_header_written: bool = False
     neb_prev_positions: np.ndarray | None = None
     neb_next_positions: np.ndarray | None = None
@@ -1063,6 +1074,54 @@ def _append_kpoints_xml(parent) -> None:
     ET.SubElement(weights, "v").text = "       1.00000000 "
 
 
+def _load_pseudo_scf_settings(*, enabled: bool) -> _PseudoScfSettings:
+    """Return pseudo-SCF settings derived from the local ``INCAR`` when enabled."""
+
+    if not enabled:
+        return _PseudoScfSettings(enabled=False)
+
+    incar = _load_incar("INCAR")
+    if not hasattr(incar, "get"):
+        return _PseudoScfSettings(enabled=True)
+
+    def _parse_int_tag(key: str, default: int) -> int:
+        raw = incar.get(key, default)
+        try:
+            return int(float(raw))
+        except (TypeError, ValueError):
+            return default
+
+    def _parse_float_tag(key: str, default: float) -> float:
+        raw = incar.get(key, default)
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return default
+
+    nelm = max(1, _parse_int_tag("NELM", 60))
+    nelmin = min(max(1, _parse_int_tag("NELMIN", 2)), nelm)
+    nelmdl = _parse_int_tag("NELMDL", 0)
+    ediff = max(_parse_float_tag("EDIFF", 1.0e-4), 0.0)
+    return _PseudoScfSettings(
+        enabled=True,
+        nelm=nelm,
+        nelmin=nelmin,
+        nelmdl=nelmdl,
+        ediff=ediff,
+    )
+
+
+def _format_outcar_ediff(value: float) -> str:
+    """Return VASP-like scientific notation for ``EDIFF`` lines in ``OUTCAR``."""
+
+    if value == 0.0:
+        return "0.0E+00"
+    mantissa_text, exponent_text = f"{value:.1E}".split("E")
+    mantissa = float(mantissa_text) / 10.0
+    exponent = int(exponent_text) + 1
+    return f"{mantissa:.1f}E{exponent:+03d}"
+
+
 def _initialize_vasp_compat_outputs(
     atoms,
     *,
@@ -1077,6 +1136,7 @@ def _initialize_vasp_compat_outputs(
 ) -> _VaspCompatRecorder:
     """Initialize compatibility outputs and return recorder state."""
 
+    pseudo_scf = _load_pseudo_scf_settings(enabled=write_oszicar_pseudo_scf)
     initial_cell = _matrix_to_nested_list(atoms.get_cell().array)
     initial_scaled_positions = _matrix_to_nested_list(atoms.get_scaled_positions())
     current_positions = np.asarray(atoms.get_positions(), dtype=float)
@@ -1096,7 +1156,7 @@ def _initialize_vasp_compat_outputs(
         isif=isif,
         stress_mode=_stress_mode_from_isif(isif),
         neb_mode=neb_mode,
-        write_oszicar_pseudo_scf=write_oszicar_pseudo_scf,
+        pseudo_scf=pseudo_scf,
         neb_prev_positions=prev_positions,
         neb_next_positions=next_positions,
     )
@@ -1110,6 +1170,16 @@ def _initialize_vasp_compat_outputs(
             handle.write(f"   MDALGO = {mdalgo:6d}\n")
         if potim is not None:
             handle.write(f"   POTIM  = {potim:6.4f}    time-step for ionic-motion\n")
+        if pseudo_scf.enabled:
+            handle.write(" Electronic Relaxation 1\n")
+            handle.write(
+                f"   NELM   = {pseudo_scf.nelm:6d};   NELMIN={pseudo_scf.nelmin:3d};"
+                f" NELMDL={pseudo_scf.nelmdl:3d}     # of ELM steps \n"
+            )
+            handle.write(
+                f"   EDIFF  = {_format_outcar_ediff(pseudo_scf.ediff):>10s}"
+                "   stopping-criterion for ELM\n"
+            )
         handle.write(f"   ICHAIN = {0:6d}\n")
         handle.write(
             f"   number of dos      NEDOS =    301   number of ions     NIONS = {len(atoms):6d}\n"
@@ -1128,6 +1198,7 @@ def _append_outcar_compat_step(
     atoms,
     forces: np.ndarray,
     stress_matrix: np.ndarray | None,
+    pseudo_scf: _PseudoScfSettings,
     potential_energy: float,
     total_energy: float,
     kinetic_energy: float,
@@ -1149,8 +1220,12 @@ def _append_outcar_compat_step(
 
     with open("OUTCAR", "a", encoding="utf-8") as handle:
         handle.write(
-            f"--------------------------------------- Iteration {step_index:6d}(   1)  ---------------------------------------\n"
+            f"\n--------------------------------------- Ionic step {step_index:8d}  -------------------------------------------\n\n"
         )
+        if pseudo_scf.enabled:
+            handle.write(
+                f"\n--------------------------------------- Iteration {step_index:6d}(   1)  ---------------------------------------\n"
+            )
         handle.write(" POSITION                                       TOTAL-FORCE (eV/Angst)\n")
         handle.write(" -----------------------------------------------------------------------------------\n")
         for position, force in zip(positions, forces):
@@ -1263,7 +1338,7 @@ def _append_oszicar_compat_step(
     recorder.previous_energy = potential_energy
 
     with open("OSZICAR", "a", encoding="utf-8") as handle:
-        if recorder.write_oszicar_pseudo_scf:
+        if recorder.pseudo_scf.enabled:
             if not recorder.oszicar_scf_header_written:
                 handle.write("       N       E                     dE             d eps       ncg     rms          rms(c)\n")
                 recorder.oszicar_scf_header_written = True
@@ -1327,6 +1402,7 @@ def _record_vasp_compat_step(
         atoms,
         forces,
         stress_matrix,
+        recorder.pseudo_scf,
         potential_energy,
         total_energy,
         kinetic_energy,
@@ -1437,6 +1513,20 @@ def _build_atominfo_xml(parent, symbols: List[str]) -> None:
         ET.SubElement(row, "c").text = f"PAW_PBE {symbol}"
 
 
+def _append_pseudo_scf_xml_step(parent, step: _VasprunStep) -> None:
+    """Append one dummy ``scstep`` block for pseudo-SCF compatibility."""
+
+    scstep = ET.SubElement(parent, "scstep")
+    ET.SubElement(scstep, "time", {"name": "dav"}).text = f"{step.sc_time:8.2f} {step.sc_time:8.2f}"
+    ET.SubElement(scstep, "time", {"name": "total"}).text = (
+        f"{step.sc_time:8.2f} {step.sc_time:8.2f}"
+    )
+    energy = ET.SubElement(scstep, "energy")
+    ET.SubElement(energy, "i", {"name": "e_fr_energy"}).text = f"{step.potential_energy:16.8f}"
+    ET.SubElement(energy, "i", {"name": "e_wo_entrp"}).text = f"{step.potential_energy:16.8f}"
+    ET.SubElement(energy, "i", {"name": "e_0_energy"}).text = f"{step.potential_energy:16.8f}"
+
+
 def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
     """Write a minimal ``vasprun.xml`` with ionic-step data."""
 
@@ -1450,6 +1540,13 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
     if recorder.isif is not None:
         ET.SubElement(incar, "i", {"name": "ISIF", "type": "int"}).text = str(recorder.isif)
     ET.SubElement(incar, "i", {"name": "NSW", "type": "int"}).text = str(len(recorder.steps))
+    if recorder.pseudo_scf.enabled:
+        ET.SubElement(incar, "i", {"name": "NELM", "type": "int"}).text = str(recorder.pseudo_scf.nelm)
+        ET.SubElement(incar, "i", {"name": "NELMIN", "type": "int"}).text = str(recorder.pseudo_scf.nelmin)
+        ET.SubElement(incar, "i", {"name": "NELMDL", "type": "int"}).text = str(recorder.pseudo_scf.nelmdl)
+        ET.SubElement(incar, "i", {"name": "EDIFF", "type": "float"}).text = (
+            f"{recorder.pseudo_scf.ediff:.8E}"
+        )
     if recorder.potim is not None:
         ET.SubElement(incar, "i", {"name": "POTIM", "type": "float"}).text = f"{recorder.potim:.6f}"
     if recorder.mdalgo is not None:
@@ -1468,11 +1565,23 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
     _append_kpoints_xml(root)
 
     parameters = ET.SubElement(root, "parameters")
-    electronic = ET.SubElement(parameters, "separator", {"name": "electronic"})
-    ET.SubElement(electronic, "i", {"name": "NELM", "type": "int"}).text = "1"
-    ET.SubElement(electronic, "i", {"name": "NBANDS", "type": "int"}).text = str(
-        max(1, 4 * len(recorder.symbols))
-    )
+    if recorder.pseudo_scf.enabled:
+        electronic = ET.SubElement(parameters, "separator", {"name": "electronic convergence"})
+        ET.SubElement(electronic, "i", {"name": "NELM", "type": "int"}).text = str(
+            recorder.pseudo_scf.nelm
+        )
+        ET.SubElement(electronic, "i", {"name": "NELMDL", "type": "int"}).text = str(
+            recorder.pseudo_scf.nelmdl
+        )
+        ET.SubElement(electronic, "i", {"name": "NELMIN", "type": "int"}).text = str(
+            recorder.pseudo_scf.nelmin
+        )
+        ET.SubElement(electronic, "i", {"name": "EDIFF", "type": "float"}).text = (
+            f"{recorder.pseudo_scf.ediff:.8E}"
+        )
+        ET.SubElement(electronic, "i", {"name": "NBANDS", "type": "int"}).text = str(
+            max(1, 4 * len(recorder.symbols))
+        )
     ionic = ET.SubElement(parameters, "separator", {"name": "ionic"})
     ET.SubElement(ionic, "i", {"name": "IBRION", "type": "int"}).text = str(recorder.ibrion)
     if recorder.isif is not None:
@@ -1491,6 +1600,8 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
 
     for step in recorder.steps:
         calculation = ET.SubElement(root, "calculation")
+        if recorder.pseudo_scf.enabled:
+            _append_pseudo_scf_xml_step(calculation, step)
         _append_structure_xml(
             calculation,
             cell=step.cell,
@@ -1513,9 +1624,10 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
         ET.SubElement(energy, "i", {"name": "nosepot"}).text = f"{step.thermostat_potential:16.8f}"
         ET.SubElement(energy, "i", {"name": "nosekinetic"}).text = f"{step.thermostat_kinetic:16.8f}"
         ET.SubElement(energy, "i", {"name": "total"}).text = f"{step.total_energy:16.8f}"
-        ET.SubElement(calculation, "time", {"name": "totalsc"}).text = (
-            f"{step.sc_time:8.2f} {step.sc_time:8.2f}"
-        )
+        if recorder.pseudo_scf.enabled:
+            ET.SubElement(calculation, "time", {"name": "totalsc"}).text = (
+                f"{step.sc_time:8.2f} {step.sc_time:8.2f}"
+            )
 
     _append_structure_xml(
         root,
@@ -2175,13 +2287,26 @@ def _append_outcar_footer(recorder: _VaspCompatRecorder) -> None:
 
     elapsed = max(time.perf_counter() - recorder.started_at, 0.0)
     peak_memory_kb = 0.0
+    minor_page_faults = 0
+    major_page_faults = 0
+    voluntary_context_switches = 0
+    involuntary_context_switches = 0
     if resource is not None:
         try:
-            peak_memory_kb = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+            usage = resource.getrusage(resource.RUSAGE_SELF)
+            peak_memory_kb = float(usage.ru_maxrss)
             if sys.platform.startswith("darwin"):
                 peak_memory_kb /= 1024.0
+            minor_page_faults = int(getattr(usage, "ru_minflt", 0))
+            major_page_faults = int(getattr(usage, "ru_majflt", 0))
+            voluntary_context_switches = int(getattr(usage, "ru_nvcsw", 0))
+            involuntary_context_switches = int(getattr(usage, "ru_nivcsw", 0))
         except Exception:
             peak_memory_kb = 0.0
+            minor_page_faults = 0
+            major_page_faults = 0
+            voluntary_context_switches = 0
+            involuntary_context_switches = 0
 
     with open("OUTCAR", "a", encoding="utf-8") as handle:
         handle.write(" General timing and accounting informations for this job:\n")
@@ -2194,6 +2319,10 @@ def _append_outcar_footer(recorder: _VaspCompatRecorder) -> None:
             f"   Maximum memory used (kb):{peak_memory_kb:15.1f}\n"
             f"   Average memory used (kb):{peak_memory_kb:15.1f}\n"
             f"   Number of ionic steps:{len(recorder.steps):21d}\n\n"
+            f"   Minor page faults:{minor_page_faults:25d}\n"
+            f"   Major page faults:{major_page_faults:25d}\n"
+            f"   Voluntary context switches:{voluntary_context_switches:15d}\n"
+            f"   Involuntary context switches:{involuntary_context_switches:13d}\n\n"
         )
 
 
@@ -2319,6 +2448,10 @@ SUPPORTED_INCAR_TAGS = {
     "ISIF",
     "IBRION",
     "NSW",
+    "NELM",
+    "NELMIN",
+    "NELMDL",
+    "EDIFF",
     "EDIFFG",
     "PSTRESS",
     "TEBEG",
@@ -2722,11 +2855,17 @@ def _should_write_lammps_trajectory(bcar_tags: Dict[str, str]) -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
-def _should_write_oszicar_pseudo_scf(bcar_tags: Dict[str, str]) -> bool:
-    """Return ``True`` when BCAR requests pseudo electronic steps in OSZICAR."""
+def _should_write_pseudo_scf(bcar_tags: Dict[str, str]) -> bool:
+    """Return ``True`` when BCAR requests pseudo electronic-step compatibility output."""
 
-    raw = bcar_tags.get("WRITE_OSZICAR_PSEUDO_SCF", bcar_tags.get("WRITE_PSEUDO_SCF", "0"))
+    raw = bcar_tags.get("WRITE_PSEUDO_SCF", bcar_tags.get("WRITE_OSZICAR_PSEUDO_SCF", "0"))
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _should_write_oszicar_pseudo_scf(bcar_tags: Dict[str, str]) -> bool:
+    """Backward-compatible alias for :func:`_should_write_pseudo_scf`."""
+
+    return _should_write_pseudo_scf(bcar_tags)
 
 
 def _get_lammps_trajectory_interval(bcar_tags: Dict[str, str]) -> int:
@@ -3409,7 +3548,7 @@ def main():
 
     write_energy_csv = _should_write_energy_csv(bcar)
     write_lammps_traj = _should_write_lammps_trajectory(bcar)
-    write_oszicar_pseudo_scf = _should_write_oszicar_pseudo_scf(bcar)
+    write_pseudo_scf = _should_write_pseudo_scf(bcar)
     lammps_traj_interval = _get_lammps_trajectory_interval(bcar) if write_lammps_traj else 1
     potcar_for_structure = potcar_path if os.path.exists(potcar_path) else None
 
@@ -3425,7 +3564,7 @@ def main():
                 write_energy_csv=write_energy_csv,
                 write_lammps_traj=write_lammps_traj,
                 lammps_traj_interval=lammps_traj_interval,
-                oszicar_pseudo_scf=write_oszicar_pseudo_scf,
+                oszicar_pseudo_scf=write_pseudo_scf,
             )
             print("Calculation completed.")
             return
@@ -3451,7 +3590,7 @@ def main():
             atoms,
             calculator,
             isif=settings.stress_isif,
-            oszicar_pseudo_scf=write_oszicar_pseudo_scf,
+            oszicar_pseudo_scf=write_pseudo_scf,
         )
     elif settings.ibrion == 0:
         run_md(
@@ -3465,7 +3604,7 @@ def main():
             smass=settings.smass,
             thermostat_params=settings.thermostat_params,
             isif=settings.stress_isif,
-            oszicar_pseudo_scf=write_oszicar_pseudo_scf,
+            oszicar_pseudo_scf=write_pseudo_scf,
             write_lammps_traj=write_lammps_traj,
             lammps_traj_interval=lammps_traj_interval,
         )
@@ -3482,7 +3621,7 @@ def main():
             ibrion=settings.ibrion,
             stress_isif=settings.stress_isif,
             neb_mode=neb_mode,
-            oszicar_pseudo_scf=write_oszicar_pseudo_scf,
+            oszicar_pseudo_scf=write_pseudo_scf,
         )
 
     print("Calculation completed.")

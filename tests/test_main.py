@@ -555,12 +555,12 @@ def test_main_enables_neb_mode_when_images_present(tmp_path: Path, prepare_input
     assert seen.get("neb_mode") is True
 
 
-def test_main_passes_oszicar_pseudo_scf_flag_from_bcar(tmp_path: Path, prepare_inputs):
+def test_main_passes_pseudo_scf_flag_from_bcar(tmp_path: Path, prepare_inputs):
     prepare_inputs(
         tmp_path,
         potential="CHGNET",
         incar_overrides={"NSW": "2", "IBRION": "2"},
-        extra_bcar={"WRITE_OSZICAR_PSEUDO_SCF": "on"},
+        extra_bcar={"WRITE_PSEUDO_SCF": "on"},
     )
 
     seen: dict[str, object] = {}

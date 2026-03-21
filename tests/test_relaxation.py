@@ -47,6 +47,7 @@ def test_relaxation_isif2_moves_ions_without_changing_cell(
     assert "total drift:" in outcar
     assert "energy  without entropy=" in outcar
     assert "General timing and accounting informations for this job" in outcar
+    assert "Voluntary context switches" in outcar
     assert (tmp_path / "OSZICAR").exists()
     assert (tmp_path / "vasprun.xml").exists()
 
@@ -195,8 +196,15 @@ def test_relaxation_oszicar_pseudo_scf_is_off_by_default(tmp_path: Path, load_at
         monkeypatch.undo()
 
     oszicar = (tmp_path / "OSZICAR").read_text()
+    outcar = (tmp_path / "OUTCAR").read_text()
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
     assert "DAV:" not in oszicar
     assert "N       E" not in oszicar
+    assert "NELM   =" not in outcar
+    assert "Iteration      1(   1)" not in outcar
+    assert "Voluntary context switches" in outcar
+    assert root.find(".//scstep") is None
+    assert root.find("./calculation/time[@name='totalsc']") is None
 
 
 def test_relaxation_oszicar_pseudo_scf_is_written_when_enabled(tmp_path: Path, load_atoms):
@@ -233,8 +241,15 @@ def test_relaxation_oszicar_pseudo_scf_is_written_when_enabled(tmp_path: Path, l
         monkeypatch.undo()
 
     oszicar = (tmp_path / "OSZICAR").read_text()
+    outcar = (tmp_path / "OUTCAR").read_text()
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
     assert "DAV:" in oszicar
     assert "N       E" in oszicar
+    assert "NELM   =" in outcar
+    assert "Iteration      1(   1)" in outcar
+    assert root.find(".//scstep") is not None
+    assert root.find(".//i[@name='NELM']") is not None
+    assert root.find("./calculation/time[@name='totalsc']") is not None
 
 
 def test_relaxation_writes_stress_block_when_isif_allows(tmp_path: Path, load_atoms):
@@ -314,7 +329,9 @@ def test_relaxation_omits_stress_block_when_isif_zero(tmp_path: Path, load_atoms
     assert "FORCE on cell =-STRESS in cart. coord." not in outcar
 
 
-def test_relaxation_vasprun_includes_kpoints_and_timing(tmp_path: Path, load_atoms):
+def test_relaxation_vasprun_includes_kpoints_and_omits_pseudo_scf_timing_by_default(
+    tmp_path: Path, load_atoms
+):
     atoms = load_atoms()
 
     class DummyBFGS:
@@ -350,7 +367,8 @@ def test_relaxation_vasprun_includes_kpoints_and_timing(tmp_path: Path, load_ato
     assert root.find("./varray[@name='primitive_index']") is not None
     first_calc = root.find("calculation")
     assert first_calc is not None
-    assert first_calc.find("./time[@name='totalsc']") is not None
+    assert first_calc.find("./time[@name='totalsc']") is None
+    assert first_calc.find("scstep") is None
 
 
 def test_relaxation_isif3_moves_ions_and_cell(tmp_path: Path, load_atoms, arrays_close):

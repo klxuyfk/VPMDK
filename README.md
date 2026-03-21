@@ -111,12 +111,12 @@ DEVICE=cuda           # Optional device override when the backend supports it
 | `WRITE_ENERGY_CSV` | Write `energy.csv` during relaxation (`1` to enable) | `0` |
 | `WRITE_LAMMPS_TRAJ` | Write a LAMMPS trajectory during MD (`1` to enable) | `0` |
 | `LAMMPS_TRAJ_INTERVAL` | MD steps between trajectory frames (only when `WRITE_LAMMPS_TRAJ=1`) | `1` |
-| `WRITE_OSZICAR_PSEUDO_SCF` | Add pseudo electronic-step (`DAV:`) lines to `OSZICAR` (`1` to enable) | `0` (OFF) |
+| `WRITE_PSEUDO_SCF` | Add pseudo electronic-step compatibility blocks to `OSZICAR`, `OUTCAR`, and `vasprun.xml` (`1` to enable) | `0` (OFF) |
 | `DEEPMD_TYPE_MAP` | Comma/space-separated species list mapped to the DeePMD graph | Inferred from `POSCAR` order |
 | `DEEPMD_HEAD` | Select a DeePMD model head by name (when supported by the checkpoint) | Unset |
 
-`WRITE_PSEUDO_SCF` is accepted as a compatibility alias of
-`WRITE_OSZICAR_PSEUDO_SCF`.
+`WRITE_OSZICAR_PSEUDO_SCF` is accepted as a backward-compatible alias of
+`WRITE_PSEUDO_SCF`.
 
 **Backend-specific knobs.** Only relevant when the corresponding backend is chosen.
 
@@ -159,9 +159,9 @@ Depending on the calculation type, VPMDK produces the following files in VASP fo
 | File | When produced | Contents |
 |------|---------------|----------|
 | `CONTCAR` | Always | Final atomic positions and cell. |
-| `OUTCAR` | Always | VASP-like step blocks plus a simplified timing/memory footer at the end of each run. |
-| `OSZICAR` | Always | VASP-like ionic-step energy summary (`F`, `E0`, `dE`; and MD thermostat terms) with VASP-like aligned scientific notation. Optional pseudo electronic-step (`DAV:`) lines are added only when `WRITE_OSZICAR_PSEUDO_SCF=1`; these are compatibility placeholders, not real electronic SCF iterations. |
-| `vasprun.xml` | Always | Minimal VASP-like XML containing initial/final structures, per-step energies, and forces. |
+| `OUTCAR` | Always | VASP-like step blocks plus a simplified timing/memory footer at the end of each run. When `WRITE_PSEUDO_SCF=1`, pseudo electronic-step metadata such as `NELM` and `Iteration ... (   1)` is added for compatibility. |
+| `OSZICAR` | Always | VASP-like ionic-step energy summary (`F`, `E0`, `dE`; and MD thermostat terms) with VASP-like aligned scientific notation. Optional pseudo electronic-step (`DAV:`) lines are added only when `WRITE_PSEUDO_SCF=1`; these are compatibility placeholders, not real electronic SCF iterations. |
+| `vasprun.xml` | Always | Minimal VASP-like XML containing initial/final structures, per-step energies, and forces. When `WRITE_PSEUDO_SCF=1`, dummy `NELM` metadata and one `<scstep>` block per ionic step are also emitted for compatibility. |
 | `XDATCAR` | MD only (`IBRION=0`) | Atomic positions at each MD step (trajectory). |
 | `lammps.lammpstrj` | MD with `WRITE_LAMMPS_TRAJ=1` | LAMMPS text dump of atomic positions at the requested interval. |
 | `energy.csv` | Relaxations with `WRITE_ENERGY_CSV=1` | Potential energy at each relaxation step. |
