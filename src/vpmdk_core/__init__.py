@@ -2417,6 +2417,7 @@ def run_single_point(
     )
     _write_vasprun_xml(recorder, atoms)
     _append_outcar_footer(recorder)
+    write("CONTCAR", atoms, direct=True)
     print(
         f"{1:4d} F= {_format_energy_value(energy)} "
         f"E0= {_format_energy_value(energy)}  d E ={_format_energy_value(delta)}"
