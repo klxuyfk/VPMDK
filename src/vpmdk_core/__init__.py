@@ -801,6 +801,10 @@ class _PseudoScfSettings:
     ediff: float = 1.0e-4
 
 
+_PSEUDO_SCF_INCAR_TAGS = frozenset({"NELM", "NELMIN", "NELMDL", "EDIFF"})
+_ACTIVE_PSEUDO_SCF_SETTINGS: _PseudoScfSettings | None = None
+
+
 @dataclass
 class _VaspCompatRecorder:
     """State tracker for VASP-like ``OUTCAR``/``OSZICAR``/``vasprun.xml`` output."""
@@ -1074,13 +1078,12 @@ def _append_kpoints_xml(parent) -> None:
     ET.SubElement(weights, "v").text = "       1.00000000 "
 
 
-def _load_pseudo_scf_settings(*, enabled: bool) -> _PseudoScfSettings:
-    """Return pseudo-SCF settings derived from the local ``INCAR`` when enabled."""
+def _pseudo_scf_settings_from_incar(incar, *, enabled: bool) -> _PseudoScfSettings:
+    """Return pseudo-SCF settings derived from the selected run ``INCAR``."""
 
     if not enabled:
         return _PseudoScfSettings(enabled=False)
 
-    incar = _load_incar("INCAR")
     if not hasattr(incar, "get"):
         return _PseudoScfSettings(enabled=True)
 
@@ -1111,6 +1114,29 @@ def _load_pseudo_scf_settings(*, enabled: bool) -> _PseudoScfSettings:
     )
 
 
+@contextmanager
+def _active_pseudo_scf_settings(settings: _PseudoScfSettings):
+    """Temporarily expose pseudo-SCF settings to nested output writers."""
+
+    global _ACTIVE_PSEUDO_SCF_SETTINGS
+    previous = _ACTIVE_PSEUDO_SCF_SETTINGS
+    _ACTIVE_PSEUDO_SCF_SETTINGS = settings
+    try:
+        yield
+    finally:
+        _ACTIVE_PSEUDO_SCF_SETTINGS = previous
+
+
+def _resolve_pseudo_scf_settings(*, enabled: bool) -> _PseudoScfSettings:
+    """Return active pseudo-SCF settings without reparsing filesystem state."""
+
+    if not enabled:
+        return _PseudoScfSettings(enabled=False)
+    if _ACTIVE_PSEUDO_SCF_SETTINGS is not None:
+        return _ACTIVE_PSEUDO_SCF_SETTINGS
+    return _PseudoScfSettings(enabled=True)
+
+
 def _format_outcar_ediff(value: float) -> str:
     """Return VASP-like scientific notation for ``EDIFF`` lines in ``OUTCAR``."""
 
@@ -1136,7 +1162,7 @@ def _initialize_vasp_compat_outputs(
 ) -> _VaspCompatRecorder:
     """Initialize compatibility outputs and return recorder state."""
 
-    pseudo_scf = _load_pseudo_scf_settings(enabled=write_oszicar_pseudo_scf)
+    pseudo_scf = _resolve_pseudo_scf_settings(enabled=write_oszicar_pseudo_scf)
     initial_cell = _matrix_to_nested_list(atoms.get_cell().array)
     initial_scaled_positions = _matrix_to_nested_list(atoms.get_scaled_positions())
     current_positions = np.asarray(atoms.get_positions(), dtype=float)
@@ -2448,10 +2474,6 @@ SUPPORTED_INCAR_TAGS = {
     "ISIF",
     "IBRION",
     "NSW",
-    "NELM",
-    "NELMIN",
-    "NELMDL",
-    "EDIFF",
     "EDIFFG",
     "PSTRESS",
     "TEBEG",
@@ -2484,11 +2506,16 @@ def _load_incar(path: str):
     return {}
 
 
-def _warn_for_unsupported_incar_tags(incar) -> None:
+def _warn_for_unsupported_incar_tags(incar, *, pseudo_scf_enabled: bool = False) -> None:
     """Emit warnings for INCAR options that are silently ignored."""
 
+    supported_tags = (
+        SUPPORTED_INCAR_TAGS | _PSEUDO_SCF_INCAR_TAGS
+        if pseudo_scf_enabled
+        else SUPPORTED_INCAR_TAGS
+    )
     for key in getattr(incar, "keys", lambda: [])():
-        if key not in SUPPORTED_INCAR_TAGS:
+        if key not in supported_tags:
             print(f"INCAR tag {key} is not supported and will be ignored")
 
 
@@ -3542,87 +3569,88 @@ def main():
     incar = _load_incar(incar_path)
     bcar = parse_key_value_file(bcar_path) if os.path.exists(bcar_path) else {}
 
-    _warn_for_unsupported_incar_tags(incar)
-    settings = _load_incar_settings(incar)
-    neb_mode = _is_neb_like_incar(incar)
-
     write_energy_csv = _should_write_energy_csv(bcar)
     write_lammps_traj = _should_write_lammps_trajectory(bcar)
     write_pseudo_scf = _should_write_pseudo_scf(bcar)
+    pseudo_scf_settings = _pseudo_scf_settings_from_incar(incar, enabled=write_pseudo_scf)
+    _warn_for_unsupported_incar_tags(incar, pseudo_scf_enabled=write_pseudo_scf)
+    settings = _load_incar_settings(incar)
+    neb_mode = _is_neb_like_incar(incar)
     lammps_traj_interval = _get_lammps_trajectory_interval(bcar) if write_lammps_traj else 1
     potcar_for_structure = potcar_path if os.path.exists(potcar_path) else None
 
-    if neb_mode:
-        neb_image_dirs = _discover_neb_image_directories(workdir)
-        if neb_image_dirs:
-            run_neb_images(
-                workdir=workdir,
-                incar=incar,
-                settings=settings,
-                bcar=bcar,
-                potcar_path=potcar_for_structure,
-                write_energy_csv=write_energy_csv,
-                write_lammps_traj=write_lammps_traj,
-                lammps_traj_interval=lammps_traj_interval,
+    with _active_pseudo_scf_settings(pseudo_scf_settings):
+        if neb_mode:
+            neb_image_dirs = _discover_neb_image_directories(workdir)
+            if neb_image_dirs:
+                run_neb_images(
+                    workdir=workdir,
+                    incar=incar,
+                    settings=settings,
+                    bcar=bcar,
+                    potcar_path=potcar_for_structure,
+                    write_energy_csv=write_energy_csv,
+                    write_lammps_traj=write_lammps_traj,
+                    lammps_traj_interval=lammps_traj_interval,
+                    oszicar_pseudo_scf=write_pseudo_scf,
+                )
+                print("Calculation completed.")
+                return
+
+        if not os.path.exists(poscar_path):
+            if neb_mode:
+                print(
+                    "POSCAR not found. In NEB mode provide either a top-level POSCAR or "
+                    "numbered image directories (00, 01, ...)."
+                )
+            else:
+                print("POSCAR not found.")
+            sys.exit(1)
+
+        structure = read_structure(poscar_path, potcar_for_structure)
+        atoms = AseAtomsAdaptor.get_atoms(structure)
+        atoms.wrap()
+        _apply_initial_magnetization(atoms, incar)
+        calculator = get_calculator(bcar, structure=structure)
+
+        if settings.nsw <= 0 or settings.ibrion < 0:
+            run_single_point(
+                atoms,
+                calculator,
+                isif=settings.stress_isif,
                 oszicar_pseudo_scf=write_pseudo_scf,
             )
-            print("Calculation completed.")
-            return
-
-    if not os.path.exists(poscar_path):
-        if neb_mode:
-            print(
-                "POSCAR not found. In NEB mode provide either a top-level POSCAR or "
-                "numbered image directories (00, 01, ...)."
+        elif settings.ibrion == 0:
+            run_md(
+                atoms,
+                calculator,
+                settings.nsw,
+                settings.tebeg,
+                settings.potim,
+                mdalgo=settings.mdalgo,
+                teend=settings.teend,
+                smass=settings.smass,
+                thermostat_params=settings.thermostat_params,
+                isif=settings.stress_isif,
+                oszicar_pseudo_scf=write_pseudo_scf,
+                write_lammps_traj=write_lammps_traj,
+                lammps_traj_interval=lammps_traj_interval,
             )
         else:
-            print("POSCAR not found.")
-        sys.exit(1)
-
-    structure = read_structure(poscar_path, potcar_for_structure)
-    atoms = AseAtomsAdaptor.get_atoms(structure)
-    atoms.wrap()
-    _apply_initial_magnetization(atoms, incar)
-    calculator = get_calculator(bcar, structure=structure)
-
-    if settings.nsw <= 0 or settings.ibrion < 0:
-        run_single_point(
-            atoms,
-            calculator,
-            isif=settings.stress_isif,
-            oszicar_pseudo_scf=write_pseudo_scf,
-        )
-    elif settings.ibrion == 0:
-        run_md(
-            atoms,
-            calculator,
-            settings.nsw,
-            settings.tebeg,
-            settings.potim,
-            mdalgo=settings.mdalgo,
-            teend=settings.teend,
-            smass=settings.smass,
-            thermostat_params=settings.thermostat_params,
-            isif=settings.stress_isif,
-            oszicar_pseudo_scf=write_pseudo_scf,
-            write_lammps_traj=write_lammps_traj,
-            lammps_traj_interval=lammps_traj_interval,
-        )
-    else:
-        run_relaxation(
-            atoms,
-            calculator,
-            settings.nsw,
-            settings.force_limit,
-            write_energy_csv,
-            isif=settings.isif,
-            pstress=settings.pstress,
-            energy_tolerance=settings.energy_tolerance,
-            ibrion=settings.ibrion,
-            stress_isif=settings.stress_isif,
-            neb_mode=neb_mode,
-            oszicar_pseudo_scf=write_pseudo_scf,
-        )
+            run_relaxation(
+                atoms,
+                calculator,
+                settings.nsw,
+                settings.force_limit,
+                write_energy_csv,
+                isif=settings.isif,
+                pstress=settings.pstress,
+                energy_tolerance=settings.energy_tolerance,
+                ibrion=settings.ibrion,
+                stress_isif=settings.stress_isif,
+                neb_mode=neb_mode,
+                oszicar_pseudo_scf=write_pseudo_scf,
+            )
 
     print("Calculation completed.")
 

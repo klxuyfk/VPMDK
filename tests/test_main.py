@@ -594,6 +594,122 @@ def test_main_passes_pseudo_scf_flag_from_bcar(tmp_path: Path, prepare_inputs):
     assert seen.get("oszicar_pseudo_scf") is True
 
 
+def test_main_warns_that_pseudo_scf_incar_tags_are_ignored_by_default(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0"},
+    )
+
+    messages: list[str] = []
+
+    def fake_print(*args, **kwargs):
+        sep = kwargs.get("sep", " ")
+        end = kwargs.get("end", "\n")
+        messages.append(sep.join(str(a) for a in args) + end)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "run_single_point", lambda *_, **__: 0.0)
+    monkeypatch.setattr("builtins.print", fake_print)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert any("INCAR tag NELM is not supported" in message for message in messages)
+    assert any("INCAR tag NELMIN is not supported" in message for message in messages)
+    assert any("INCAR tag EDIFF is not supported" in message for message in messages)
+
+
+def test_main_suppresses_pseudo_scf_incar_warnings_when_enabled(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0"},
+        extra_bcar={"WRITE_PSEUDO_SCF": "on"},
+    )
+
+    messages: list[str] = []
+
+    def fake_print(*args, **kwargs):
+        sep = kwargs.get("sep", " ")
+        end = kwargs.get("end", "\n")
+        messages.append(sep.join(str(a) for a in args) + end)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "run_single_point", lambda *_, **__: 0.0)
+    monkeypatch.setattr("builtins.print", fake_print)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert not any("INCAR tag NELM is not supported" in message for message in messages)
+    assert not any("INCAR tag NELMIN is not supported" in message for message in messages)
+    assert not any("INCAR tag EDIFF is not supported" in message for message in messages)
+
+
+def test_main_pseudo_scf_uses_selected_run_incar_from_dir_argument(
+    tmp_path: Path, prepare_inputs
+):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    prepare_inputs(
+        run_dir,
+        potential="CHGNET",
+        incar_overrides={
+            "NSW": "1",
+            "IBRION": "2",
+            "ISIF": "2",
+            "NELM": "37",
+            "NELMIN": "4",
+            "EDIFF": "5E-07",
+        },
+        extra_bcar={"WRITE_PSEUDO_SCF": "on"},
+    )
+    (tmp_path / "INCAR").write_text("NELM = 12\nNELMIN = 1\nEDIFF = 1E-03\n")
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+            self._callbacks = []
+
+        def attach(self, callback, *args, **kwargs):
+            self._callbacks.append(callback)
+
+        def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            target.positions += 0.01
+            for callback in self._callbacks:
+                callback()
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "BFGS", DummyBFGS)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(run_dir)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    outcar = (tmp_path / "OUTCAR").read_text()
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    assert "NELM   =     37;" in outcar
+    assert "NELM   =     12;" not in outcar
+    assert root.find("./incar/i[@name='NELM']").text.strip() == "37"
+    assert root.find("./incar/i[@name='NELMIN']").text.strip() == "4"
+    assert root.find("./incar/i[@name='EDIFF']").text.strip() == "5.00000000E-07"
+
+
 def test_main_runs_neb_images_from_numbered_directories(tmp_path: Path, prepare_inputs):
     prepare_inputs(
         tmp_path,
