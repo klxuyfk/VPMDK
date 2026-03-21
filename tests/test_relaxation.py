@@ -7,6 +7,8 @@ import pytest
 import numpy as np
 import xml.etree.ElementTree as ET
 
+from ase.io import read as ase_read
+
 import vpmdk
 from tests.conftest import DummyCalculator
 
@@ -206,9 +208,14 @@ def test_relaxation_oszicar_pseudo_scf_is_off_by_default(tmp_path: Path, load_at
     assert "Voluntary context switches" in outcar
     assert electronic is not None
     assert root.find("./parameters/separator[@name='electronic convergence']") is None
+    assert electronic.find("./i[@name='NELM']") is not None
+    assert electronic.find("./i[@name='NELMIN']") is None
+    assert electronic.find("./i[@name='EDIFF']") is None
     assert electronic.find("./i[@name='NBANDS']") is None
-    assert root.find(".//scstep") is None
-    assert root.find("./calculation/time[@name='totalsc']") is None
+    assert root.find("./incar/i[@name='NELM']") is not None
+    assert root.find("./incar/i[@name='NELMIN']") is None
+    assert root.find(".//scstep/energy") is not None
+    assert root.find("./calculation/time[@name='totalsc']") is not None
 
 
 def test_relaxation_oszicar_pseudo_scf_is_written_when_enabled(tmp_path: Path, load_atoms):
@@ -259,6 +266,42 @@ def test_relaxation_oszicar_pseudo_scf_is_written_when_enabled(tmp_path: Path, l
     assert root.find(".//scstep") is not None
     assert root.find(".//i[@name='NELM']") is not None
     assert root.find("./calculation/time[@name='totalsc']") is not None
+
+
+def test_relaxation_default_vasprun_is_readable_by_ase(tmp_path: Path, load_atoms):
+    atoms = load_atoms()
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+            self._callbacks = []
+
+        def attach(self, callback, *args, **kwargs):
+            self._callbacks.append(callback)
+
+        def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            target.positions += 0.01
+            for callback in self._callbacks:
+                callback()
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyBFGS)
+    monkeypatch.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_relaxation(
+            atoms,
+            DummyCalculator(),
+            steps=1,
+            fmax=0.01,
+            isif=2,
+        )
+    finally:
+        monkeypatch.undo()
+
+    images = ase_read(tmp_path / "vasprun.xml", index=":")
+    assert len(images) == 1
 
 
 def test_relaxation_writes_stress_block_when_isif_allows(tmp_path: Path, load_atoms):
@@ -376,8 +419,8 @@ def test_relaxation_vasprun_includes_kpoints_and_omits_pseudo_scf_timing_by_defa
     assert root.find("./varray[@name='primitive_index']") is not None
     first_calc = root.find("calculation")
     assert first_calc is not None
-    assert first_calc.find("./time[@name='totalsc']") is None
-    assert first_calc.find("scstep") is None
+    assert first_calc.find("./time[@name='totalsc']") is not None
+    assert first_calc.find("scstep") is not None
 
 
 def test_relaxation_isif3_moves_ions_and_cell(tmp_path: Path, load_atoms, arrays_close):
