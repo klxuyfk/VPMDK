@@ -3,8 +3,9 @@
 The utility consumes VASP-style inputs (POSCAR, INCAR, POTCAR, BCAR) and
 executes single-point, relaxation, or molecular dynamics runs with the selected
 neural-network potential. Multiple ASE calculators are supported (CHGNet,
-M3GNet/MatGL, MACE, MatterSim, Matlantis, UPET, TACE) and the expected VASP outputs
-such as CONTCAR and OUTCAR-style energy logs are produced.
+M3GNet/MatGL, MACE, MatterSim, Matlantis, MatRIS, AlphaNet, UPET, TACE) and
+the expected VASP outputs such as CONTCAR and OUTCAR-style energy logs are
+produced.
 """
 
 import argparse
@@ -14,8 +15,10 @@ import importlib.util
 import inspect
 import os
 import re
+import shutil
 import sys
 import time
+import urllib.request
 import xml.etree.ElementTree as ET
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -86,6 +89,20 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     ORBCalculator = None  # type: ignore
     ORB_PRETRAINED_MODELS = None  # type: ignore
+
+try:
+    from matris.applications.base import MatRISCalculator
+    from matris.model.model import MatRIS as MatRISModel
+except Exception:  # pragma: no cover - optional dependency
+    MatRISCalculator = None  # type: ignore
+    MatRISModel = None  # type: ignore
+
+try:
+    from alphanet.infer.calc import AlphaNetCalculator
+    from alphanet.config import All_Config as AlphaNetAllConfig
+except Exception:  # pragma: no cover - optional dependency
+    AlphaNetCalculator = None  # type: ignore
+    AlphaNetAllConfig = None  # type: ignore
 
 try:
     from upet.calculator import UPETCalculator
@@ -186,8 +203,72 @@ else:  # pragma: no cover - optional dependency
     NequIPCalculator = None  # type: ignore
 
 DEFAULT_ORB_MODEL = "orb-v3-conservative-20-omat"
+DEFAULT_MATRIS_MODEL = "matris_10m_oam"
+DEFAULT_ALPHANET_MODEL = "AlphaNet-MATPES-r2scan"
 DEFAULT_FAIRCHEM_MODEL = "esen-sm-direct-all-oc25"
 DEFAULT_GRACE_MODEL = "GRACE-2L-MP-r6"
+_MATRIS_NAMED_MODEL_DOWNLOADS: Dict[str, tuple[str, str]] = {
+    DEFAULT_MATRIS_MODEL: (
+        "MatRIS_10M_OAM.pth.tar",
+        "https://api.figshare.com/v2/file/download/59142728",
+    ),
+    "matris_10m_mp": (
+        "MatRIS_10M_MP.pth.tar",
+        "https://api.figshare.com/v2/file/download/59143058",
+    ),
+}
+_ALPHANET_NAMED_MODELS: Dict[str, Dict[str, Any]] = {
+    DEFAULT_ALPHANET_MODEL.casefold(): {
+        "display_name": DEFAULT_ALPHANET_MODEL,
+        "aliases": ["matpes"],
+        "checkpoint_filename": "r2scan_1021.ckpt",
+        "checkpoint_url": (
+            "https://raw.githubusercontent.com/zmyybc/AlphaNet/jax_and_zbl/pretrained/"
+            "MATPES/r2scan_1021.ckpt"
+        ),
+        "config_filename": "matpes.json",
+        "config_url": (
+            "https://raw.githubusercontent.com/zmyybc/AlphaNet/jax_and_zbl/pretrained/"
+            "MATPES/matpes.json"
+        ),
+    },
+    "alphanet-aqcat25".casefold(): {
+        "display_name": "AlphaNet-AQCAT25",
+        "aliases": ["aqcat25"],
+        "checkpoint_filename": "aqcat_1021.ckpt",
+        "checkpoint_url": (
+            "https://raw.githubusercontent.com/zmyybc/AlphaNet/jax_and_zbl/pretrained/"
+            "AQCAT25/aqcat_1021.ckpt"
+        ),
+        "config_filename": "aqcat.json",
+        "config_url": (
+            "https://raw.githubusercontent.com/zmyybc/AlphaNet/jax_and_zbl/pretrained/"
+            "AQCAT25/aqcat.json"
+        ),
+    },
+    "alphanet-mptrj-v1".casefold(): {
+        "display_name": "AlphaNet-MPtrj-v1",
+        "aliases": ["mptrj", "mptrj-v1"],
+        "checkpoint_filename": "alphanet_mptrj_v1.ckpt",
+        "checkpoint_url": "https://api.figshare.com/v2/file/download/53851133",
+        "config_filename": "mp.json",
+        "config_url": (
+            "https://raw.githubusercontent.com/zmyybc/AlphaNet/jax_and_zbl/pretrained/"
+            "MPtrj/mp.json"
+        ),
+    },
+    "alphanet-oma-v1".casefold(): {
+        "display_name": "AlphaNet-oma-v1",
+        "aliases": ["oma", "oma-v1"],
+        "checkpoint_filename": "alphanet_oma_v1.ckpt",
+        "checkpoint_url": "https://api.figshare.com/v2/file/download/53851139",
+        "config_filename": "oma.json",
+        "config_url": (
+            "https://raw.githubusercontent.com/zmyybc/AlphaNet/jax_and_zbl/pretrained/"
+            "OMA/oma.json"
+        ),
+    },
+}
 
 
 def _build_nequip_family_calculator(
@@ -1776,6 +1857,16 @@ def _coerce_bool_tag(value: str, tag_name: str) -> bool:
     raise ValueError(f"Invalid {tag_name} value: {value!r}")
 
 
+def _looks_like_filesystem_path(value: str, *, suffixes: Iterable[str] = ()) -> bool:
+    """Return whether a string likely denotes a local filesystem path."""
+
+    altsep = os.path.altsep
+    if os.path.sep in value or (altsep is not None and altsep in value):
+        return True
+    lowered = value.lower()
+    return any(lowered.endswith(suffix.lower()) for suffix in suffixes)
+
+
 def _list_matlantis_calc_modes() -> str:
     """Return comma-separated list of available Matlantis calc modes."""
 
@@ -1886,6 +1977,251 @@ def _build_orb_calculator(bcar_tags: Dict[str, str]):
     return ORBCalculator(model, device=device)
 
 
+def _load_matris_checkpoint_model(checkpoint_path: str, *, device: str | None):
+    """Load a MatRIS model directly from a checkpoint file."""
+
+    if MatRISModel is None:
+        raise RuntimeError("MatRIS model loader not available. Install matris and dependencies.")
+
+    import torch
+
+    checkpoint_state = torch.load(
+        checkpoint_path,
+        map_location=torch.device("cpu"),
+        weights_only=False,
+    )
+    model = MatRISModel.from_dict(checkpoint_state)
+    return model.to(device or "cpu")
+
+
+def _download_file_to_path(url: str, destination_path: str) -> None:
+    """Download a file to a local path atomically."""
+
+    os.makedirs(os.path.dirname(destination_path), exist_ok=True)
+    partial_path = f"{destination_path}.part"
+    request = urllib.request.Request(url, headers={"User-Agent": "vpmdk"})
+    try:
+        with urllib.request.urlopen(request) as response, open(partial_path, "wb") as handle:
+            shutil.copyfileobj(response, handle)
+        os.replace(partial_path, destination_path)
+    except Exception:
+        if os.path.exists(partial_path):
+            os.remove(partial_path)
+        raise
+
+
+def _ensure_matris_named_model_checkpoint(model_name: str) -> str | None:
+    """Download a known MatRIS named model into the standard cache when needed."""
+
+    download_info = _MATRIS_NAMED_MODEL_DOWNLOADS.get(model_name.lower())
+    if download_info is None:
+        return None
+
+    checkpoint_filename, url = download_info
+    cache_dir = os.path.expanduser("~/.cache/matris")
+    os.makedirs(cache_dir, exist_ok=True)
+    checkpoint_path = os.path.join(cache_dir, checkpoint_filename)
+    if not os.path.exists(checkpoint_path) or os.path.getsize(checkpoint_path) == 0:
+        print(f"MatRIS checkpoint not found, downloading to {checkpoint_path} ...")
+        _download_file_to_path(url, checkpoint_path)
+    return checkpoint_path
+
+
+def _instantiate_matris_calculator(*, model, task: str, device: str | None):
+    """Create a MatRIS ASE calculator from a preloaded model instance."""
+
+    if MatRISCalculator is None:
+        raise RuntimeError("MatRIS calculator not available. Install matris and dependencies.")
+
+    calculator = MatRISCalculator.__new__(MatRISCalculator)
+    Calculator.__init__(calculator)
+    calculator.task = task
+    calculator.device = device or "cpu"
+    calculator.model = model
+    calculator.stress_unit = units.GPa
+    calculator.key = {"atoms_per_graph", "ref_energy", *task}
+    return calculator
+
+
+def _build_matris_calculator(bcar_tags: Dict[str, str]):
+    """Create the MatRIS ASE calculator configured from BCAR tags."""
+
+    if MatRISCalculator is None:
+        raise RuntimeError("MatRIS calculator not available. Install matris and dependencies.")
+
+    device = _resolve_device(bcar_tags.get("DEVICE"))
+    task = (bcar_tags.get("MATRIS_TASK") or "efs").lower()
+    model_value = bcar_tags.get("MODEL") or DEFAULT_MATRIS_MODEL
+
+    if os.path.exists(model_value):
+        model = _load_matris_checkpoint_model(model_value, device=device)
+        return _instantiate_matris_calculator(model=model, task=task, device=device)
+
+    if _looks_like_filesystem_path(
+        model_value,
+        suffixes=(".ckpt", ".pt", ".pth", ".pth.tar", ".tar"),
+    ):
+        raise FileNotFoundError(f"MatRIS model not found: {model_value}")
+
+    checkpoint_path = _ensure_matris_named_model_checkpoint(model_value)
+    if checkpoint_path is not None:
+        model = _load_matris_checkpoint_model(checkpoint_path, device=device)
+        return _instantiate_matris_calculator(model=model, task=task, device=device)
+
+    return MatRISCalculator(model=model_value, task=task, device=device)
+
+
+def _normalize_alphanet_precision(value: str | None) -> str:
+    """Return AlphaNet precision in the calculator's expected form."""
+
+    if value is None:
+        return "32"
+    normalized = str(value).strip().lower()
+    if normalized in {"32", "float32", "fp32"}:
+        return "32"
+    if normalized in {"64", "float64", "fp64"}:
+        return "64"
+    raise ValueError(f"Invalid ALPHANET_PRECISION value: {value!r}")
+
+
+def _resolve_alphanet_named_model_spec(model_name: str) -> Dict[str, Any] | None:
+    """Return AlphaNet named-model metadata for a model key or alias."""
+
+    normalized = model_name.strip().casefold()
+    direct = _ALPHANET_NAMED_MODELS.get(normalized)
+    if direct is not None:
+        return direct
+
+    for spec in _ALPHANET_NAMED_MODELS.values():
+        aliases = [spec["display_name"], *spec.get("aliases", [])]
+        if normalized in {alias.casefold() for alias in aliases}:
+            return spec
+    return None
+
+
+def _ensure_alphanet_named_model_files(model_name: str) -> tuple[str, str]:
+    """Download a known AlphaNet named model and config when needed."""
+
+    spec = _resolve_alphanet_named_model_spec(model_name)
+    if spec is None:
+        supported = ", ".join(
+            sorted(named_spec["display_name"] for named_spec in _ALPHANET_NAMED_MODELS.values())
+        )
+        raise ValueError(f"Unsupported AlphaNet model '{model_name}'. Available: {supported}")
+
+    cache_dir = os.path.join(
+        os.path.expanduser("~/.cache/alphanet"),
+        spec["display_name"].replace("/", "_"),
+    )
+    os.makedirs(cache_dir, exist_ok=True)
+
+    checkpoint_path = os.path.join(cache_dir, spec["checkpoint_filename"])
+    config_path = os.path.join(cache_dir, spec["config_filename"])
+
+    if not os.path.exists(config_path) or os.path.getsize(config_path) == 0:
+        print(f"AlphaNet config not found, downloading to {config_path} ...")
+        _download_file_to_path(spec["config_url"], config_path)
+
+    if not os.path.exists(checkpoint_path) or os.path.getsize(checkpoint_path) == 0:
+        print(f"AlphaNet checkpoint not found, downloading to {checkpoint_path} ...")
+        _download_file_to_path(spec["checkpoint_url"], checkpoint_path)
+
+    return checkpoint_path, config_path
+
+
+def _resolve_alphanet_config_path(
+    model_path: str,
+    bcar_tags: Dict[str, str],
+    *,
+    default_config_path: str | None = None,
+) -> str:
+    """Resolve AlphaNet config JSON from BCAR or neighboring files."""
+
+    config_path = bcar_tags.get("ALPHANET_CONFIG") or default_config_path
+    if config_path:
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"AlphaNet config not found: {config_path}")
+        return config_path
+
+    parent_dir = os.path.dirname(model_path) or "."
+    json_candidates = sorted(
+        os.path.join(parent_dir, name)
+        for name in os.listdir(parent_dir)
+        if name.lower().endswith(".json")
+    )
+    if len(json_candidates) == 1:
+        return json_candidates[0]
+
+    raise ValueError(
+        "AlphaNet requires ALPHANET_CONFIG pointing to a JSON config when it cannot "
+        "be inferred from the checkpoint directory."
+    )
+
+
+def _load_alphanet_config(
+    config_path: str,
+    *,
+    precision: str,
+    use_pbc: bool,
+    compute_stress: bool,
+):
+    """Load and normalize AlphaNet config for ASE inference."""
+
+    if AlphaNetAllConfig is None:
+        raise RuntimeError("AlphaNet config loader not available. Install AlphaNet and dependencies.")
+
+    config = AlphaNetAllConfig.from_json(config_path)
+    model_config = getattr(config, "model", config)
+    model_config.compute_forces = True
+    model_config.compute_stress = compute_stress
+    model_config.use_pbc = use_pbc
+    model_config.dtype = precision
+    return config
+
+
+def _build_alphanet_calculator(bcar_tags: Dict[str, str], *, structure=None):
+    """Create the AlphaNet ASE calculator configured from BCAR tags."""
+
+    if AlphaNetCalculator is None:
+        raise RuntimeError("AlphaNet calculator not available. Install AlphaNet and dependencies.")
+
+    model_value = bcar_tags.get("MODEL") or DEFAULT_ALPHANET_MODEL
+    precision = _normalize_alphanet_precision(
+        bcar_tags.get("ALPHANET_PRECISION") or bcar_tags.get("ALPHANET_DTYPE")
+    )
+    device = _resolve_device(bcar_tags.get("DEVICE")) or "cpu"
+
+    config_path = None
+    checkpoint_path = model_value
+
+    if os.path.exists(model_value):
+        config_path = _resolve_alphanet_config_path(model_value, bcar_tags)
+    elif _looks_like_filesystem_path(model_value, suffixes=(".ckpt", ".pt", ".pth")):
+        raise FileNotFoundError(f"AlphaNet model not found: {model_value}")
+    else:
+        checkpoint_path, config_path = _ensure_alphanet_named_model_files(model_value)
+        config_path = _resolve_alphanet_config_path(
+            checkpoint_path,
+            bcar_tags,
+            default_config_path=config_path,
+        )
+
+    use_pbc = True if structure is None else getattr(structure, "lattice", None) is not None
+    config = _load_alphanet_config(
+        config_path,
+        precision=precision,
+        use_pbc=use_pbc,
+        compute_stress=use_pbc,
+    )
+
+    return AlphaNetCalculator(
+        ckpt_path=checkpoint_path,
+        config=config,
+        device=device,
+        precision=precision,
+    )
+
+
 def _build_upet_calculator(bcar_tags: Dict[str, str]):
     """Create the UPET ASE calculator configured from BCAR tags."""
 
@@ -1914,9 +2250,7 @@ def _build_upet_calculator(bcar_tags: Dict[str, str]):
     if os.path.exists(model_value):
         return UPETCalculator(checkpoint_path=model_value, **kwargs)
 
-    altsep = os.path.altsep
-    looks_like_path = os.path.sep in model_value or (altsep is not None and altsep in model_value)
-    if looks_like_path or model_value.lower().endswith((".ckpt", ".pt", ".pth")):
+    if _looks_like_filesystem_path(model_value, suffixes=(".ckpt", ".pt", ".pth")):
         raise FileNotFoundError(f"UPET model not found: {model_value}")
 
     return UPETCalculator(model=model_value, **kwargs)
@@ -1946,11 +2280,7 @@ def _build_tace_calculator(bcar_tags: Dict[str, str]):
 
     model_path = model_value
     if not os.path.exists(model_value):
-        altsep = os.path.altsep
-        looks_like_path = os.path.sep in model_value or (
-            altsep is not None and altsep in model_value
-        )
-        if looks_like_path or model_value.lower().endswith((".ckpt", ".pt", ".pth")):
+        if _looks_like_filesystem_path(model_value, suffixes=(".ckpt", ".pt", ".pth")):
             raise FileNotFoundError(f"TACE model not found: {model_value}")
 
         if tace_foundations is None:
@@ -2382,6 +2712,8 @@ _CALCULATOR_BUILDERS: Dict[str, str] = {
     "MATGL": "_build_m3gnet_calculator",
     "M3GNET": "_build_m3gnet_calculator",
     "MACE": "_build_mace_calculator",
+    "MATRIS": "_build_matris_calculator",
+    "ALPHANET": "_build_alphanet_calculator",
     "ALLEGRO": "_build_allegro_calculator",
     "NEQUIP": "_build_nequip_calculator",
     "MATLANTIS": "_build_matlantis_calculator",

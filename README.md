@@ -2,7 +2,7 @@
 
 VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is a lightweight engine that **reads and writes VASP-style inputs/outputs** and performs **molecular dynamics and structure relaxations** using **machine-learning interatomic potentials**. Keep familiar VASP workflows and artifacts while computations run through ASE-compatible ML calculators. The `vpmdk` command (and legacy `vpmdk.py` wrapper) are provided.
 
-**Supported calculators (via ASE):** **CHGNet**, **SevenNet**, **MatterSim**, **MACE**, **Matlantis**, **NequIP**, **Allegro**, **ORB**, **UPET**, **TACE**, **MatGL** (via the M3GNet model), **FAIRChem** (including eSEN checkpoints), **GRACE** (TensorPotential foundation models or checkpoints), and **DeePMD-kit**. Availability depends on the corresponding Python packages being installed.
+**Supported calculators (via ASE):** **CHGNet**, **SevenNet**, **MatterSim**, **MACE**, **Matlantis**, **MatRIS**, **AlphaNet**, **NequIP**, **Allegro**, **ORB**, **UPET**, **TACE**, **MatGL** (via the M3GNet model), **FAIRChem** (including eSEN checkpoints), **GRACE** (TensorPotential foundation models or checkpoints), and **DeePMD-kit**. Availability depends on the corresponding Python packages being installed.
 
 *Not affiliated with, endorsed by, or a replacement for VASP; “VASP” is a trademark of its respective owner. VPMDK only mimics VASP I/O conventions for compatibility.*
 
@@ -20,7 +20,8 @@ pip install vpmdk
    `INCAR`, `POTCAR`, and `BCAR`. `KPOINTS`, `WAVECAR`, and `CHGCAR` are
    recognised but ignored (a note is printed if they are present).
 2. Install requirements: `ase`, `pymatgen` and, depending on the potential you
-   wish to use, `chgnet`, `mattersim`, `mace-torch`, `matgl`, `upet`, or `tace`.
+   wish to use, `chgnet`, `mattersim`, `mace-torch`, `matgl`, `matris`,
+   `alphanet`, `upet`, or `tace`.
 3. Run:
 
    ```bash
@@ -54,7 +55,7 @@ The script reads a subset of common VASP `INCAR` settings. Other tags are ignore
 | `NSW` | Number of ionic steps. | `0` (single-point calculation). |
 | `IBRION` | Ionic movement algorithm. | `<0` performs a single-point calculation without moving ions, `0` runs molecular dynamics, positive values trigger a BFGS geometry optimisation with a fixed cell. Defaults to `-1`. |
 | `ISIF` | Controls whether the cell changes during relaxations. | `2` keeps the cell fixed (default). `3` relaxes ions and the full cell, `4` keeps the volume constant while optimising ions and the cell shape, `5` optimises the cell shape at constant volume with fixed ions, `6` changes only the cell, `7` enables isotropic cell changes with fixed ions, and `8` couples ionic relaxations to isotropic volume changes. Stress output follows VASP-style semantics: `ISIF<=0` omits stress blocks, `ISIF=1` writes trace-only pressure information, and `ISIF>=2` writes the full stress tensor block. Unsupported values fall back to `2` behavior with a warning. |
-| `EDIFFG` | Convergence criterion for relaxations. | `<0`: force criterion using `abs(EDIFFG)` in eV/Å (default `-0.02`). `>0`: energy criterion using `EDIFFG` in eV (`abs(ΔE)` between ionic steps). |
+| `EDIFFG` | Convergence criterion for relaxations. | `<0`: force criterion using `abs(EDIFFG)` in eV/Å (default `-0.02`). `>0`: energy criterion using `EDIFFG` in eV (`|ΔE|` between ionic steps). |
 | `TEBEG` | Initial temperature in kelvin for molecular dynamics (`IBRION=0`). | `300`. |
 | `TEEND` | Final temperature in kelvin when ramping MD runs. | Same as `TEBEG`. Temperature is linearly ramped between `TEBEG` and `TEEND` over the MD steps. |
 | `POTIM` | Time step in femtoseconds for molecular dynamics (`IBRION=0`). | `2`. |
@@ -98,8 +99,8 @@ DEVICE=cuda           # Optional device override when the backend supports it
 
 | Tag | Meaning | Default |
 |-----|---------|---------|
-| `MLP` | Backend name (`CHGNET`, `MACE`, `MATGL`, `MATLANTIS`, `MATTERSIM`, `NEQUIP`, `ALLEGRO`, `ORB`, `UPET`, `TACE`, `FAIRCHEM`, `FAIRCHEM_V2`, `FAIRCHEM_V1`, `GRACE`, `DEEPMD`, `SEVENNET`) | `CHGNET` |
-| `MODEL` | Path to a trained parameter set (ORB accepts checkpoints; UPET also accepts model names such as `pet-oam-xl`; TACE also accepts foundation-model names such as `TACE-v1-OMat24-M`; FAIRCHEM also accepts model names such as `esen-sm-direct-all-oc25`) | Backend default or bundled weights |
+| `MLP` | Backend name (`CHGNET`, `MACE`, `MATGL`, `MATLANTIS`, `MATTERSIM`, `MATRIS`, `ALPHANET`, `NEQUIP`, `ALLEGRO`, `ORB`, `UPET`, `TACE`, `FAIRCHEM`, `FAIRCHEM_V2`, `FAIRCHEM_V1`, `GRACE`, `DEEPMD`, `SEVENNET`) | `CHGNET` |
+| `MODEL` | Path to a trained parameter set (MatRIS accepts local `.pth.tar` checkpoints or named models such as `matris_10m_oam`; AlphaNet accepts local `.ckpt` / `.pt` checkpoints or named models such as `AlphaNet-MATPES-r2scan`; ORB accepts checkpoints; UPET also accepts model names such as `pet-oam-xl`; TACE also accepts foundation-model names such as `TACE-v1-OMat24-M`; FAIRChem also accepts model names such as `esen-sm-direct-all-oc25`) | Backend default or bundled weights |
 | `DEVICE` | Device hint for backends that support it (`cpu`, `cuda`, `cuda:N`) | Auto-detects GPU when available |
 
 `NNP` is accepted as a backward-compatible alias of `MLP`.
@@ -128,6 +129,9 @@ DEVICE=cuda           # Optional device override when the backend supports it
 | `ORB_MODEL` | ORB | Pretrained architecture key recognised by `orb_models` | `orb-v3-conservative-20-omat` |
 | `ORB_PRECISION` | ORB | Floating-point precision string forwarded to orb-models loaders | `float32-high` |
 | `ORB_COMPILE` | ORB | Whether to `torch.compile` the ORB model (`0/1`, `true/false`, …) | Library default |
+| `MATRIS_TASK` | MatRIS | Prediction task forwarded to `MatRISCalculator` (`e`, `ef`, `efs`, `efsm`) | `efs` |
+| `ALPHANET_CONFIG` | AlphaNet | Path to the AlphaNet JSON config when `MODEL` is a local checkpoint and the config cannot be inferred | Paired config for named models or inferred sibling JSON |
+| `ALPHANET_PRECISION` | AlphaNet | Floating-point precision forwarded to the AlphaNet ASE calculator (`32`, `64`, `float32`, `float64`) | `32` |
 | `UPET_VERSION` | UPET | Version string used when `MODEL` is a named UPET model rather than a local checkpoint | Latest stable model version |
 | `UPET_NON_CONSERVATIVE` | UPET | Enable UPET direct-force/direct-stress inference (`1` to enable) | `0` |
 | `TACE_DTYPE` | TACE | Floating-point dtype forwarded to the TACE ASE calculator | Model default |
@@ -151,6 +155,20 @@ credentials before running VPMDK with `MLP=MATLANTIS`.
 ORB calculations rely on the [orb-models](https://github.com/orbital-materials/orb-models)
 package. When `MODEL` is omitted, VPMDK downloads the pretrained weights specified by
 `ORB_MODEL` using orb-models; set `MODEL=/path/to/checkpoint.ckpt` to run with local weights.
+
+MatRIS calculations rely on the [MatRIS](https://github.com/HPC-AI-Team/MatRIS) package.
+Omitting `MODEL` uses the default named model (`matris_10m_oam`). Set
+`MODEL=matris_10m_mp` to auto-download an official named model into
+`~/.cache/matris`, or `MODEL=/path/to/MatRIS_10M_OAM.pth.tar` to load a local
+checkpoint directly.
+
+AlphaNet calculations rely on the [AlphaNet](https://github.com/zmyybc/AlphaNet)
+package. Omitting `MODEL` uses the default named model
+`AlphaNet-MATPES-r2scan`. VPMDK can auto-download official named models such as
+`AlphaNet-MATPES-r2scan`, `AlphaNet-AQCAT25`, `AlphaNet-MPtrj-v1`, and
+`AlphaNet-oma-v1` into `~/.cache/alphanet`. When `MODEL` points to a local
+checkpoint, set `ALPHANET_CONFIG=/path/to/config.json` unless the config can be
+inferred from a sibling JSON file.
 
 UPET calculations rely on the [upet](https://github.com/lab-cosmo/upet) package.
 Set `MODEL=/path/to/model.ckpt` to use a local checkpoint, or `MODEL=pet-oam-xl`
@@ -224,6 +242,8 @@ selected potential or thermostat:
 | MACE potential | `mace-torch` (PyTorch) | Set `MODEL` to a trained `.model` file |
 | DeePMD-kit potential | `deepmd-kit` | Set `MODEL` to the frozen graph (`.pb`) or a PyTorch checkpoint (`.pt`), depending on the DeePMD backend, and optionally `DEEPMD_TYPE_MAP`/`DEEPMD_HEAD` |
 | Matlantis potential | `pfp-api-client` (plus `matlantis-features`) | Uses the Matlantis estimator service; configure with `MATLANTIS_*` BCAR tags |
+| MatRIS potential | `matris` (PyTorch) | Uses named models such as `matris_10m_oam` / `matris_10m_mp` or local `.pth.tar` checkpoints; optionally set `MATRIS_TASK` |
+| AlphaNet potential | `alphanet` (PyTorch) | Uses local `.ckpt` / `.pt` checkpoints or named models such as `AlphaNet-MATPES-r2scan`; optionally set `ALPHANET_CONFIG` / `ALPHANET_PRECISION` |
 | ORB potential | `orb-models` (PyTorch) | Downloads pretrained weights unless `MODEL` points to a checkpoint |
 | UPET potential | `upet` (PyTorch) | Set `MODEL` to a local `.ckpt` checkpoint or a named model such as `pet-oam-xl`; optionally set `UPET_VERSION`/`UPET_NON_CONSERVATIVE` |
 | TACE potential | `TACE==0.1.0` (PyTorch) | Set `MODEL` to a local checkpoint or a named foundation model such as `TACE-v1-OMat24-M`; optionally set `TACE_DTYPE` / `TACE_FIDELITY_IDX` / `TACE_SPIN_ON` |
@@ -241,17 +261,22 @@ version of PyTorch or JAX if you want to use GPUs.
 
 The model file is loaded from the path given by `MODEL` in `BCAR`. Typically the
 file is located within the calculation directory or specified via an absolute
-path. CHGNet and MatGL ship with default models; omitting `MODEL` uses those
-defaults automatically. UPET can also resolve named models such as `pet-oam-xl`
-through the `upet` package when `MODEL` is not a filesystem path. TACE can
-resolve named foundation models such as `TACE-v1-OMat24-M` through the
+path. CHGNet, MatGL, MatRIS, and AlphaNet ship with default models; omitting `MODEL`
+uses those defaults automatically. MatRIS can also resolve named models such as
+`matris_10m_oam` and `matris_10m_mp` by downloading them into
+`~/.cache/matris` when `MODEL` is not a filesystem path. AlphaNet can resolve
+named models such as `AlphaNet-MATPES-r2scan` and `AlphaNet-oma-v1` by
+downloading a checkpoint plus JSON config into `~/.cache/alphanet` when `MODEL`
+is not a filesystem path. UPET can also resolve named models such as
+`pet-oam-xl` through the `upet` package when `MODEL` is not a filesystem path.
+TACE can resolve named foundation models such as `TACE-v1-OMat24-M` through the
 `tace_foundations` registry.
 
 ### GPU usage
 
 This script does not directly manage GPU settings. Each potential selects a
-device on its own. CHGNet, MatGL/M3GNet, MACE, ORB, UPET, TACE, and FAIRCHEM honour
-`DEVICE` in `BCAR` (e.g. `DEVICE=cpu` to force a CPU run). With CUDA devices you
+device on its own. CHGNet, MatGL/M3GNet, MACE, MatRIS, AlphaNet, ORB, UPET,
+TACE, and FAIRChem honour `DEVICE` in `BCAR` (e.g. `DEVICE=cpu` to force a CPU run). With CUDA devices you
 can choose which GPU to use with `CUDA_VISIBLE_DEVICES`. MatGL GPU tuning is
 backend-dependent (PyTorch+DGL vs JAX), so environment variables differ between
 installations. A GPU with at least 8 GB of memory is recommended, though running
