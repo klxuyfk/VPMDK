@@ -16,6 +16,7 @@ Optional backends (skipped unless env vars are set):
 - Allegro: VPMDK_ALLEGRO_MODEL
 - ORB: VPMDK_ORB_MODEL
 - UPET: VPMDK_UPET_MODEL, optional VPMDK_UPET_VERSION
+- TACE: VPMDK_TACE_MODEL, optional VPMDK_TACE_FIDELITY_IDX
 - FAIRChem v2: VPMDK_FAIRCHEM_MODEL, optional VPMDK_FAIRCHEM_TASK
 """
 
@@ -218,6 +219,27 @@ def test_md_upet_optional(tmp_path: Path, data_dir: Path) -> None:
     bcar_lines = ["MLP=UPET", f"MODEL={model_value}", "DEVICE=cuda"]
     if version:
         bcar_lines.append(f"UPET_VERSION={version}")
+    bcar = "\n".join(bcar_lines) + "\n"
+    _write_inputs(tmp_path, data_dir, bcar)
+    _run_vpmdk(tmp_path)
+    _assert_outputs(tmp_path)
+
+
+@pytest.mark.integration
+def test_md_tace_optional(tmp_path: Path, data_dir: Path) -> None:
+    if not _module_available("tace"):
+        pytest.skip("tace is not installed.")
+    _require_cuda()
+    model_value = os.environ.get("VPMDK_TACE_MODEL")
+    if not model_value:
+        pytest.skip("Set VPMDK_TACE_MODEL to run TACE integration.")
+    looks_like_path = os.path.sep in model_value or model_value.endswith((".ckpt", ".pt", ".pth"))
+    if looks_like_path and not Path(model_value).exists():
+        pytest.fail(f"TACE model not found: {model_value}")
+    fidelity_idx = os.environ.get("VPMDK_TACE_FIDELITY_IDX", os.environ.get("VPMDK_TACE_LEVEL", ""))
+    bcar_lines = ["MLP=TACE", f"MODEL={model_value}", "DEVICE=cuda"]
+    if fidelity_idx:
+        bcar_lines.append(f"TACE_FIDELITY_IDX={fidelity_idx}")
     bcar = "\n".join(bcar_lines) + "\n"
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)

@@ -26,6 +26,7 @@ from tests.conftest import DummyCalculator
         "NEQUIP",
         "ORB",
         "UPET",
+        "TACE",
         "FAIRCHEM",
         "FAIRCHEM_V2",
         "FAIRCHEM_V1",
@@ -39,8 +40,12 @@ def test_single_point_energy_for_all_potentials(
     prepare_inputs,
 ):
     extra_bcar: dict[str, str] = {}
-    if potential in {"NEQUIP", "ALLEGRO", "DEEPMD", "FAIRCHEM_V1", "UPET"}:
-        model_name = "pet-oam-xl-v1.0.0.ckpt" if potential == "UPET" else "nequip-model.pth"
+    if potential in {"NEQUIP", "ALLEGRO", "DEEPMD", "FAIRCHEM_V1", "UPET", "TACE"}:
+        model_name = (
+            "pet-oam-xl-v1.0.0.ckpt"
+            if potential == "UPET"
+            else ("tace-model.pt" if potential == "TACE" else "nequip-model.pth")
+        )
         model_path = tmp_path / model_name
         model_path.write_text("dummy")
         extra_bcar["MODEL"] = str(model_path)
@@ -75,6 +80,7 @@ def test_single_point_energy_for_all_potentials(
     monkeypatch.setattr(vpmdk, "ORBCalculator", lambda *a, **k: factory("ORB"))
     monkeypatch.setattr(vpmdk, "ORB_PRETRAINED_MODELS", {vpmdk.DEFAULT_ORB_MODEL: lambda **_: "orb"})
     monkeypatch.setattr(vpmdk, "UPETCalculator", lambda *a, **k: factory("UPET"))
+    monkeypatch.setattr(vpmdk, "TACEAseCalc", lambda *a, **k: factory("TACE"))
     monkeypatch.setattr(vpmdk, "_build_grace_calculator", lambda tags: factory("GRACE"))
     monkeypatch.setattr(vpmdk, "DeePMDCalculator", lambda *a, **k: factory("DEEPMD"))
 

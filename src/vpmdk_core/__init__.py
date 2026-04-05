@@ -3,7 +3,7 @@
 The utility consumes VASP-style inputs (POSCAR, INCAR, POTCAR, BCAR) and
 executes single-point, relaxation, or molecular dynamics runs with the selected
 neural-network potential. Multiple ASE calculators are supported (CHGNet,
-M3GNet/MatGL, MACE, MatterSim, Matlantis, UPET) and the expected VASP outputs
+M3GNet/MatGL, MACE, MatterSim, Matlantis, UPET, TACE) and the expected VASP outputs
 such as CONTCAR and OUTCAR-style energy logs are produced.
 """
 
@@ -11,6 +11,7 @@ import argparse
 import csv
 import importlib
 import importlib.util
+import inspect
 import os
 import re
 import sys
@@ -90,6 +91,16 @@ try:
     from upet.calculator import UPETCalculator
 except Exception:  # pragma: no cover - optional dependency
     UPETCalculator = None  # type: ignore
+
+try:
+    from tace.interface.ase import TACEAseCalc
+except Exception:  # pragma: no cover - optional dependency
+    TACEAseCalc = None  # type: ignore
+
+try:
+    from tace.foundations import tace_foundations
+except Exception:  # pragma: no cover - optional dependency
+    tace_foundations = None  # type: ignore
 
 try:
     from fairchem.core.calculate.ase_calculator import FAIRChemCalculator  # type: ignore
@@ -1911,6 +1922,89 @@ def _build_upet_calculator(bcar_tags: Dict[str, str]):
     return UPETCalculator(model=model_value, **kwargs)
 
 
+def _callable_supports_parameter(callable_obj: object, parameter_name: str) -> bool:
+    """Return whether a callable exposes a named parameter."""
+
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError):
+        return False
+    return parameter_name in signature.parameters
+
+
+def _build_tace_calculator(bcar_tags: Dict[str, str]):
+    """Create the TACE ASE calculator configured from BCAR tags."""
+
+    if TACEAseCalc is None:
+        raise RuntimeError("TACE calculator not available. Install TACE and dependencies.")
+
+    model_value = bcar_tags.get("MODEL")
+    if not model_value:
+        raise ValueError(
+            "TACE requires MODEL set to a checkpoint path or a named model such as TACE-v1-OMat24-M."
+        )
+
+    model_path = model_value
+    if not os.path.exists(model_value):
+        altsep = os.path.altsep
+        looks_like_path = os.path.sep in model_value or (
+            altsep is not None and altsep in model_value
+        )
+        if looks_like_path or model_value.lower().endswith((".ckpt", ".pt", ".pth")):
+            raise FileNotFoundError(f"TACE model not found: {model_value}")
+
+        if tace_foundations is None:
+            raise RuntimeError(
+                "TACE named-model registry is not available. Install TACE with foundation-model "
+                "support or provide MODEL as a local checkpoint path."
+            )
+        try:
+            model_path = os.fspath(tace_foundations[model_value])
+        except KeyError as exc:
+            supported = (
+                ", ".join(tace_foundations.list_models())
+                if hasattr(tace_foundations, "list_models")
+                else ""
+            )
+            if supported:
+                raise ValueError(
+                    f"Unsupported TACE model '{model_value}'. Available: {supported}"
+                ) from exc
+            raise ValueError(f"Unsupported TACE model '{model_value}'.") from exc
+
+    kwargs: Dict[str, Any] = {
+        "model": model_path,
+        "device": _resolve_device(bcar_tags.get("DEVICE")),
+    }
+
+    dtype = bcar_tags.get("TACE_DTYPE")
+    if dtype:
+        kwargs["dtype"] = dtype
+
+    spin_on_value = bcar_tags.get("TACE_SPIN_ON")
+    if spin_on_value is not None:
+        kwargs["spin_on"] = _coerce_bool_tag(spin_on_value, "TACE_SPIN_ON")
+
+    neighborlist_backend = bcar_tags.get("TACE_NEIGHBORLIST_BACKEND")
+    if neighborlist_backend:
+        kwargs["neighborlist_backend"] = neighborlist_backend
+
+    level_tag = None
+    if "TACE_FIDELITY_IDX" in bcar_tags:
+        level_tag = "TACE_FIDELITY_IDX"
+    elif "TACE_LEVEL" in bcar_tags:
+        level_tag = "TACE_LEVEL"
+
+    if level_tag is not None:
+        level_value = _coerce_int_tag(bcar_tags[level_tag], level_tag)
+        if _callable_supports_parameter(TACEAseCalc, "fidelity_idx"):
+            kwargs["fidelity_idx"] = level_value
+        elif _callable_supports_parameter(TACEAseCalc, "level"):
+            kwargs["level"] = level_value
+
+    return TACEAseCalc(**kwargs)
+
+
 _FAIRCHEM_V1_IMPORT_PATHS = (
     "fairchem_core.common.relaxation.ase_utils",
     "ocpmodels.common.relaxation.ase_utils",
@@ -2293,6 +2387,7 @@ _CALCULATOR_BUILDERS: Dict[str, str] = {
     "MATLANTIS": "_build_matlantis_calculator",
     "ORB": "_build_orb_calculator",
     "UPET": "_build_upet_calculator",
+    "TACE": "_build_tace_calculator",
     "FAIRCHEM": "_build_fairchem_calculator",
     "FAIRCHEM_V2": "_build_fairchem_calculator",
     "ESEN": "_build_fairchem_calculator",
