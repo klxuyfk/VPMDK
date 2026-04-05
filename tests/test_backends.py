@@ -55,6 +55,112 @@ def test_matgl_load_model_path_is_used(tmp_path: Path, monkeypatch: pytest.Monke
     assert seen["calc_args"] == ("potential",)
 
 
+def test_eqnorm_uses_checkpoint_path_and_bcar_tags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "eqnorm-omat.pth"
+    model_path.write_text("dummy")
+    seen: dict[str, object] = {}
+
+    def fake_stage(path: str, variant: str):
+        seen["staged_path"] = path
+        seen["variant"] = variant
+        return f"/tmp/{variant}.pt"
+
+    def fake_safe_globals():
+        seen["safe_globals"] = True
+
+    def fake_calc(*, model_name, model_variant, device="cpu", compile=False):
+        seen["model_name"] = model_name
+        seen["model_variant"] = model_variant
+        seen["device"] = device
+        seen["compile"] = compile
+        return "eqnorm"
+
+    monkeypatch.setattr(vpmdk, "_stage_eqnorm_checkpoint", fake_stage)
+    monkeypatch.setattr(vpmdk, "_ensure_eqnorm_torch_safe_globals", fake_safe_globals)
+    monkeypatch.setattr(vpmdk, "EqnormCalculator", fake_calc)
+
+    calc = vpmdk._build_eqnorm_calculator(
+        {"MODEL": str(model_path), "DEVICE": "cuda:0", "EQNORM_COMPILE": "true"}
+    )
+
+    assert calc == "eqnorm"
+    assert seen == {
+        "staged_path": str(model_path),
+        "variant": "eqnorm-omat",
+        "safe_globals": True,
+        "model_name": "eqnorm",
+        "model_variant": "eqnorm-omat",
+        "device": "cuda:0",
+        "compile": True,
+    }
+
+
+def test_eqnorm_accepts_named_model_and_defaults(monkeypatch: pytest.MonkeyPatch):
+    seen: dict[str, object] = {}
+
+    def fake_ensure(model_name: str):
+        seen["model_name"] = model_name
+        return (
+            {"model_name": "eqnorm", "model_variant": vpmdk.DEFAULT_EQNORM_MODEL},
+            "/tmp/eqnorm-mptrj.pt",
+        )
+
+    def fake_stage(path: str, variant: str):
+        seen["staged_path"] = path
+        seen["variant"] = variant
+        return path
+
+    def fake_safe_globals():
+        seen["safe_globals"] = True
+
+    def fake_calc(*, model_name, model_variant, device="cpu", compile=False):
+        seen["calc_model_name"] = model_name
+        seen["calc_variant"] = model_variant
+        seen["device"] = device
+        seen["compile"] = compile
+        return "eqnorm"
+
+    monkeypatch.setattr(vpmdk, "_ensure_eqnorm_named_model_checkpoint", fake_ensure)
+    monkeypatch.setattr(vpmdk, "_stage_eqnorm_checkpoint", fake_stage)
+    monkeypatch.setattr(vpmdk, "_ensure_eqnorm_torch_safe_globals", fake_safe_globals)
+    monkeypatch.setattr(vpmdk, "EqnormCalculator", fake_calc)
+
+    calc = vpmdk._build_eqnorm_calculator({})
+
+    assert calc == "eqnorm"
+    assert seen == {
+        "model_name": vpmdk.DEFAULT_EQNORM_MODEL,
+        "staged_path": "/tmp/eqnorm-mptrj.pt",
+        "variant": vpmdk.DEFAULT_EQNORM_MODEL,
+        "safe_globals": True,
+        "calc_model_name": "eqnorm",
+        "calc_variant": vpmdk.DEFAULT_EQNORM_MODEL,
+        "device": "cpu",
+        "compile": False,
+    }
+
+
+def test_eqnorm_missing_checkpoint_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(vpmdk, "EqnormCalculator", object)
+
+    missing_path = tmp_path / "missing.pt"
+    with pytest.raises(FileNotFoundError, match="not found"):
+        vpmdk._build_eqnorm_calculator({"MODEL": str(missing_path)})
+
+
+def test_eqnorm_requires_variant_for_unknown_local_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(vpmdk, "EqnormCalculator", object)
+
+    model_path = tmp_path / "custom-model.pt"
+    model_path.write_text("dummy")
+    with pytest.raises(ValueError, match="EQNORM_VARIANT"):
+        vpmdk._build_eqnorm_calculator({"MODEL": str(model_path)})
+
+
 def test_alphanet_uses_checkpoint_path_and_bcar_tags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

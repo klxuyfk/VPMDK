@@ -22,6 +22,7 @@ from tests.conftest import DummyCalculator
         "MACE",
         "MATTERSIM",
         "MATLANTIS",
+        "EQNORM",
         "MATRIS",
         "ALPHANET",
         "ALLEGRO",
@@ -78,6 +79,7 @@ def test_single_point_energy_for_all_potentials(
     monkeypatch.setattr(vpmdk, "MatterSimCalculator", lambda *a, **k: factory("MATTERSIM"))
     monkeypatch.setattr(vpmdk, "MatlantisEstimator", lambda *a, **k: object())
     monkeypatch.setattr(vpmdk, "MatlantisASECalculator", lambda *a, **k: factory("MATLANTIS"))
+    monkeypatch.setattr(vpmdk, "_build_eqnorm_calculator", lambda *a, **k: factory("EQNORM"))
     monkeypatch.setattr(vpmdk, "MatRISCalculator", lambda *a, **k: factory("MATRIS"))
     monkeypatch.setattr(vpmdk, "_ensure_matris_named_model_checkpoint", lambda *a, **k: None)
     monkeypatch.setattr(vpmdk, "_build_alphanet_calculator", lambda *a, **k: factory("ALPHANET"))
