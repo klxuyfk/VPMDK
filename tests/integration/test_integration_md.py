@@ -10,6 +10,7 @@ Required:
 
 Optional backends (skipped unless env vars are set):
 - MatGL: VPMDK_MATGL_MODEL
+- Eqnorm: VPMDK_EQNORM_MODEL, optional VPMDK_EQNORM_VARIANT
 - MatRIS: VPMDK_MATRIS_MODEL, optional VPMDK_MATRIS_TASK
 - AlphaNet: VPMDK_ALPHANET_MODEL, optional VPMDK_ALPHANET_CONFIG / VPMDK_ALPHANET_PRECISION
 - GRACE: VPMDK_GRACE_MODEL
@@ -117,6 +118,27 @@ def test_md_matgl_optional(tmp_path: Path, data_dir: Path) -> None:
     if not Path(model_path).exists():
         pytest.fail(f"MatGL model not found: {model_path}")
     bcar = f"MLP=MATGL\nMODEL={model_path}\nDEVICE=cuda\n"
+    _write_inputs(tmp_path, data_dir, bcar)
+    _run_vpmdk(tmp_path)
+    _assert_outputs(tmp_path)
+
+
+@pytest.mark.integration
+def test_md_eqnorm_optional(tmp_path: Path, data_dir: Path) -> None:
+    if not _module_available("eqnorm"):
+        pytest.skip("eqnorm is not installed.")
+    _require_cuda()
+    model_value = os.environ.get("VPMDK_EQNORM_MODEL")
+    if not model_value:
+        pytest.skip("Set VPMDK_EQNORM_MODEL to run Eqnorm integration.")
+    looks_like_path = os.path.sep in model_value or model_value.endswith((".pt", ".pth", ".ckpt"))
+    if looks_like_path and not Path(model_value).exists():
+        pytest.fail(f"Eqnorm model not found: {model_value}")
+    variant = os.environ.get("VPMDK_EQNORM_VARIANT", "")
+    bcar_lines = ["MLP=EQNORM", f"MODEL={model_value}", "DEVICE=cuda"]
+    if variant:
+        bcar_lines.append(f"EQNORM_VARIANT={variant}")
+    bcar = "\n".join(bcar_lines) + "\n"
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)
     _assert_outputs(tmp_path)

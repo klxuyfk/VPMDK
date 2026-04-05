@@ -3,9 +3,9 @@
 The utility consumes VASP-style inputs (POSCAR, INCAR, POTCAR, BCAR) and
 executes single-point, relaxation, or molecular dynamics runs with the selected
 neural-network potential. Multiple ASE calculators are supported (CHGNet,
-M3GNet/MatGL, MACE, MatterSim, Matlantis, MatRIS, AlphaNet, UPET, TACE) and
-the expected VASP outputs such as CONTCAR and OUTCAR-style energy logs are
-produced.
+M3GNet/MatGL, MACE, MatterSim, Matlantis, Eqnorm, MatRIS, AlphaNet, UPET,
+TACE) and the expected VASP outputs such as CONTCAR and OUTCAR-style energy
+logs are produced.
 """
 
 import argparse
@@ -13,6 +13,7 @@ import csv
 import importlib
 import importlib.util
 import inspect
+import json
 import os
 import re
 import shutil
@@ -96,6 +97,11 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     MatRISCalculator = None  # type: ignore
     MatRISModel = None  # type: ignore
+
+try:
+    from eqnorm.calculator import EqnormCalculator
+except Exception:  # pragma: no cover - optional dependency
+    EqnormCalculator = None  # type: ignore
 
 try:
     from alphanet.infer.calc import AlphaNetCalculator
@@ -203,10 +209,27 @@ else:  # pragma: no cover - optional dependency
     NequIPCalculator = None  # type: ignore
 
 DEFAULT_ORB_MODEL = "orb-v3-conservative-20-omat"
+DEFAULT_EQNORM_MODEL = "eqnorm-mptrj"
 DEFAULT_MATRIS_MODEL = "matris_10m_oam"
 DEFAULT_ALPHANET_MODEL = "AlphaNet-MATPES-r2scan"
 DEFAULT_FAIRCHEM_MODEL = "esen-sm-direct-all-oc25"
 DEFAULT_GRACE_MODEL = "GRACE-2L-MP-r6"
+_EQNORM_VARIANT_ALIASES: Dict[str, List[str]] = {
+    DEFAULT_EQNORM_MODEL: [DEFAULT_EQNORM_MODEL, "eqnorm", "eqnormmptrj"],
+    "eqnorm-omat": ["eqnorm-omat", "eqnormomat", "omat"],
+    "eqnorm-max-mptrj": ["eqnorm-max-mptrj", "eqnormmaxmptrj", "max-mptrj", "maxmptrj"],
+}
+_EQNORM_NAMED_MODELS: Dict[str, Dict[str, Any]] = {
+    DEFAULT_EQNORM_MODEL.casefold(): {
+        "display_name": DEFAULT_EQNORM_MODEL,
+        "aliases": ["eqnorm"],
+        "model_name": "eqnorm",
+        "model_variant": DEFAULT_EQNORM_MODEL,
+        "checkpoint_filename": f"{DEFAULT_EQNORM_MODEL}.pt",
+        "checkpoint_url": "https://ndownloader.figshare.com/files/55429685",
+        "article_api_url": "https://api.figshare.com/v2/articles/29153315",
+    },
+}
 _MATRIS_NAMED_MODEL_DOWNLOADS: Dict[str, tuple[str, str]] = {
     DEFAULT_MATRIS_MODEL: (
         "MatRIS_10M_OAM.pth.tar",
@@ -2071,6 +2094,203 @@ def _build_matris_calculator(bcar_tags: Dict[str, str]):
     return MatRISCalculator(model=model_value, task=task, device=device)
 
 
+def _normalize_eqnorm_key(value: str) -> str:
+    """Return a separator-insensitive Eqnorm lookup key."""
+
+    return re.sub(r"[^a-z0-9]+", "", str(value).strip().casefold())
+
+
+def _match_eqnorm_variant(value: str | None) -> str | None:
+    """Return a canonical Eqnorm variant when a value matches one."""
+
+    if not value:
+        return None
+
+    normalized = _normalize_eqnorm_key(value)
+    for variant, aliases in _EQNORM_VARIANT_ALIASES.items():
+        if normalized in {_normalize_eqnorm_key(alias) for alias in aliases}:
+            return variant
+    return None
+
+
+def _normalize_eqnorm_variant(value: str) -> str:
+    """Validate and normalize an Eqnorm model variant."""
+
+    variant = _match_eqnorm_variant(value)
+    if variant is not None:
+        return variant
+
+    supported = ", ".join(sorted(_EQNORM_VARIANT_ALIASES))
+    raise ValueError(f"Invalid EQNORM_VARIANT value: {value!r}. Available: {supported}")
+
+
+def _resolve_eqnorm_named_model_spec(model_name: str) -> Dict[str, Any] | None:
+    """Return Eqnorm named-model metadata for a model key or alias."""
+
+    normalized = _normalize_eqnorm_key(model_name)
+    for spec in _EQNORM_NAMED_MODELS.values():
+        aliases = [
+            spec["display_name"],
+            spec.get("model_variant", ""),
+            spec.get("model_name", ""),
+            *spec.get("aliases", []),
+        ]
+        if normalized in {_normalize_eqnorm_key(alias) for alias in aliases if alias}:
+            return spec
+    return None
+
+
+def _resolve_eqnorm_download_url(spec: Dict[str, Any]) -> str:
+    """Return the best available download URL for an Eqnorm named model."""
+
+    article_api_url = spec.get("article_api_url")
+    expected_filename = spec["checkpoint_filename"]
+    if article_api_url:
+        request = urllib.request.Request(article_api_url, headers={"User-Agent": "vpmdk"})
+        try:
+            with urllib.request.urlopen(request) as response:
+                payload = json.load(response)
+            for file_info in payload.get("files", []):
+                if file_info.get("name") == expected_filename and file_info.get("download_url"):
+                    return str(file_info["download_url"])
+        except Exception:
+            pass
+
+    return spec["checkpoint_url"]
+
+
+def _ensure_eqnorm_named_model_checkpoint(model_name: str) -> tuple[Dict[str, Any], str]:
+    """Download a known Eqnorm named model into the standard cache when needed."""
+
+    spec = _resolve_eqnorm_named_model_spec(model_name)
+    if spec is None:
+        supported = ", ".join(
+            sorted(named_spec["display_name"] for named_spec in _EQNORM_NAMED_MODELS.values())
+        )
+        raise ValueError(f"Unsupported Eqnorm model '{model_name}'. Available: {supported}")
+
+    cache_dir = os.path.expanduser("~/.cache/eqnorm")
+    os.makedirs(cache_dir, exist_ok=True)
+    checkpoint_path = os.path.join(cache_dir, spec["checkpoint_filename"])
+    if not os.path.exists(checkpoint_path) or os.path.getsize(checkpoint_path) == 0:
+        print(f"Eqnorm checkpoint not found, downloading to {checkpoint_path} ...")
+        _download_file_to_path(_resolve_eqnorm_download_url(spec), checkpoint_path)
+    return spec, checkpoint_path
+
+
+def _resolve_eqnorm_variant(
+    model_value: str,
+    bcar_tags: Dict[str, str],
+    *,
+    named_variant: str | None = None,
+) -> str:
+    """Resolve the Eqnorm architecture variant from BCAR tags or a checkpoint path."""
+
+    explicit_variant = bcar_tags.get("EQNORM_VARIANT")
+    if explicit_variant:
+        resolved = _normalize_eqnorm_variant(explicit_variant)
+        if named_variant is not None and resolved != named_variant:
+            raise ValueError(
+                f"EQNORM_VARIANT={explicit_variant!r} does not match named model variant "
+                f"{named_variant!r}."
+            )
+        return resolved
+
+    if named_variant is not None:
+        return named_variant
+
+    candidate = os.path.basename(model_value)
+    while candidate:
+        inferred = _match_eqnorm_variant(candidate)
+        if inferred is not None:
+            return inferred
+        stem, ext = os.path.splitext(candidate)
+        if not ext:
+            break
+        candidate = stem
+
+    supported = ", ".join(sorted(_EQNORM_VARIANT_ALIASES))
+    raise ValueError(
+        "Eqnorm local checkpoints require EQNORM_VARIANT set to one of "
+        f"{supported} when the variant cannot be inferred from the filename."
+    )
+
+
+def _stage_eqnorm_checkpoint(checkpoint_path: str, variant: str) -> str:
+    """Expose a checkpoint at the cache path expected by the upstream calculator."""
+
+    cache_dir = os.path.expanduser("~/.cache/eqnorm")
+    os.makedirs(cache_dir, exist_ok=True)
+    staged_path = os.path.join(cache_dir, f"{variant}.pt")
+    source_path = os.path.abspath(checkpoint_path)
+
+    if os.path.abspath(staged_path) == source_path:
+        return staged_path
+
+    try:
+        if os.path.exists(staged_path) and os.path.samefile(staged_path, source_path):
+            return staged_path
+    except FileNotFoundError:
+        pass
+
+    if os.path.lexists(staged_path):
+        os.remove(staged_path)
+
+    try:
+        os.symlink(source_path, staged_path)
+    except Exception:
+        shutil.copy2(source_path, staged_path)
+
+    return staged_path
+
+
+def _ensure_eqnorm_torch_safe_globals() -> None:
+    """Allowlist globals needed by e3nn constants on PyTorch 2.6+."""
+
+    try:
+        import torch.serialization
+
+        torch.serialization.add_safe_globals([slice])
+    except Exception:
+        pass
+
+
+def _build_eqnorm_calculator(bcar_tags: Dict[str, str]):
+    """Create the Eqnorm ASE calculator configured from BCAR tags."""
+
+    if EqnormCalculator is None:
+        raise RuntimeError("Eqnorm calculator not available. Install eqnorm and dependencies.")
+
+    model_value = bcar_tags.get("MODEL") or DEFAULT_EQNORM_MODEL
+    device = _resolve_device(bcar_tags.get("DEVICE")) or "cpu"
+    compile_flag = False
+    compile_value = bcar_tags.get("EQNORM_COMPILE")
+    if compile_value is not None:
+        compile_flag = _coerce_bool_tag(compile_value, "EQNORM_COMPILE")
+
+    if os.path.exists(model_value):
+        variant = _resolve_eqnorm_variant(model_value, bcar_tags)
+        _stage_eqnorm_checkpoint(model_value, variant)
+    elif _looks_like_filesystem_path(model_value, suffixes=(".pt", ".pth", ".ckpt")):
+        raise FileNotFoundError(f"Eqnorm model not found: {model_value}")
+    else:
+        spec, checkpoint_path = _ensure_eqnorm_named_model_checkpoint(model_value)
+        variant = _resolve_eqnorm_variant(
+            model_value,
+            bcar_tags,
+            named_variant=spec["model_variant"],
+        )
+        _stage_eqnorm_checkpoint(checkpoint_path, variant)
+
+    _ensure_eqnorm_torch_safe_globals()
+    return EqnormCalculator(
+        model_name="eqnorm",
+        model_variant=variant,
+        device=device,
+        compile=compile_flag,
+    )
+
+
 def _normalize_alphanet_precision(value: str | None) -> str:
     """Return AlphaNet precision in the calculator's expected form."""
 
@@ -2712,6 +2932,7 @@ _CALCULATOR_BUILDERS: Dict[str, str] = {
     "MATGL": "_build_m3gnet_calculator",
     "M3GNET": "_build_m3gnet_calculator",
     "MACE": "_build_mace_calculator",
+    "EQNORM": "_build_eqnorm_calculator",
     "MATRIS": "_build_matris_calculator",
     "ALPHANET": "_build_alphanet_calculator",
     "ALLEGRO": "_build_allegro_calculator",

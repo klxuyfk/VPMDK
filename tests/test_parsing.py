@@ -89,6 +89,48 @@ def test_get_calculator_accepts_upet_named_model(monkeypatch: pytest.MonkeyPatch
     assert captured["model"] == "pet-oam-xl"
 
 
+def test_get_calculator_accepts_eqnorm_named_model(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    def fake_ensure(model_name: str):
+        captured["model_name"] = model_name
+        return (
+            {"model_name": "eqnorm", "model_variant": vpmdk.DEFAULT_EQNORM_MODEL},
+            "/tmp/eqnorm-mptrj.pt",
+        )
+
+    def fake_stage(path: str, variant: str):
+        captured["staged_path"] = path
+        captured["variant"] = variant
+        return path
+
+    def fake_safe_globals():
+        captured["safe_globals"] = True
+
+    def fake_calc(*, model_name, model_variant, device="cpu", compile=False):
+        captured.update(
+            {
+                "calc_model_name": model_name,
+                "calc_variant": model_variant,
+                "device": device,
+                "compile": compile,
+            }
+        )
+        return "eqnorm"
+
+    monkeypatch.setattr(vpmdk, "_ensure_eqnorm_named_model_checkpoint", fake_ensure)
+    monkeypatch.setattr(vpmdk, "_stage_eqnorm_checkpoint", fake_stage)
+    monkeypatch.setattr(vpmdk, "_ensure_eqnorm_torch_safe_globals", fake_safe_globals)
+    monkeypatch.setattr(vpmdk, "EqnormCalculator", fake_calc)
+
+    calculator = vpmdk.get_calculator({"MLP": "EQNORM", "MODEL": "eqnorm"})
+
+    assert calculator == "eqnorm"
+    assert captured["model_name"] == "eqnorm"
+    assert captured["staged_path"] == "/tmp/eqnorm-mptrj.pt"
+    assert captured["calc_variant"] == vpmdk.DEFAULT_EQNORM_MODEL
+
+
 def test_get_calculator_accepts_alphanet_named_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
