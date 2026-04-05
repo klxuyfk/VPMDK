@@ -89,6 +89,68 @@ def test_get_calculator_accepts_upet_named_model(monkeypatch: pytest.MonkeyPatch
     assert captured["model"] == "pet-oam-xl"
 
 
+def test_get_calculator_accepts_alphanet_named_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    captured: dict[str, object] = {}
+    config_path = tmp_path / "matpes.json"
+    config_path.write_text("{}")
+
+    def fake_ensure(model_name: str):
+        captured["model_name"] = model_name
+        return ("/tmp/r2scan_1021.ckpt", str(config_path))
+
+    def fake_load(config_file: str, *, precision: str, use_pbc: bool, compute_stress: bool):
+        captured["config_file"] = config_file
+        return "alpha-config"
+
+    def fake_calc(*, ckpt_path, config, device="cpu", precision="32"):
+        captured.update(
+            {"ckpt_path": ckpt_path, "config": config, "device": device, "precision": precision}
+        )
+        return "alphanet"
+
+    monkeypatch.setattr(vpmdk, "AlphaNetCalculator", fake_calc)
+    monkeypatch.setattr(vpmdk, "_ensure_alphanet_named_model_files", fake_ensure)
+    monkeypatch.setattr(vpmdk, "_load_alphanet_config", fake_load)
+
+    calculator = vpmdk.get_calculator({"MLP": "ALPHANET", "MODEL": "AlphaNet-MATPES-r2scan"})
+
+    assert calculator == "alphanet"
+    assert captured["model_name"] == "AlphaNet-MATPES-r2scan"
+    assert captured["ckpt_path"] == "/tmp/r2scan_1021.ckpt"
+    assert captured["config"] == "alpha-config"
+
+
+def test_get_calculator_accepts_matris_named_model(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    def fake_ensure(model_name: str):
+        captured["model_name"] = model_name
+        return "/tmp/MatRIS_10M_MP.pth.tar"
+
+    def fake_load(path: str, *, device: str | None):
+        captured["load_path"] = path
+        captured["load_device"] = device
+        return "matris-model"
+
+    def fake_instantiate(*, model, task="efs", device=None):
+        captured.update({"model": model, "task": task, "device": device})
+        return "matris"
+
+    monkeypatch.setattr(vpmdk, "MatRISCalculator", object)
+    monkeypatch.setattr(vpmdk, "_ensure_matris_named_model_checkpoint", fake_ensure)
+    monkeypatch.setattr(vpmdk, "_load_matris_checkpoint_model", fake_load)
+    monkeypatch.setattr(vpmdk, "_instantiate_matris_calculator", fake_instantiate)
+
+    calculator = vpmdk.get_calculator({"MLP": "MATRIS", "MODEL": "matris_10m_mp"})
+
+    assert calculator == "matris"
+    assert captured["model_name"] == "matris_10m_mp"
+    assert captured["load_path"] == "/tmp/MatRIS_10M_MP.pth.tar"
+    assert captured["model"] == "matris-model"
+
+
 def test_get_calculator_accepts_tace_named_model(monkeypatch: pytest.MonkeyPatch):
     captured: dict[str, object] = {}
 

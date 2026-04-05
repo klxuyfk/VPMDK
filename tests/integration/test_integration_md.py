@@ -10,6 +10,8 @@ Required:
 
 Optional backends (skipped unless env vars are set):
 - MatGL: VPMDK_MATGL_MODEL
+- MatRIS: VPMDK_MATRIS_MODEL, optional VPMDK_MATRIS_TASK
+- AlphaNet: VPMDK_ALPHANET_MODEL, optional VPMDK_ALPHANET_CONFIG / VPMDK_ALPHANET_PRECISION
 - GRACE: VPMDK_GRACE_MODEL
 - DeePMD: VPMDK_DEEPMD_MODEL, optional VPMDK_DEEPMD_HEAD
 - NequIP: VPMDK_NEQUIP_MODEL
@@ -115,6 +117,55 @@ def test_md_matgl_optional(tmp_path: Path, data_dir: Path) -> None:
     if not Path(model_path).exists():
         pytest.fail(f"MatGL model not found: {model_path}")
     bcar = f"MLP=MATGL\nMODEL={model_path}\nDEVICE=cuda\n"
+    _write_inputs(tmp_path, data_dir, bcar)
+    _run_vpmdk(tmp_path)
+    _assert_outputs(tmp_path)
+
+
+@pytest.mark.integration
+def test_md_matris_optional(tmp_path: Path, data_dir: Path) -> None:
+    if not _module_available("matris"):
+        pytest.skip("matris is not installed.")
+    _require_cuda()
+    model_value = os.environ.get("VPMDK_MATRIS_MODEL")
+    if not model_value:
+        pytest.skip("Set VPMDK_MATRIS_MODEL to run MatRIS integration.")
+    looks_like_path = os.path.sep in model_value or model_value.endswith(
+        (".ckpt", ".pt", ".pth", ".pth.tar", ".tar")
+    )
+    if looks_like_path and not Path(model_value).exists():
+        pytest.fail(f"MatRIS model not found: {model_value}")
+    task = os.environ.get("VPMDK_MATRIS_TASK", "")
+    bcar_lines = ["MLP=MATRIS", f"MODEL={model_value}", "DEVICE=cuda"]
+    if task:
+        bcar_lines.append(f"MATRIS_TASK={task}")
+    bcar = "\n".join(bcar_lines) + "\n"
+    _write_inputs(tmp_path, data_dir, bcar)
+    _run_vpmdk(tmp_path)
+    _assert_outputs(tmp_path)
+
+
+@pytest.mark.integration
+def test_md_alphanet_optional(tmp_path: Path, data_dir: Path) -> None:
+    if not _module_available("alphanet"):
+        pytest.skip("alphanet is not installed.")
+    _require_cuda()
+    model_value = os.environ.get("VPMDK_ALPHANET_MODEL")
+    if not model_value:
+        pytest.skip("Set VPMDK_ALPHANET_MODEL to run AlphaNet integration.")
+    looks_like_path = os.path.sep in model_value or model_value.endswith((".ckpt", ".pt", ".pth"))
+    if looks_like_path and not Path(model_value).exists():
+        pytest.fail(f"AlphaNet model not found: {model_value}")
+    config_path = os.environ.get("VPMDK_ALPHANET_CONFIG", "")
+    if config_path and not Path(config_path).exists():
+        pytest.fail(f"AlphaNet config not found: {config_path}")
+    precision = os.environ.get("VPMDK_ALPHANET_PRECISION", "")
+    bcar_lines = ["MLP=ALPHANET", f"MODEL={model_value}", "DEVICE=cuda"]
+    if config_path:
+        bcar_lines.append(f"ALPHANET_CONFIG={config_path}")
+    if precision:
+        bcar_lines.append(f"ALPHANET_PRECISION={precision}")
+    bcar = "\n".join(bcar_lines) + "\n"
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)
     _assert_outputs(tmp_path)
