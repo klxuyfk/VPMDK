@@ -74,6 +74,21 @@ def test_get_calculator_accepts_legacy_nnp_tag(monkeypatch: pytest.MonkeyPatch):
     assert isinstance(calculator, DummyCHGNet)
 
 
+def test_get_calculator_accepts_upet_named_model(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    def fake_calc(**kwargs):
+        captured.update(kwargs)
+        return "upet"
+
+    monkeypatch.setattr(vpmdk, "UPETCalculator", fake_calc)
+
+    calculator = vpmdk.get_calculator({"MLP": "UPET", "MODEL": "pet-oam-xl"})
+
+    assert calculator == "upet"
+    assert captured["model"] == "pet-oam-xl"
+
+
 def test_get_calculator_rejects_explicit_empty_backend_tags(
     monkeypatch: pytest.MonkeyPatch,
 ):
