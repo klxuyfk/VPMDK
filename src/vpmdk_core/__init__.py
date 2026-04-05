@@ -2,9 +2,9 @@
 
 The utility consumes VASP-style inputs (POSCAR, INCAR, POTCAR, BCAR) and
 executes single-point, relaxation, or molecular dynamics runs with the selected
-neural-network potential.  Multiple ASE calculators are supported (CHGNet,
-M3GNet/MatGL, MACE, MatterSim, Matlantis) and the expected VASP outputs such as
-CONTCAR and OUTCAR-style energy logs are produced.
+neural-network potential. Multiple ASE calculators are supported (CHGNet,
+M3GNet/MatGL, MACE, MatterSim, Matlantis, UPET) and the expected VASP outputs
+such as CONTCAR and OUTCAR-style energy logs are produced.
 """
 
 import argparse
@@ -85,6 +85,11 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     ORBCalculator = None  # type: ignore
     ORB_PRETRAINED_MODELS = None  # type: ignore
+
+try:
+    from upet.calculator import UPETCalculator
+except Exception:  # pragma: no cover - optional dependency
+    UPETCalculator = None  # type: ignore
 
 try:
     from fairchem.core.calculate.ase_calculator import FAIRChemCalculator  # type: ignore
@@ -1870,6 +1875,42 @@ def _build_orb_calculator(bcar_tags: Dict[str, str]):
     return ORBCalculator(model, device=device)
 
 
+def _build_upet_calculator(bcar_tags: Dict[str, str]):
+    """Create the UPET ASE calculator configured from BCAR tags."""
+
+    if UPETCalculator is None:
+        raise RuntimeError("UPET calculator not available. Install upet and dependencies.")
+
+    model_value = bcar_tags.get("MODEL")
+    if not model_value:
+        raise ValueError(
+            "UPET requires MODEL set to a checkpoint path or a named model such as pet-oam-xl."
+        )
+
+    device = _resolve_device(bcar_tags.get("DEVICE"))
+    kwargs: Dict[str, Any] = {"device": device}
+
+    version = bcar_tags.get("UPET_VERSION")
+    if version:
+        kwargs["version"] = version
+
+    non_conservative_value = bcar_tags.get("UPET_NON_CONSERVATIVE")
+    if non_conservative_value is not None:
+        kwargs["non_conservative"] = _coerce_bool_tag(
+            non_conservative_value, "UPET_NON_CONSERVATIVE"
+        )
+
+    if os.path.exists(model_value):
+        return UPETCalculator(checkpoint_path=model_value, **kwargs)
+
+    altsep = os.path.altsep
+    looks_like_path = os.path.sep in model_value or (altsep is not None and altsep in model_value)
+    if looks_like_path or model_value.lower().endswith((".ckpt", ".pt", ".pth")):
+        raise FileNotFoundError(f"UPET model not found: {model_value}")
+
+    return UPETCalculator(model=model_value, **kwargs)
+
+
 _FAIRCHEM_V1_IMPORT_PATHS = (
     "fairchem_core.common.relaxation.ase_utils",
     "ocpmodels.common.relaxation.ase_utils",
@@ -2251,6 +2292,7 @@ _CALCULATOR_BUILDERS: Dict[str, str] = {
     "NEQUIP": "_build_nequip_calculator",
     "MATLANTIS": "_build_matlantis_calculator",
     "ORB": "_build_orb_calculator",
+    "UPET": "_build_upet_calculator",
     "FAIRCHEM": "_build_fairchem_calculator",
     "FAIRCHEM_V2": "_build_fairchem_calculator",
     "ESEN": "_build_fairchem_calculator",

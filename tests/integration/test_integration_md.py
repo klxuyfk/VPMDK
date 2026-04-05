@@ -15,6 +15,7 @@ Optional backends (skipped unless env vars are set):
 - NequIP: VPMDK_NEQUIP_MODEL
 - Allegro: VPMDK_ALLEGRO_MODEL
 - ORB: VPMDK_ORB_MODEL
+- UPET: VPMDK_UPET_MODEL, optional VPMDK_UPET_VERSION
 - FAIRChem v2: VPMDK_FAIRCHEM_MODEL, optional VPMDK_FAIRCHEM_TASK
 """
 
@@ -197,6 +198,27 @@ def test_md_orb_optional(tmp_path: Path, data_dir: Path) -> None:
     if not Path(model_path).exists():
         pytest.fail(f"ORB model not found: {model_path}")
     bcar = f"MLP=ORB\nMODEL={model_path}\nDEVICE=cuda\n"
+    _write_inputs(tmp_path, data_dir, bcar)
+    _run_vpmdk(tmp_path)
+    _assert_outputs(tmp_path)
+
+
+@pytest.mark.integration
+def test_md_upet_optional(tmp_path: Path, data_dir: Path) -> None:
+    if not _module_available("upet"):
+        pytest.skip("upet is not installed.")
+    _require_cuda()
+    model_value = os.environ.get("VPMDK_UPET_MODEL")
+    if not model_value:
+        pytest.skip("Set VPMDK_UPET_MODEL to run UPET integration.")
+    looks_like_path = os.path.sep in model_value or model_value.endswith((".ckpt", ".pt", ".pth"))
+    if looks_like_path and not Path(model_value).exists():
+        pytest.fail(f"UPET model not found: {model_value}")
+    version = os.environ.get("VPMDK_UPET_VERSION", "")
+    bcar_lines = ["MLP=UPET", f"MODEL={model_value}", "DEVICE=cuda"]
+    if version:
+        bcar_lines.append(f"UPET_VERSION={version}")
+    bcar = "\n".join(bcar_lines) + "\n"
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)
     _assert_outputs(tmp_path)

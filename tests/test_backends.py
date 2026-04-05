@@ -55,6 +55,60 @@ def test_matgl_load_model_path_is_used(tmp_path: Path, monkeypatch: pytest.Monke
     assert seen["calc_args"] == ("potential",)
 
 
+def test_upet_uses_checkpoint_path_and_bcar_tags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "pet-oam-xl-v1.0.0.ckpt"
+    model_path.write_text("dummy")
+    seen: dict[str, object] = {}
+
+    def fake_calc(**kwargs):
+        seen.update(kwargs)
+        return "upet"
+
+    monkeypatch.setattr(vpmdk, "UPETCalculator", fake_calc)
+
+    calc = vpmdk._build_upet_calculator(
+        {
+            "MODEL": str(model_path),
+            "DEVICE": "cuda:0",
+            "UPET_NON_CONSERVATIVE": "true",
+        }
+    )
+
+    assert calc == "upet"
+    assert seen == {
+        "checkpoint_path": str(model_path),
+        "device": "cuda:0",
+        "non_conservative": True,
+    }
+
+
+def test_upet_accepts_named_model_and_version(monkeypatch: pytest.MonkeyPatch):
+    seen: dict[str, object] = {}
+
+    def fake_calc(**kwargs):
+        seen.update(kwargs)
+        return "upet"
+
+    monkeypatch.setattr(vpmdk, "UPETCalculator", fake_calc)
+
+    calc = vpmdk._build_upet_calculator(
+        {"MODEL": "pet-oam-xl", "UPET_VERSION": "1.0.0", "DEVICE": "cpu"}
+    )
+
+    assert calc == "upet"
+    assert seen == {"model": "pet-oam-xl", "version": "1.0.0", "device": "cpu"}
+
+
+def test_upet_missing_checkpoint_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(vpmdk, "UPETCalculator", lambda **kwargs: None)
+
+    missing_path = tmp_path / "missing.ckpt"
+    with pytest.raises(FileNotFoundError, match="not found"):
+        vpmdk._build_upet_calculator({"MODEL": str(missing_path)})
+
+
 def test_deepmd_head_is_forwarded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     model_path = tmp_path / "model.pt"
     model_path.write_text("dummy")
