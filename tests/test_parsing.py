@@ -89,6 +89,30 @@ def test_get_calculator_accepts_upet_named_model(monkeypatch: pytest.MonkeyPatch
     assert captured["model"] == "pet-oam-xl"
 
 
+def test_get_calculator_accepts_tace_named_model(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    def fake_calc(*, model, device=None):
+        captured.update({"model": model, "device": device})
+        return "tace"
+
+    class DummyRegistry(dict):
+        def list_models(self):
+            return sorted(self)
+
+    monkeypatch.setattr(vpmdk, "TACEAseCalc", fake_calc)
+    monkeypatch.setattr(
+        vpmdk,
+        "tace_foundations",
+        DummyRegistry({"TACE-v1-OAM-M": Path("/tmp/TACE-v1-OAM-M.pt")}),
+    )
+
+    calculator = vpmdk.get_calculator({"MLP": "TACE", "MODEL": "TACE-v1-OAM-M"})
+
+    assert calculator == "tace"
+    assert captured["model"] == "/tmp/TACE-v1-OAM-M.pt"
+
+
 def test_get_calculator_rejects_explicit_empty_backend_tags(
     monkeypatch: pytest.MonkeyPatch,
 ):

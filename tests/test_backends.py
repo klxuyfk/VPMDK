@@ -109,6 +109,96 @@ def test_upet_missing_checkpoint_raises(tmp_path: Path, monkeypatch: pytest.Monk
         vpmdk._build_upet_calculator({"MODEL": str(missing_path)})
 
 
+def test_tace_uses_checkpoint_path_and_bcar_tags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "tace-model.pt"
+    model_path.write_text("dummy")
+    seen: dict[str, object] = {}
+
+    def fake_calc(
+        *,
+        model,
+        device=None,
+        dtype=None,
+        fidelity_idx=None,
+        spin_on=None,
+        neighborlist_backend=None,
+    ):
+        seen.update(
+            {
+                "model": model,
+                "device": device,
+                "dtype": dtype,
+                "fidelity_idx": fidelity_idx,
+                "spin_on": spin_on,
+                "neighborlist_backend": neighborlist_backend,
+            }
+        )
+        return "tace"
+
+    monkeypatch.setattr(vpmdk, "TACEAseCalc", fake_calc)
+
+    calc = vpmdk._build_tace_calculator(
+        {
+            "MODEL": str(model_path),
+            "DEVICE": "cuda:0",
+            "TACE_DTYPE": "float32",
+            "TACE_FIDELITY_IDX": "2",
+            "TACE_SPIN_ON": "true",
+            "TACE_NEIGHBORLIST_BACKEND": "ase",
+        }
+    )
+
+    assert calc == "tace"
+    assert seen == {
+        "model": str(model_path),
+        "device": "cuda:0",
+        "dtype": "float32",
+        "fidelity_idx": 2,
+        "spin_on": True,
+        "neighborlist_backend": "ase",
+    }
+
+
+def test_tace_accepts_named_model_and_level_alias(monkeypatch: pytest.MonkeyPatch):
+    seen: dict[str, object] = {}
+
+    def fake_calc(*, model, device=None, level=None):
+        seen.update({"model": model, "device": device, "level": level})
+        return "tace"
+
+    class DummyRegistry(dict):
+        def list_models(self):
+            return sorted(self)
+
+    monkeypatch.setattr(vpmdk, "TACEAseCalc", fake_calc)
+    monkeypatch.setattr(
+        vpmdk,
+        "tace_foundations",
+        DummyRegistry({"TACE-v1-OMat24-M": Path("/tmp/TACE-v1-OMat24-M.pt")}),
+    )
+
+    calc = vpmdk._build_tace_calculator(
+        {"MODEL": "TACE-v1-OMat24-M", "TACE_LEVEL": "1", "DEVICE": "cpu"}
+    )
+
+    assert calc == "tace"
+    assert seen == {
+        "model": "/tmp/TACE-v1-OMat24-M.pt",
+        "device": "cpu",
+        "level": 1,
+    }
+
+
+def test_tace_missing_checkpoint_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(vpmdk, "TACEAseCalc", lambda **kwargs: None)
+
+    missing_path = tmp_path / "missing.pt"
+    with pytest.raises(FileNotFoundError, match="not found"):
+        vpmdk._build_tace_calculator({"MODEL": str(missing_path)})
+
+
 def test_deepmd_head_is_forwarded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     model_path = tmp_path / "model.pt"
     model_path.write_text("dummy")
