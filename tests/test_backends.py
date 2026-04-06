@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -62,10 +63,11 @@ def test_eqnorm_uses_checkpoint_path_and_bcar_tags(
     model_path.write_text("dummy")
     seen: dict[str, object] = {}
 
+    @contextmanager
     def fake_stage(path: str, variant: str):
         seen["staged_path"] = path
         seen["variant"] = variant
-        return f"/tmp/{variant}.pt"
+        yield f"/tmp/{variant}.pt"
 
     def fake_safe_globals():
         seen["safe_globals"] = True
@@ -77,7 +79,7 @@ def test_eqnorm_uses_checkpoint_path_and_bcar_tags(
         seen["compile"] = compile
         return "eqnorm"
 
-    monkeypatch.setattr(vpmdk, "_stage_eqnorm_checkpoint", fake_stage)
+    monkeypatch.setattr(vpmdk, "_temporarily_stage_eqnorm_local_checkpoint", fake_stage)
     monkeypatch.setattr(vpmdk, "_ensure_eqnorm_torch_safe_globals", fake_safe_globals)
     monkeypatch.setattr(vpmdk, "EqnormCalculator", fake_calc)
 
@@ -107,11 +109,6 @@ def test_eqnorm_accepts_named_model_and_defaults(monkeypatch: pytest.MonkeyPatch
             "/tmp/eqnorm-mptrj.pt",
         )
 
-    def fake_stage(path: str, variant: str):
-        seen["staged_path"] = path
-        seen["variant"] = variant
-        return path
-
     def fake_safe_globals():
         seen["safe_globals"] = True
 
@@ -123,7 +120,6 @@ def test_eqnorm_accepts_named_model_and_defaults(monkeypatch: pytest.MonkeyPatch
         return "eqnorm"
 
     monkeypatch.setattr(vpmdk, "_ensure_eqnorm_named_model_checkpoint", fake_ensure)
-    monkeypatch.setattr(vpmdk, "_stage_eqnorm_checkpoint", fake_stage)
     monkeypatch.setattr(vpmdk, "_ensure_eqnorm_torch_safe_globals", fake_safe_globals)
     monkeypatch.setattr(vpmdk, "EqnormCalculator", fake_calc)
 
@@ -132,14 +128,52 @@ def test_eqnorm_accepts_named_model_and_defaults(monkeypatch: pytest.MonkeyPatch
     assert calc == "eqnorm"
     assert seen == {
         "model_name": vpmdk.DEFAULT_EQNORM_MODEL,
-        "staged_path": "/tmp/eqnorm-mptrj.pt",
-        "variant": vpmdk.DEFAULT_EQNORM_MODEL,
         "safe_globals": True,
         "calc_model_name": "eqnorm",
         "calc_variant": vpmdk.DEFAULT_EQNORM_MODEL,
         "device": "cpu",
         "compile": False,
     }
+
+
+def test_eqnorm_restores_named_cache_after_local_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    local_checkpoint = tmp_path / "custom-eqnorm.pt"
+    local_checkpoint.write_text("local-weights")
+    cache_dir = tmp_path / ".cache" / "eqnorm"
+    cache_dir.mkdir(parents=True)
+    named_cache_path = cache_dir / "eqnorm-omat.pt"
+    named_cache_path.write_text("official-weights")
+    seen: dict[str, object] = {}
+
+    original_expanduser = vpmdk.os.path.expanduser
+
+    def fake_expanduser(path: str) -> str:
+        if path == "~/.cache/eqnorm":
+            return str(cache_dir)
+        return original_expanduser(path)
+
+    def fake_safe_globals():
+        seen["safe_globals"] = True
+
+    def fake_calc(*, model_name, model_variant, device="cpu", compile=False):
+        seen["loaded_contents"] = named_cache_path.read_text()
+        return "eqnorm"
+
+    monkeypatch.setattr(vpmdk.os.path, "expanduser", fake_expanduser)
+    monkeypatch.setattr(vpmdk, "_ensure_eqnorm_torch_safe_globals", fake_safe_globals)
+    monkeypatch.setattr(vpmdk, "EqnormCalculator", fake_calc)
+
+    calc = vpmdk._build_eqnorm_calculator(
+        {"MODEL": str(local_checkpoint), "EQNORM_VARIANT": "eqnorm-omat"}
+    )
+
+    assert calc == "eqnorm"
+    assert seen["safe_globals"] is True
+    assert seen["loaded_contents"] == "local-weights"
+    assert named_cache_path.read_text() == "official-weights"
+    assert not list(cache_dir.glob(".eqnorm-omat.vpmdk-backup-*.pt"))
 
 
 def test_eqnorm_missing_checkpoint_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -275,13 +309,34 @@ def test_nequix_uses_checkpoint_path_and_torch_device(
         def eval(self):
             seen["eval_called"] = True
 
-    class FakeNequixCalculator:
+    class FakeNequixCalculator(vpmdk.Calculator):
         def __init__(self, **kwargs):
-            seen["kwargs"] = kwargs
-            self.model = FakeModel()
-            self.device = None
+            raise AssertionError("torch path should not call NequixCalculator.__init__")
+
+    def fake_from_pretrained(*, model_name=None, model_path=None, backend="jax", use_kernel=True):
+        seen["from_pretrained"] = {
+            "model_name": model_name,
+            "model_path": model_path,
+            "backend": backend,
+            "use_kernel": use_kernel,
+        }
+        return FakeModel(), {"atomic_numbers": [8, 14], "cutoff": 6.0}
+
+    def fake_atomic_numbers_to_indices(atomic_numbers):
+        seen["atomic_numbers"] = list(atomic_numbers)
+        return {number: index for index, number in enumerate(atomic_numbers)}
+
+    original_import_module = vpmdk.importlib.import_module
+
+    def fake_import_module(name: str):
+        if name == "nequix.calculator":
+            return SimpleNamespace(from_pretrained=fake_from_pretrained)
+        if name == "nequix.data":
+            return SimpleNamespace(atomic_numbers_to_indices=fake_atomic_numbers_to_indices)
+        return original_import_module(name)
 
     monkeypatch.setattr(vpmdk, "NequixCalculator", FakeNequixCalculator)
+    monkeypatch.setattr(vpmdk.importlib, "import_module", fake_import_module)
 
     calc = vpmdk._build_nequix_calculator(
         {
@@ -295,16 +350,19 @@ def test_nequix_uses_checkpoint_path_and_torch_device(
     )
 
     assert isinstance(calc, FakeNequixCalculator)
-    assert seen["kwargs"] == {
+    assert seen["from_pretrained"] == {
         "model_path": str(model_path),
         "model_name": "nequix-oam-1",
         "backend": "torch",
         "use_kernel": True,
-        "use_compile": True,
-        "capacity_multiplier": 1.25,
     }
+    assert seen["atomic_numbers"] == [8, 14]
     assert seen["moved_to"] == "cpu"
     assert seen["eval_called"] is True
+    assert str(calc.device) == "cpu"
+    assert calc.backend == "torch"
+    assert calc.cutoff == 6.0
+    assert calc._capacity_multiplier == 1.25
 
 
 def test_nequix_missing_checkpoint_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

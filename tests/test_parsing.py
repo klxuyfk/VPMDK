@@ -99,11 +99,6 @@ def test_get_calculator_accepts_eqnorm_named_model(monkeypatch: pytest.MonkeyPat
             "/tmp/eqnorm-mptrj.pt",
         )
 
-    def fake_stage(path: str, variant: str):
-        captured["staged_path"] = path
-        captured["variant"] = variant
-        return path
-
     def fake_safe_globals():
         captured["safe_globals"] = True
 
@@ -119,7 +114,6 @@ def test_get_calculator_accepts_eqnorm_named_model(monkeypatch: pytest.MonkeyPat
         return "eqnorm"
 
     monkeypatch.setattr(vpmdk, "_ensure_eqnorm_named_model_checkpoint", fake_ensure)
-    monkeypatch.setattr(vpmdk, "_stage_eqnorm_checkpoint", fake_stage)
     monkeypatch.setattr(vpmdk, "_ensure_eqnorm_torch_safe_globals", fake_safe_globals)
     monkeypatch.setattr(vpmdk, "EqnormCalculator", fake_calc)
 
@@ -127,7 +121,6 @@ def test_get_calculator_accepts_eqnorm_named_model(monkeypatch: pytest.MonkeyPat
 
     assert calculator == "eqnorm"
     assert captured["model_name"] == "eqnorm"
-    assert captured["staged_path"] == "/tmp/eqnorm-mptrj.pt"
     assert captured["calc_variant"] == vpmdk.DEFAULT_EQNORM_MODEL
 
 
@@ -203,6 +196,26 @@ def test_get_calculator_accepts_alphanet_named_model(
     assert captured["model_name"] == "AlphaNet-MATPES-r2scan"
     assert captured["ckpt_path"] == "/tmp/r2scan_1021.ckpt"
     assert captured["config"] == "alpha-config"
+
+
+def test_get_calculator_forwards_structure_to_alphanet_builder(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    structure = object()
+    captured: dict[str, object] = {}
+
+    def fake_builder(tags, *, structure=None):
+        captured["tags"] = tags
+        captured["structure"] = structure
+        return "alphanet"
+
+    monkeypatch.setattr(vpmdk, "_build_alphanet_calculator", fake_builder)
+
+    calculator = vpmdk.get_calculator({"MLP": "ALPHANET"}, structure=structure)
+
+    assert calculator == "alphanet"
+    assert captured["tags"] == {"MLP": "ALPHANET"}
+    assert captured["structure"] is structure
 
 
 def test_get_calculator_accepts_matris_named_model(monkeypatch: pytest.MonkeyPatch):
