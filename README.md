@@ -2,7 +2,7 @@
 
 VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is a lightweight engine that **reads and writes VASP-style inputs/outputs** and performs **molecular dynamics and structure relaxations** using **machine-learning interatomic potentials**. Keep familiar VASP workflows and artifacts while computations run through ASE-compatible ML calculators. The `vpmdk` command (and legacy `vpmdk.py` wrapper) are provided.
 
-**Supported calculators (via ASE):** **CHGNet**, **SevenNet**, **MatterSim**, **MACE**, **Matlantis**, **Eqnorm**, **MatRIS**, **AlphaNet**, **NequIP**, **Allegro**, **ORB**, **UPET**, **TACE**, **MatGL** (via the M3GNet model), **FAIRChem** (including eSEN checkpoints), **GRACE** (TensorPotential foundation models or checkpoints), and **DeePMD-kit**. Availability depends on the corresponding Python packages being installed.
+**Supported calculators (via ASE):** **CHGNet**, **SevenNet**, **MatterSim**, **MACE**, **Matlantis**, **Eqnorm**, **MatRIS**, **AlphaNet**, **Nequix**, **NequIP**, **Allegro**, **ORB**, **UPET**, **TACE**, **MatGL** (via the M3GNet model), **FAIRChem** (including eSEN checkpoints), **GRACE** (TensorPotential foundation models or checkpoints), and **DeePMD-kit**. Availability depends on the corresponding Python packages being installed.
 
 *Not affiliated with, endorsed by, or a replacement for VASP; “VASP” is a trademark of its respective owner. VPMDK only mimics VASP I/O conventions for compatibility.*
 
@@ -21,7 +21,7 @@ pip install vpmdk
    recognised but ignored (a note is printed if they are present).
 2. Install requirements: `ase`, `pymatgen` and, depending on the potential you
    wish to use, `chgnet`, `mattersim`, `mace-torch`, `matgl`, `eqnorm`,
-   `matris`, `alphanet`, `upet`, or `tace`.
+   `matris`, `alphanet`, `nequix`, `upet`, or `tace`.
 3. Run:
 
    ```bash
@@ -99,8 +99,8 @@ DEVICE=cuda           # Optional device override when the backend supports it
 
 | Tag | Meaning | Default |
 |-----|---------|---------|
-| `MLP` | Backend name (`CHGNET`, `MACE`, `MATGL`, `MATLANTIS`, `MATTERSIM`, `EQNORM`, `MATRIS`, `ALPHANET`, `NEQUIP`, `ALLEGRO`, `ORB`, `UPET`, `TACE`, `FAIRCHEM`, `FAIRCHEM_V2`, `FAIRCHEM_V1`, `GRACE`, `DEEPMD`, `SEVENNET`) | `CHGNET` |
-| `MODEL` | Path to a trained parameter set (Eqnorm accepts local `.pt` / `.pth` checkpoints or named models such as `eqnorm-mptrj`; MatRIS accepts local `.pth.tar` checkpoints or named models such as `matris_10m_oam`; AlphaNet accepts local `.ckpt` / `.pt` checkpoints or named models such as `AlphaNet-MATPES-r2scan`; ORB accepts checkpoints; UPET also accepts model names such as `pet-oam-xl`; TACE also accepts foundation-model names such as `TACE-v1-OMat24-M`; FAIRChem also accepts model names such as `esen-sm-direct-all-oc25`) | Backend default or bundled weights |
+| `MLP` | Backend name (`CHGNET`, `MACE`, `MATGL`, `MATLANTIS`, `MATTERSIM`, `EQNORM`, `MATRIS`, `ALPHANET`, `NEQUIX`, `NEQUIP`, `ALLEGRO`, `ORB`, `UPET`, `TACE`, `FAIRCHEM`, `FAIRCHEM_V2`, `FAIRCHEM_V1`, `GRACE`, `DEEPMD`, `SEVENNET`) | `CHGNET` |
+| `MODEL` | Path to a trained parameter set (Eqnorm accepts local `.pt` / `.pth` checkpoints or named models such as `eqnorm-mptrj`; MatRIS accepts local `.pth.tar` checkpoints or named models such as `matris_10m_oam`; AlphaNet accepts local `.ckpt` / `.pt` checkpoints or named models such as `AlphaNet-MATPES-r2scan`; Nequix accepts local `.nqx` / `.pt` checkpoints or named models such as `nequix-mp-1`; ORB accepts checkpoints; UPET also accepts model names such as `pet-oam-xl`; TACE also accepts foundation-model names such as `TACE-v1-OMat24-M`; FAIRChem also accepts model names such as `esen-sm-direct-all-oc25`) | Backend default or bundled weights |
 | `DEVICE` | Device hint for backends that support it (`cpu`, `cuda`, `cuda:N`) | Auto-detects GPU when available |
 
 `NNP` is accepted as a backward-compatible alias of `MLP`.
@@ -134,6 +134,10 @@ DEVICE=cuda           # Optional device override when the backend supports it
 | `MATRIS_TASK` | MatRIS | Prediction task forwarded to `MatRISCalculator` (`e`, `ef`, `efs`, `efsm`) | `efs` |
 | `ALPHANET_CONFIG` | AlphaNet | Path to the AlphaNet JSON config when `MODEL` is a local checkpoint and the config cannot be inferred | Paired config for named models or inferred sibling JSON |
 | `ALPHANET_PRECISION` | AlphaNet | Floating-point precision forwarded to the AlphaNet ASE calculator (`32`, `64`, `float32`, `float64`) | `32` |
+| `NEQUIX_BACKEND` | Nequix | Upstream backend (`jax` or `torch`) | `jax` |
+| `NEQUIX_USE_KERNEL` | Nequix | Enable OpenEquivariance kernels (`0/1`, `true/false`, …); `NEQUIX_KERNEL` is accepted as an alias | `0` |
+| `NEQUIX_USE_COMPILE` | Nequix | Enable `torch.compile` on the torch backend; `NEQUIX_COMPILE` is accepted as an alias | `0` |
+| `NEQUIX_CAPACITY_MULTIPLIER` | Nequix | JAX graph padding factor forwarded to `NequixCalculator` | `1.1` |
 | `UPET_VERSION` | UPET | Version string used when `MODEL` is a named UPET model rather than a local checkpoint | Latest stable model version |
 | `UPET_NON_CONSERVATIVE` | UPET | Enable UPET direct-force/direct-stress inference (`1` to enable) | `0` |
 | `TACE_DTYPE` | TACE | Floating-point dtype forwarded to the TACE ASE calculator | Model default |
@@ -178,6 +182,14 @@ package. Omitting `MODEL` uses the default named model
 `AlphaNet-oma-v1` into `~/.cache/alphanet`. When `MODEL` points to a local
 checkpoint, set `ALPHANET_CONFIG=/path/to/config.json` unless the config can be
 inferred from a sibling JSON file.
+
+Nequix calculations rely on the [nequix](https://github.com/atomicarchitects/nequix)
+package. Omitting `MODEL` uses the default named model `nequix-mp-1`. VPMDK
+can also resolve official named models such as `nequix-omat-1`, `nequix-oam-1`,
+and `nequix-oam-1-pft` through the upstream cache at `~/.cache/nequix/models`.
+Set `MODEL=/path/to/model.nqx` (or `.pt`) to use a local checkpoint directly.
+`NEQUIX_BACKEND` selects `jax` or `torch`; `NEQUIX_USE_KERNEL=1` requires the
+optional OpenEquivariance extras provided by the upstream project.
 
 UPET calculations rely on the [upet](https://github.com/lab-cosmo/upet) package.
 Set `MODEL=/path/to/model.ckpt` to use a local checkpoint, or `MODEL=pet-oam-xl`
@@ -254,6 +266,7 @@ selected potential or thermostat:
 | Eqnorm potential | `eqnorm` (PyTorch) | Uses the named model `eqnorm-mptrj` or local checkpoints; optionally set `EQNORM_VARIANT` / `EQNORM_COMPILE` |
 | MatRIS potential | `matris` (PyTorch) | Uses named models such as `matris_10m_oam` / `matris_10m_mp` or local `.pth.tar` checkpoints; optionally set `MATRIS_TASK` |
 | AlphaNet potential | `alphanet` (PyTorch) | Uses local `.ckpt` / `.pt` checkpoints or named models such as `AlphaNet-MATPES-r2scan`; optionally set `ALPHANET_CONFIG` / `ALPHANET_PRECISION` |
+| Nequix potential | `nequix` (JAX by default, optional PyTorch backend) | Uses named models such as `nequix-mp-1` or local `.nqx` / `.pt` checkpoints; optionally set `NEQUIX_BACKEND` / `NEQUIX_USE_KERNEL` / `NEQUIX_USE_COMPILE` |
 | ORB potential | `orb-models` (PyTorch) | Downloads pretrained weights unless `MODEL` points to a checkpoint |
 | UPET potential | `upet` (PyTorch) | Set `MODEL` to a local `.ckpt` checkpoint or a named model such as `pet-oam-xl`; optionally set `UPET_VERSION`/`UPET_NON_CONSERVATIVE` |
 | TACE potential | `TACE==0.1.0` (PyTorch) | Set `MODEL` to a local checkpoint or a named foundation model such as `TACE-v1-OMat24-M`; optionally set `TACE_DTYPE` / `TACE_FIDELITY_IDX` / `TACE_SPIN_ON` |
@@ -271,15 +284,17 @@ version of PyTorch or JAX if you want to use GPUs.
 
 The model file is loaded from the path given by `MODEL` in `BCAR`. Typically the
 file is located within the calculation directory or specified via an absolute
-path. CHGNet, MatGL, Eqnorm, MatRIS, and AlphaNet ship with default models;
-omitting `MODEL` uses those defaults automatically. Eqnorm can resolve
+path. CHGNet, MatGL, Eqnorm, MatRIS, AlphaNet, and Nequix ship with default
+models; omitting `MODEL` uses those defaults automatically. Eqnorm can resolve
 `eqnorm-mptrj` by downloading the official checkpoint into `~/.cache/eqnorm`
 when `MODEL` is not a filesystem path. MatRIS can also resolve named models such
 as `matris_10m_oam` and `matris_10m_mp` by downloading them into
 `~/.cache/matris` when `MODEL` is not a filesystem path. AlphaNet can resolve
 named models such as `AlphaNet-MATPES-r2scan` and `AlphaNet-oma-v1` by
 downloading a checkpoint plus JSON config into `~/.cache/alphanet` when `MODEL`
-is not a filesystem path. UPET can also resolve named models such as
+is not a filesystem path. Nequix can resolve named models such as
+`nequix-mp-1` and `nequix-oam-1` into `~/.cache/nequix/models` when `MODEL` is
+not a filesystem path. UPET can also resolve named models such as
 `pet-oam-xl` through the `upet` package when `MODEL` is not a filesystem path.
 TACE can resolve named foundation models such as `TACE-v1-OMat24-M` through the
 `tace_foundations` registry.
@@ -288,11 +303,14 @@ TACE can resolve named foundation models such as `TACE-v1-OMat24-M` through the
 
 This script does not directly manage GPU settings. Each potential selects a
 device on its own. CHGNet, MatGL/M3GNet, MACE, Eqnorm, MatRIS, AlphaNet, ORB,
-UPET, TACE, and FAIRChem honour `DEVICE` in `BCAR` (e.g. `DEVICE=cpu` to force a CPU run). With CUDA devices you
-can choose which GPU to use with `CUDA_VISIBLE_DEVICES`. MatGL GPU tuning is
-backend-dependent (PyTorch+DGL vs JAX), so environment variables differ between
-installations. A GPU with at least 8 GB of memory is recommended, though running
-on a CPU also works.
+UPET, TACE, and FAIRChem honour `DEVICE` in `BCAR` (e.g. `DEVICE=cpu` to force
+a CPU run). Nequix supports `DEVICE` when `NEQUIX_BACKEND=torch`; on the JAX
+backend, placement follows the active JAX runtime (`JAX_PLATFORMS`,
+`CUDA_VISIBLE_DEVICES`, etc.). With CUDA devices you can choose which GPU to use
+with `CUDA_VISIBLE_DEVICES`. MatGL GPU tuning is backend-dependent
+(PyTorch+DGL vs JAX), so environment variables differ between installations. A
+GPU with at least 8 GB of memory is recommended, though running on a CPU also
+works.
 
 ### Example directory layout
 

@@ -161,6 +161,94 @@ def test_eqnorm_requires_variant_for_unknown_local_checkpoint(
         vpmdk._build_eqnorm_calculator({"MODEL": str(model_path)})
 
 
+def test_nequix_accepts_named_model_and_defaults(monkeypatch: pytest.MonkeyPatch):
+    seen: dict[str, object] = {}
+
+    class FakeNequixCalculator:
+        URLS = {
+            vpmdk.DEFAULT_NEQUIX_MODEL: "https://example.invalid/nequix-mp-1.nqx",
+            "nequix-oam-1": "https://example.invalid/nequix-oam-1.nqx",
+        }
+
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+    monkeypatch.setattr(vpmdk, "NequixCalculator", FakeNequixCalculator)
+
+    calc = vpmdk._build_nequix_calculator({})
+
+    assert isinstance(calc, FakeNequixCalculator)
+    assert seen == {
+        "model_name": vpmdk.DEFAULT_NEQUIX_MODEL,
+        "backend": "jax",
+        "use_kernel": False,
+        "use_compile": False,
+        "capacity_multiplier": 1.1,
+    }
+
+
+def test_nequix_uses_checkpoint_path_and_torch_device(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "nequix-oam-1.nqx"
+    model_path.write_text("dummy")
+    seen: dict[str, object] = {}
+
+    class FakeModel:
+        def to(self, device):
+            seen["moved_to"] = str(device)
+            return self
+
+        def eval(self):
+            seen["eval_called"] = True
+
+    class FakeNequixCalculator:
+        def __init__(self, **kwargs):
+            seen["kwargs"] = kwargs
+            self.model = FakeModel()
+            self.device = None
+
+    monkeypatch.setattr(vpmdk, "NequixCalculator", FakeNequixCalculator)
+
+    calc = vpmdk._build_nequix_calculator(
+        {
+            "MODEL": str(model_path),
+            "DEVICE": "cpu",
+            "NEQUIX_BACKEND": "torch",
+            "NEQUIX_USE_KERNEL": "true",
+            "NEQUIX_USE_COMPILE": "true",
+            "NEQUIX_CAPACITY_MULTIPLIER": "1.25",
+        }
+    )
+
+    assert isinstance(calc, FakeNequixCalculator)
+    assert seen["kwargs"] == {
+        "model_path": str(model_path),
+        "model_name": "nequix-oam-1",
+        "backend": "torch",
+        "use_kernel": True,
+        "use_compile": True,
+        "capacity_multiplier": 1.25,
+    }
+    assert seen["moved_to"] == "cpu"
+    assert seen["eval_called"] is True
+
+
+def test_nequix_missing_checkpoint_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(vpmdk, "NequixCalculator", object)
+
+    missing_path = tmp_path / "missing.nqx"
+    with pytest.raises(FileNotFoundError, match="not found"):
+        vpmdk._build_nequix_calculator({"MODEL": str(missing_path)})
+
+
+def test_nequix_invalid_backend_raises(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(vpmdk, "NequixCalculator", object)
+
+    with pytest.raises(ValueError, match="NEQUIX_BACKEND"):
+        vpmdk._build_nequix_calculator({"NEQUIX_BACKEND": "metal"})
+
+
 def test_alphanet_uses_checkpoint_path_and_bcar_tags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
