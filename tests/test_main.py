@@ -25,6 +25,7 @@ from tests.conftest import DummyCalculator
         "EQNORM",
         "MATRIS",
         "ALPHANET",
+        "HIENET",
         "NEQUIX",
         "ALLEGRO",
         "NEQUIP",
@@ -84,6 +85,7 @@ def test_single_point_energy_for_all_potentials(
     monkeypatch.setattr(vpmdk, "MatRISCalculator", lambda *a, **k: factory("MATRIS"))
     monkeypatch.setattr(vpmdk, "_ensure_matris_named_model_checkpoint", lambda *a, **k: None)
     monkeypatch.setattr(vpmdk, "_build_alphanet_calculator", lambda *a, **k: factory("ALPHANET"))
+    monkeypatch.setattr(vpmdk, "_build_hienet_calculator", lambda *a, **k: factory("HIENET"))
     monkeypatch.setattr(vpmdk, "_build_nequix_calculator", lambda *a, **k: factory("NEQUIX"))
     monkeypatch.setattr(vpmdk, "_build_allegro_calculator", lambda *a, **k: factory("ALLEGRO"))
     monkeypatch.setattr(vpmdk, "ORBCalculator", lambda *a, **k: factory("ORB"))

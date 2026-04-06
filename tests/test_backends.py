@@ -161,6 +161,79 @@ def test_eqnorm_requires_variant_for_unknown_local_checkpoint(
         vpmdk._build_eqnorm_calculator({"MODEL": str(model_path)})
 
 
+def test_hienet_accepts_named_model_and_defaults(monkeypatch: pytest.MonkeyPatch):
+    seen: dict[str, object] = {}
+
+    def fake_ensure(model_name: str):
+        seen["model_name"] = model_name
+        return ({"display_name": vpmdk.DEFAULT_HIENET_MODEL}, "/tmp/HIENet-V3.pth")
+
+    def fake_calc(*, model, file_type="checkpoint", device="cpu"):
+        seen["calc_model"] = model
+        seen["file_type"] = file_type
+        seen["device"] = device
+        return "hienet"
+
+    monkeypatch.setattr(vpmdk, "_ensure_hienet_named_model_checkpoint", fake_ensure)
+    monkeypatch.setattr(vpmdk, "HIENetCalculator", fake_calc)
+
+    calc = vpmdk._build_hienet_calculator({})
+
+    assert calc == "hienet"
+    assert seen == {
+        "model_name": vpmdk.DEFAULT_HIENET_MODEL,
+        "calc_model": "/tmp/HIENet-V3.pth",
+        "file_type": "checkpoint",
+        "device": "cpu",
+    }
+
+
+def test_hienet_uses_checkpoint_path_and_bcar_tags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "custom-hienet.ckpt"
+    model_path.write_text("dummy")
+    seen: dict[str, object] = {}
+
+    def fake_calc(*, model, file_type="checkpoint", device="cpu"):
+        seen["model"] = model
+        seen["file_type"] = file_type
+        seen["device"] = device
+        return "hienet"
+
+    monkeypatch.setattr(vpmdk, "HIENetCalculator", fake_calc)
+
+    calc = vpmdk._build_hienet_calculator(
+        {
+            "MODEL": str(model_path),
+            "HIENET_FILE_TYPE": "checkpoint",
+            "DEVICE": "cuda:0",
+        }
+    )
+
+    assert calc == "hienet"
+    assert seen == {
+        "model": str(model_path),
+        "file_type": "checkpoint",
+        "device": "cuda:0",
+    }
+
+
+def test_hienet_missing_checkpoint_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(vpmdk, "HIENetCalculator", object)
+
+    missing_path = tmp_path / "missing.pth"
+    with pytest.raises(FileNotFoundError, match="not found"):
+        vpmdk._build_hienet_calculator({"MODEL": str(missing_path)})
+
+
+def test_hienet_invalid_file_type_raises(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(vpmdk, "HIENetCalculator", object)
+
+    with pytest.raises(ValueError, match="HIENET_FILE_TYPE"):
+        vpmdk._build_hienet_calculator({"HIENET_FILE_TYPE": "weights"})
+
+
 def test_nequix_accepts_named_model_and_defaults(monkeypatch: pytest.MonkeyPatch):
     seen: dict[str, object] = {}
 

@@ -13,6 +13,7 @@ Optional backends (skipped unless env vars are set):
 - Eqnorm: VPMDK_EQNORM_MODEL, optional VPMDK_EQNORM_VARIANT
 - MatRIS: VPMDK_MATRIS_MODEL, optional VPMDK_MATRIS_TASK
 - AlphaNet: VPMDK_ALPHANET_MODEL, optional VPMDK_ALPHANET_CONFIG / VPMDK_ALPHANET_PRECISION
+- HIENet: VPMDK_HIENET_MODEL, optional VPMDK_HIENET_FILE_TYPE
 - Nequix: VPMDK_NEQUIX_MODEL, optional VPMDK_NEQUIX_BACKEND / VPMDK_NEQUIX_USE_KERNEL
 - GRACE: VPMDK_GRACE_MODEL
 - DeePMD: VPMDK_DEEPMD_MODEL, optional VPMDK_DEEPMD_HEAD
@@ -188,6 +189,29 @@ def test_md_alphanet_optional(tmp_path: Path, data_dir: Path) -> None:
         bcar_lines.append(f"ALPHANET_CONFIG={config_path}")
     if precision:
         bcar_lines.append(f"ALPHANET_PRECISION={precision}")
+    bcar = "\n".join(bcar_lines) + "\n"
+    _write_inputs(tmp_path, data_dir, bcar)
+    _run_vpmdk(tmp_path)
+    _assert_outputs(tmp_path)
+
+
+@pytest.mark.integration
+def test_md_hienet_optional(tmp_path: Path, data_dir: Path) -> None:
+    if not _module_available("hienet"):
+        pytest.skip("hienet is not installed.")
+    _require_cuda()
+    model_value = os.environ.get("VPMDK_HIENET_MODEL")
+    if not model_value:
+        pytest.skip("Set VPMDK_HIENET_MODEL to run HIENet integration.")
+    looks_like_path = os.path.sep in model_value or model_value.endswith(
+        (".ckpt", ".pt", ".pth", ".jit", ".ts")
+    )
+    if looks_like_path and not Path(model_value).exists():
+        pytest.fail(f"HIENet model not found: {model_value}")
+    file_type = os.environ.get("VPMDK_HIENET_FILE_TYPE", "")
+    bcar_lines = ["MLP=HIENET", f"MODEL={model_value}", "DEVICE=cuda"]
+    if file_type:
+        bcar_lines.append(f"HIENET_FILE_TYPE={file_type}")
     bcar = "\n".join(bcar_lines) + "\n"
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)
