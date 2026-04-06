@@ -2274,6 +2274,44 @@ def _stage_eqnorm_checkpoint(checkpoint_path: str, variant: str) -> str:
     return staged_path
 
 
+@contextmanager
+def _temporarily_stage_eqnorm_local_checkpoint(checkpoint_path: str, variant: str):
+    """Temporarily expose a local Eqnorm checkpoint without poisoning the named cache."""
+
+    cache_dir = os.path.expanduser("~/.cache/eqnorm")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    staged_path = os.path.join(cache_dir, f"{variant}.pt")
+    source_path = os.path.abspath(checkpoint_path)
+    if os.path.abspath(staged_path) == source_path:
+        yield staged_path
+        return
+
+    try:
+        if os.path.exists(staged_path) and os.path.samefile(staged_path, source_path):
+            yield staged_path
+            return
+    except FileNotFoundError:
+        pass
+
+    backup_path = None
+    if os.path.lexists(staged_path):
+        backup_path = os.path.join(
+            cache_dir,
+            f".{variant}.vpmdk-backup-{time.time_ns()}.pt",
+        )
+        os.replace(staged_path, backup_path)
+
+    staged_path = _stage_eqnorm_checkpoint(source_path, variant)
+    try:
+        yield staged_path
+    finally:
+        if os.path.lexists(staged_path):
+            os.remove(staged_path)
+        if backup_path is not None:
+            os.replace(backup_path, staged_path)
+
+
 def _ensure_eqnorm_torch_safe_globals() -> None:
     """Allowlist globals needed by e3nn constants on PyTorch 2.6+."""
 
@@ -2298,21 +2336,26 @@ def _build_eqnorm_calculator(bcar_tags: Dict[str, str]):
     if compile_value is not None:
         compile_flag = _coerce_bool_tag(compile_value, "EQNORM_COMPILE")
 
+    _ensure_eqnorm_torch_safe_globals()
+
     if os.path.exists(model_value):
         variant = _resolve_eqnorm_variant(model_value, bcar_tags)
-        _stage_eqnorm_checkpoint(model_value, variant)
-    elif _looks_like_filesystem_path(model_value, suffixes=(".pt", ".pth", ".ckpt")):
+        with _temporarily_stage_eqnorm_local_checkpoint(model_value, variant):
+            return EqnormCalculator(
+                model_name="eqnorm",
+                model_variant=variant,
+                device=device,
+                compile=compile_flag,
+            )
+    if _looks_like_filesystem_path(model_value, suffixes=(".pt", ".pth", ".ckpt")):
         raise FileNotFoundError(f"Eqnorm model not found: {model_value}")
-    else:
-        spec, checkpoint_path = _ensure_eqnorm_named_model_checkpoint(model_value)
-        variant = _resolve_eqnorm_variant(
-            model_value,
-            bcar_tags,
-            named_variant=spec["model_variant"],
-        )
-        _stage_eqnorm_checkpoint(checkpoint_path, variant)
 
-    _ensure_eqnorm_torch_safe_globals()
+    spec, _ = _ensure_eqnorm_named_model_checkpoint(model_value)
+    variant = _resolve_eqnorm_variant(
+        model_value,
+        bcar_tags,
+        named_variant=spec["model_variant"],
+    )
     return EqnormCalculator(
         model_name="eqnorm",
         model_variant=variant,
@@ -2480,23 +2523,46 @@ def _build_nequix_calculator(bcar_tags: Dict[str, str], *, structure=None):
     else:
         kwargs["model_name"] = _resolve_nequix_model_name(model_value)
 
-    calculator = NequixCalculator(**kwargs)
-
     requested_device = bcar_tags.get("DEVICE")
-    if backend == "torch" and requested_device:
+    if backend == "torch":
         try:
             import torch
 
-            torch_device = torch.device(requested_device)
-            calculator.model = calculator.model.to(torch_device)
+            nequix_module = importlib.import_module("nequix.calculator")
+            nequix_data_module = importlib.import_module("nequix.data")
+
+            torch_device = torch.device(
+                _resolve_device(requested_device)
+                or ("cuda" if torch.cuda.is_available() else "cpu")
+            )
+            model, config = nequix_module.from_pretrained(
+                model_name=kwargs.get("model_name"),
+                model_path=kwargs.get("model_path"),
+                backend="torch",
+                use_kernel=use_kernel,
+            )
+
+            calculator = NequixCalculator.__new__(NequixCalculator)
+            Calculator.__init__(calculator)
+            calculator.model = model.to(torch_device)
+            calculator.config = config
             calculator.device = torch_device
             calculator.model.eval()
+            calculator.compile_state = False if use_compile and torch_device.type == "cuda" else True
+            calculator.atom_indices = nequix_data_module.atomic_numbers_to_indices(
+                config["atomic_numbers"]
+            )
+            calculator.cutoff = config["cutoff"]
+            calculator._capacity = None
+            calculator._capacity_multiplier = capacity_multiplier
+            calculator.backend = "torch"
+            return calculator
         except Exception as exc:
             raise RuntimeError(
-                f"Unable to move Nequix torch backend to DEVICE={requested_device!r}."
+                f"Unable to initialize Nequix torch backend for DEVICE={requested_device!r}."
             ) from exc
 
-    return calculator
+    return NequixCalculator(**kwargs)
 
 
 def _normalize_alphanet_precision(value: str | None) -> str:
@@ -3217,7 +3283,20 @@ def get_calculator(bcar_tags: Dict[str, str], *, structure=None):
     if builder is None:
         raise RuntimeError(f"Calculator builder not available: {builder_entry}")
 
-    if builder_name == "_build_deepmd_calculator":
+    try:
+        builder_signature = inspect.signature(builder)
+    except (TypeError, ValueError):
+        builder_signature = None
+
+    accepts_structure = builder_name == "_build_deepmd_calculator"
+    if builder_signature is not None:
+        accepts_structure = accepts_structure or "structure" in builder_signature.parameters
+        accepts_structure = accepts_structure or any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in builder_signature.parameters.values()
+        )
+
+    if accepts_structure:
         return builder(bcar_tags, structure=structure)
     return builder(bcar_tags)
 
