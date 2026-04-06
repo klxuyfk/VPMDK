@@ -3,9 +3,9 @@
 The utility consumes VASP-style inputs (POSCAR, INCAR, POTCAR, BCAR) and
 executes single-point, relaxation, or molecular dynamics runs with the selected
 neural-network potential. Multiple ASE calculators are supported (CHGNet,
-M3GNet/MatGL, MACE, MatterSim, Matlantis, Eqnorm, MatRIS, AlphaNet, Nequix,
-UPET, TACE) and the expected VASP outputs such as CONTCAR and OUTCAR-style
-energy logs are produced.
+M3GNet/MatGL, MACE, MatterSim, Matlantis, Eqnorm, MatRIS, AlphaNet, HIENet,
+Nequix, UPET, TACE) and the expected VASP outputs such as CONTCAR and
+OUTCAR-style energy logs are produced.
 """
 
 import argparse
@@ -109,6 +109,18 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     AlphaNetCalculator = None  # type: ignore
     AlphaNetAllConfig = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency compatibility
+    import torch.serialization
+
+    torch.serialization.add_safe_globals([slice])
+except Exception:
+    pass
+
+try:
+    from hienet.hienet_calculator import HIENetCalculator
+except Exception:  # pragma: no cover - optional dependency
+    HIENetCalculator = None  # type: ignore
 
 try:
     from nequix.calculator import NequixCalculator
@@ -217,6 +229,7 @@ DEFAULT_ORB_MODEL = "orb-v3-conservative-20-omat"
 DEFAULT_EQNORM_MODEL = "eqnorm-mptrj"
 DEFAULT_MATRIS_MODEL = "matris_10m_oam"
 DEFAULT_ALPHANET_MODEL = "AlphaNet-MATPES-r2scan"
+DEFAULT_HIENET_MODEL = "HIENet-0"
 DEFAULT_NEQUIX_MODEL = "nequix-mp-1"
 DEFAULT_FAIRCHEM_MODEL = "esen-sm-direct-all-oc25"
 DEFAULT_GRACE_MODEL = "GRACE-2L-MP-r6"
@@ -295,6 +308,17 @@ _ALPHANET_NAMED_MODELS: Dict[str, Dict[str, Any]] = {
         "config_url": (
             "https://raw.githubusercontent.com/zmyybc/AlphaNet/jax_and_zbl/pretrained/"
             "OMA/oma.json"
+        ),
+    },
+}
+_HIENET_NAMED_MODELS: Dict[str, Dict[str, Any]] = {
+    DEFAULT_HIENET_MODEL.casefold(): {
+        "display_name": DEFAULT_HIENET_MODEL,
+        "aliases": ["hienet", "hienet-0", "hienet-v3", "v3"],
+        "checkpoint_filename": "HIENet-V3.pth",
+        "checkpoint_url": (
+            "https://raw.githubusercontent.com/divelab/AIRS/"
+            "f7b0bde44400e2be8de0488009ee9f46925d6885/OpenMat/HIENet/checkpoints/HIENet-V3.pth"
         ),
     },
 }
@@ -2297,6 +2321,79 @@ def _build_eqnorm_calculator(bcar_tags: Dict[str, str]):
     )
 
 
+def _normalize_hienet_file_type(value: str | None) -> str:
+    """Return the normalized HIENet file type."""
+
+    if value is None:
+        return "checkpoint"
+    normalized = str(value).strip().lower()
+    if normalized in {"checkpoint", "torchscript"}:
+        return normalized
+    raise ValueError(f"Invalid HIENET_FILE_TYPE value: {value!r}")
+
+
+def _resolve_hienet_named_model_spec(model_name: str) -> Dict[str, Any] | None:
+    """Return HIENet named-model metadata for a model key or alias."""
+
+    normalized = model_name.strip().casefold()
+    direct = _HIENET_NAMED_MODELS.get(normalized)
+    if direct is not None:
+        return direct
+
+    for spec in _HIENET_NAMED_MODELS.values():
+        aliases = spec.get("aliases", [])
+        if any(normalized == alias.casefold() for alias in aliases):
+            return spec
+    return None
+
+
+def _ensure_hienet_named_model_checkpoint(model_name: str) -> tuple[Dict[str, Any], str]:
+    """Download a known HIENet named model into the standard cache when needed."""
+
+    spec = _resolve_hienet_named_model_spec(model_name)
+    if spec is None:
+        supported = ", ".join(
+            sorted(named_spec["display_name"] for named_spec in _HIENET_NAMED_MODELS.values())
+        )
+        raise ValueError(f"Unsupported HIENet model '{model_name}'. Available: {supported}")
+
+    cache_dir = os.path.expanduser("~/.cache/hienet")
+    os.makedirs(cache_dir, exist_ok=True)
+    checkpoint_path = os.path.join(cache_dir, spec["checkpoint_filename"])
+    if not os.path.exists(checkpoint_path) or os.path.getsize(checkpoint_path) == 0:
+        print(f"HIENet checkpoint not found, downloading to {checkpoint_path} ...")
+        _download_file_to_path(spec["checkpoint_url"], checkpoint_path)
+    return spec, checkpoint_path
+
+
+def _build_hienet_calculator(bcar_tags: Dict[str, str]):
+    """Create the HIENet ASE calculator configured from BCAR tags."""
+
+    if HIENetCalculator is None:
+        raise RuntimeError("HIENet calculator not available. Install hienet and dependencies.")
+
+    model_value = bcar_tags.get("MODEL") or DEFAULT_HIENET_MODEL
+    device = _resolve_device(bcar_tags.get("DEVICE")) or "cpu"
+    file_type = _normalize_hienet_file_type(bcar_tags.get("HIENET_FILE_TYPE"))
+
+    model_path = model_value
+    if os.path.exists(model_value):
+        pass
+    elif _looks_like_filesystem_path(
+        model_value,
+        suffixes=(".pth", ".pt", ".ckpt", ".jit", ".ts"),
+    ):
+        raise FileNotFoundError(f"HIENet model not found: {model_value}")
+    else:
+        if file_type != "checkpoint":
+            raise ValueError(
+                "HIENET_FILE_TYPE=torchscript requires MODEL pointing to a local TorchScript file."
+            )
+        _, model_path = _ensure_hienet_named_model_checkpoint(model_value)
+
+    return HIENetCalculator(model=model_path, file_type=file_type, device=device)
+
+
 def _normalize_nequix_backend(value: str | None) -> str:
     """Return the normalized Nequix backend name."""
 
@@ -3046,6 +3143,7 @@ _CALCULATOR_BUILDERS: Dict[str, str] = {
     "EQNORM": "_build_eqnorm_calculator",
     "MATRIS": "_build_matris_calculator",
     "ALPHANET": "_build_alphanet_calculator",
+    "HIENET": "_build_hienet_calculator",
     "NEQUIX": "_build_nequix_calculator",
     "ALLEGRO": "_build_allegro_calculator",
     "NEQUIP": "_build_nequip_calculator",

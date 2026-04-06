@@ -131,6 +131,28 @@ def test_get_calculator_accepts_eqnorm_named_model(monkeypatch: pytest.MonkeyPat
     assert captured["calc_variant"] == vpmdk.DEFAULT_EQNORM_MODEL
 
 
+def test_get_calculator_accepts_hienet_named_model(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    def fake_ensure(model_name: str):
+        captured["model_name"] = model_name
+        return ({"display_name": vpmdk.DEFAULT_HIENET_MODEL}, "/tmp/HIENet-V3.pth")
+
+    def fake_calc(*, model, file_type="checkpoint", device="cpu"):
+        captured.update({"calc_model": model, "file_type": file_type, "device": device})
+        return "hienet"
+
+    monkeypatch.setattr(vpmdk, "_ensure_hienet_named_model_checkpoint", fake_ensure)
+    monkeypatch.setattr(vpmdk, "HIENetCalculator", fake_calc)
+
+    calculator = vpmdk.get_calculator({"MLP": "HIENET", "MODEL": "hienet"})
+
+    assert calculator == "hienet"
+    assert captured["model_name"] == "hienet"
+    assert captured["calc_model"] == "/tmp/HIENet-V3.pth"
+    assert captured["file_type"] == "checkpoint"
+
+
 def test_get_calculator_accepts_nequix_named_model(monkeypatch: pytest.MonkeyPatch):
     captured: dict[str, object] = {}
 

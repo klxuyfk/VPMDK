@@ -2,7 +2,7 @@
 
 VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is a lightweight engine that **reads and writes VASP-style inputs/outputs** and performs **molecular dynamics and structure relaxations** using **machine-learning interatomic potentials**. Keep familiar VASP workflows and artifacts while computations run through ASE-compatible ML calculators. The `vpmdk` command (and legacy `vpmdk.py` wrapper) are provided.
 
-**Supported calculators (via ASE):** **CHGNet**, **SevenNet**, **MatterSim**, **MACE**, **Matlantis**, **Eqnorm**, **MatRIS**, **AlphaNet**, **Nequix**, **NequIP**, **Allegro**, **ORB**, **UPET**, **TACE**, **MatGL** (via the M3GNet model), **FAIRChem** (including eSEN checkpoints), **GRACE** (TensorPotential foundation models or checkpoints), and **DeePMD-kit**. Availability depends on the corresponding Python packages being installed.
+**Supported calculators (via ASE):** **CHGNet**, **SevenNet**, **MatterSim**, **MACE**, **Matlantis**, **Eqnorm**, **MatRIS**, **AlphaNet**, **HIENet**, **Nequix**, **NequIP**, **Allegro**, **ORB**, **UPET**, **TACE**, **MatGL** (via the M3GNet model), **FAIRChem** (including eSEN checkpoints), **GRACE** (TensorPotential foundation models or checkpoints), and **DeePMD-kit**. Availability depends on the corresponding Python packages being installed.
 
 *Not affiliated with, endorsed by, or a replacement for VASP; “VASP” is a trademark of its respective owner. VPMDK only mimics VASP I/O conventions for compatibility.*
 
@@ -21,7 +21,7 @@ pip install vpmdk
    recognised but ignored (a note is printed if they are present).
 2. Install requirements: `ase`, `pymatgen` and, depending on the potential you
    wish to use, `chgnet`, `mattersim`, `mace-torch`, `matgl`, `eqnorm`,
-   `matris`, `alphanet`, `nequix`, `upet`, or `tace`.
+   `matris`, `alphanet`, `hienet`, `nequix`, `upet`, or `tace`.
 3. Run:
 
    ```bash
@@ -99,8 +99,8 @@ DEVICE=cuda           # Optional device override when the backend supports it
 
 | Tag | Meaning | Default |
 |-----|---------|---------|
-| `MLP` | Backend name (`CHGNET`, `MACE`, `MATGL`, `MATLANTIS`, `MATTERSIM`, `EQNORM`, `MATRIS`, `ALPHANET`, `NEQUIX`, `NEQUIP`, `ALLEGRO`, `ORB`, `UPET`, `TACE`, `FAIRCHEM`, `FAIRCHEM_V2`, `FAIRCHEM_V1`, `GRACE`, `DEEPMD`, `SEVENNET`) | `CHGNET` |
-| `MODEL` | Path to a trained parameter set (Eqnorm accepts local `.pt` / `.pth` checkpoints or named models such as `eqnorm-mptrj`; MatRIS accepts local `.pth.tar` checkpoints or named models such as `matris_10m_oam`; AlphaNet accepts local `.ckpt` / `.pt` checkpoints or named models such as `AlphaNet-MATPES-r2scan`; Nequix accepts local `.nqx` / `.pt` checkpoints or named models such as `nequix-mp-1`; ORB accepts checkpoints; UPET also accepts model names such as `pet-oam-xl`; TACE also accepts foundation-model names such as `TACE-v1-OMat24-M`; FAIRChem also accepts model names such as `esen-sm-direct-all-oc25`) | Backend default or bundled weights |
+| `MLP` | Backend name (`CHGNET`, `MACE`, `MATGL`, `MATLANTIS`, `MATTERSIM`, `EQNORM`, `MATRIS`, `ALPHANET`, `HIENET`, `NEQUIX`, `NEQUIP`, `ALLEGRO`, `ORB`, `UPET`, `TACE`, `FAIRCHEM`, `FAIRCHEM_V2`, `FAIRCHEM_V1`, `GRACE`, `DEEPMD`, `SEVENNET`) | `CHGNET` |
+| `MODEL` | Path to a trained parameter set (Eqnorm accepts local `.pt` / `.pth` checkpoints or named models such as `eqnorm-mptrj`; MatRIS accepts local `.pth.tar` checkpoints or named models such as `matris_10m_oam`; AlphaNet accepts local `.ckpt` / `.pt` checkpoints or named models such as `AlphaNet-MATPES-r2scan`; HIENet accepts local `.pth` / `.pt` / `.ckpt` checkpoints or the named model `HIENet-0`; Nequix accepts local `.nqx` / `.pt` checkpoints or named models such as `nequix-mp-1`; ORB accepts checkpoints; UPET also accepts model names such as `pet-oam-xl`; TACE also accepts foundation-model names such as `TACE-v1-OMat24-M`; FAIRChem also accepts model names such as `esen-sm-direct-all-oc25`) | Backend default or bundled weights |
 | `DEVICE` | Device hint for backends that support it (`cpu`, `cuda`, `cuda:N`) | Auto-detects GPU when available |
 
 `NNP` is accepted as a backward-compatible alias of `MLP`.
@@ -134,6 +134,7 @@ DEVICE=cuda           # Optional device override when the backend supports it
 | `MATRIS_TASK` | MatRIS | Prediction task forwarded to `MatRISCalculator` (`e`, `ef`, `efs`, `efsm`) | `efs` |
 | `ALPHANET_CONFIG` | AlphaNet | Path to the AlphaNet JSON config when `MODEL` is a local checkpoint and the config cannot be inferred | Paired config for named models or inferred sibling JSON |
 | `ALPHANET_PRECISION` | AlphaNet | Floating-point precision forwarded to the AlphaNet ASE calculator (`32`, `64`, `float32`, `float64`) | `32` |
+| `HIENET_FILE_TYPE` | HIENet | Model serialization type accepted by `HIENetCalculator` (`checkpoint`, `torchscript`) | `checkpoint` |
 | `NEQUIX_BACKEND` | Nequix | Upstream backend (`jax` or `torch`) | `jax` |
 | `NEQUIX_USE_KERNEL` | Nequix | Enable OpenEquivariance kernels (`0/1`, `true/false`, …); `NEQUIX_KERNEL` is accepted as an alias | `0` |
 | `NEQUIX_USE_COMPILE` | Nequix | Enable `torch.compile` on the torch backend; `NEQUIX_COMPILE` is accepted as an alias | `0` |
@@ -182,6 +183,14 @@ package. Omitting `MODEL` uses the default named model
 `AlphaNet-oma-v1` into `~/.cache/alphanet`. When `MODEL` points to a local
 checkpoint, set `ALPHANET_CONFIG=/path/to/config.json` unless the config can be
 inferred from a sibling JSON file.
+
+HIENet calculations rely on the
+[HIENet implementation in AIRS](https://github.com/divelab/AIRS/tree/main/OpenMat/HIENet).
+Omitting `MODEL` uses the named model `HIENet-0`, which VPMDK downloads into
+`~/.cache/hienet` from the official AIRS repository. Set
+`MODEL=/path/to/HIENet-V3.pth` (or another local `.pt` / `.ckpt` checkpoint) to
+use a local model file directly. If you have a TorchScript export instead, set
+`HIENET_FILE_TYPE=torchscript`.
 
 Nequix calculations rely on the [nequix](https://github.com/atomicarchitects/nequix)
 package. Omitting `MODEL` uses the default named model `nequix-mp-1`. VPMDK
@@ -266,6 +275,7 @@ selected potential or thermostat:
 | Eqnorm potential | `eqnorm` (PyTorch) | Uses the named model `eqnorm-mptrj` or local checkpoints; optionally set `EQNORM_VARIANT` / `EQNORM_COMPILE` |
 | MatRIS potential | `matris` (PyTorch) | Uses named models such as `matris_10m_oam` / `matris_10m_mp` or local `.pth.tar` checkpoints; optionally set `MATRIS_TASK` |
 | AlphaNet potential | `alphanet` (PyTorch) | Uses local `.ckpt` / `.pt` checkpoints or named models such as `AlphaNet-MATPES-r2scan`; optionally set `ALPHANET_CONFIG` / `ALPHANET_PRECISION` |
+| HIENet potential | `hienet` (PyTorch) | Uses the named model `HIENet-0` or local `.pth` / `.pt` / `.ckpt` checkpoints; optionally set `HIENET_FILE_TYPE` |
 | Nequix potential | `nequix` (JAX by default, optional PyTorch backend) | Uses named models such as `nequix-mp-1` or local `.nqx` / `.pt` checkpoints; optionally set `NEQUIX_BACKEND` / `NEQUIX_USE_KERNEL` / `NEQUIX_USE_COMPILE` |
 | ORB potential | `orb-models` (PyTorch) | Downloads pretrained weights unless `MODEL` points to a checkpoint |
 | UPET potential | `upet` (PyTorch) | Set `MODEL` to a local `.ckpt` checkpoint or a named model such as `pet-oam-xl`; optionally set `UPET_VERSION`/`UPET_NON_CONSERVATIVE` |
@@ -284,7 +294,7 @@ version of PyTorch or JAX if you want to use GPUs.
 
 The model file is loaded from the path given by `MODEL` in `BCAR`. Typically the
 file is located within the calculation directory or specified via an absolute
-path. CHGNet, MatGL, Eqnorm, MatRIS, AlphaNet, and Nequix ship with default
+path. CHGNet, MatGL, Eqnorm, MatRIS, AlphaNet, HIENet, and Nequix ship with default
 models; omitting `MODEL` uses those defaults automatically. Eqnorm can resolve
 `eqnorm-mptrj` by downloading the official checkpoint into `~/.cache/eqnorm`
 when `MODEL` is not a filesystem path. MatRIS can also resolve named models such
@@ -292,7 +302,8 @@ as `matris_10m_oam` and `matris_10m_mp` by downloading them into
 `~/.cache/matris` when `MODEL` is not a filesystem path. AlphaNet can resolve
 named models such as `AlphaNet-MATPES-r2scan` and `AlphaNet-oma-v1` by
 downloading a checkpoint plus JSON config into `~/.cache/alphanet` when `MODEL`
-is not a filesystem path. Nequix can resolve named models such as
+is not a filesystem path. HIENet can resolve `HIENet-0` into `~/.cache/hienet`
+when `MODEL` is not a filesystem path. Nequix can resolve named models such as
 `nequix-mp-1` and `nequix-oam-1` into `~/.cache/nequix/models` when `MODEL` is
 not a filesystem path. UPET can also resolve named models such as
 `pet-oam-xl` through the `upet` package when `MODEL` is not a filesystem path.
@@ -303,7 +314,7 @@ TACE can resolve named foundation models such as `TACE-v1-OMat24-M` through the
 
 This script does not directly manage GPU settings. Each potential selects a
 device on its own. CHGNet, MatGL/M3GNet, MACE, Eqnorm, MatRIS, AlphaNet, ORB,
-UPET, TACE, and FAIRChem honour `DEVICE` in `BCAR` (e.g. `DEVICE=cpu` to force
+HIENet, UPET, TACE, and FAIRChem honour `DEVICE` in `BCAR` (e.g. `DEVICE=cpu` to force
 a CPU run). Nequix supports `DEVICE` when `NEQUIX_BACKEND=torch`; on the JAX
 backend, placement follows the active JAX runtime (`JAX_PLATFORMS`,
 `CUDA_VISIBLE_DEVICES`, etc.). With CUDA devices you can choose which GPU to use
