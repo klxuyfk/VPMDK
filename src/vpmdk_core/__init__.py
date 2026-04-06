@@ -2,19 +2,24 @@
 
 The utility consumes VASP-style inputs (POSCAR, INCAR, POTCAR, BCAR) and
 executes single-point, relaxation, or molecular dynamics runs with the selected
-neural-network potential.  Multiple ASE calculators are supported (CHGNet,
-M3GNet/MatGL, MACE, MatterSim, Matlantis) and the expected VASP outputs such as
-CONTCAR and OUTCAR-style energy logs are produced.
+neural-network potential. Multiple ASE calculators are supported (CHGNet,
+M3GNet/MatGL, MACE, MatterSim, Matlantis, Eqnorm, MatRIS, AlphaNet, HIENet,
+Nequix, UPET, TACE) and the expected VASP outputs such as CONTCAR and
+OUTCAR-style energy logs are produced.
 """
 
 import argparse
 import csv
 import importlib
 import importlib.util
+import inspect
+import json
 import os
 import re
+import shutil
 import sys
 import time
+import urllib.request
 import xml.etree.ElementTree as ET
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -85,6 +90,57 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     ORBCalculator = None  # type: ignore
     ORB_PRETRAINED_MODELS = None  # type: ignore
+
+try:
+    from matris.applications.base import MatRISCalculator
+    from matris.model.model import MatRIS as MatRISModel
+except Exception:  # pragma: no cover - optional dependency
+    MatRISCalculator = None  # type: ignore
+    MatRISModel = None  # type: ignore
+
+try:
+    from eqnorm.calculator import EqnormCalculator
+except Exception:  # pragma: no cover - optional dependency
+    EqnormCalculator = None  # type: ignore
+
+try:
+    from alphanet.infer.calc import AlphaNetCalculator
+    from alphanet.config import All_Config as AlphaNetAllConfig
+except Exception:  # pragma: no cover - optional dependency
+    AlphaNetCalculator = None  # type: ignore
+    AlphaNetAllConfig = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency compatibility
+    import torch.serialization
+
+    torch.serialization.add_safe_globals([slice])
+except Exception:
+    pass
+
+try:
+    from hienet.hienet_calculator import HIENetCalculator
+except Exception:  # pragma: no cover - optional dependency
+    HIENetCalculator = None  # type: ignore
+
+try:
+    from nequix.calculator import NequixCalculator
+except Exception:  # pragma: no cover - optional dependency
+    NequixCalculator = None  # type: ignore
+
+try:
+    from upet.calculator import UPETCalculator
+except Exception:  # pragma: no cover - optional dependency
+    UPETCalculator = None  # type: ignore
+
+try:
+    from tace.interface.ase import TACEAseCalc
+except Exception:  # pragma: no cover - optional dependency
+    TACEAseCalc = None  # type: ignore
+
+try:
+    from tace.foundations import tace_foundations
+except Exception:  # pragma: no cover - optional dependency
+    tace_foundations = None  # type: ignore
 
 try:
     from fairchem.core.calculate.ase_calculator import FAIRChemCalculator  # type: ignore
@@ -170,8 +226,102 @@ else:  # pragma: no cover - optional dependency
     NequIPCalculator = None  # type: ignore
 
 DEFAULT_ORB_MODEL = "orb-v3-conservative-20-omat"
+DEFAULT_EQNORM_MODEL = "eqnorm-mptrj"
+DEFAULT_MATRIS_MODEL = "matris_10m_oam"
+DEFAULT_ALPHANET_MODEL = "AlphaNet-MATPES-r2scan"
+DEFAULT_HIENET_MODEL = "HIENet-0"
+DEFAULT_NEQUIX_MODEL = "nequix-mp-1"
 DEFAULT_FAIRCHEM_MODEL = "esen-sm-direct-all-oc25"
 DEFAULT_GRACE_MODEL = "GRACE-2L-MP-r6"
+_EQNORM_VARIANT_ALIASES: Dict[str, List[str]] = {
+    DEFAULT_EQNORM_MODEL: [DEFAULT_EQNORM_MODEL, "eqnorm", "eqnormmptrj"],
+    "eqnorm-omat": ["eqnorm-omat", "eqnormomat", "omat"],
+    "eqnorm-max-mptrj": ["eqnorm-max-mptrj", "eqnormmaxmptrj", "max-mptrj", "maxmptrj"],
+}
+_EQNORM_NAMED_MODELS: Dict[str, Dict[str, Any]] = {
+    DEFAULT_EQNORM_MODEL.casefold(): {
+        "display_name": DEFAULT_EQNORM_MODEL,
+        "aliases": ["eqnorm"],
+        "model_name": "eqnorm",
+        "model_variant": DEFAULT_EQNORM_MODEL,
+        "checkpoint_filename": f"{DEFAULT_EQNORM_MODEL}.pt",
+        "checkpoint_url": "https://ndownloader.figshare.com/files/55429685",
+        "article_api_url": "https://api.figshare.com/v2/articles/29153315",
+    },
+}
+_MATRIS_NAMED_MODEL_DOWNLOADS: Dict[str, tuple[str, str]] = {
+    DEFAULT_MATRIS_MODEL: (
+        "MatRIS_10M_OAM.pth.tar",
+        "https://api.figshare.com/v2/file/download/59142728",
+    ),
+    "matris_10m_mp": (
+        "MatRIS_10M_MP.pth.tar",
+        "https://api.figshare.com/v2/file/download/59143058",
+    ),
+}
+_ALPHANET_NAMED_MODELS: Dict[str, Dict[str, Any]] = {
+    DEFAULT_ALPHANET_MODEL.casefold(): {
+        "display_name": DEFAULT_ALPHANET_MODEL,
+        "aliases": ["matpes"],
+        "checkpoint_filename": "r2scan_1021.ckpt",
+        "checkpoint_url": (
+            "https://raw.githubusercontent.com/zmyybc/AlphaNet/jax_and_zbl/pretrained/"
+            "MATPES/r2scan_1021.ckpt"
+        ),
+        "config_filename": "matpes.json",
+        "config_url": (
+            "https://raw.githubusercontent.com/zmyybc/AlphaNet/jax_and_zbl/pretrained/"
+            "MATPES/matpes.json"
+        ),
+    },
+    "alphanet-aqcat25".casefold(): {
+        "display_name": "AlphaNet-AQCAT25",
+        "aliases": ["aqcat25"],
+        "checkpoint_filename": "aqcat_1021.ckpt",
+        "checkpoint_url": (
+            "https://raw.githubusercontent.com/zmyybc/AlphaNet/jax_and_zbl/pretrained/"
+            "AQCAT25/aqcat_1021.ckpt"
+        ),
+        "config_filename": "aqcat.json",
+        "config_url": (
+            "https://raw.githubusercontent.com/zmyybc/AlphaNet/jax_and_zbl/pretrained/"
+            "AQCAT25/aqcat.json"
+        ),
+    },
+    "alphanet-mptrj-v1".casefold(): {
+        "display_name": "AlphaNet-MPtrj-v1",
+        "aliases": ["mptrj", "mptrj-v1"],
+        "checkpoint_filename": "alphanet_mptrj_v1.ckpt",
+        "checkpoint_url": "https://api.figshare.com/v2/file/download/53851133",
+        "config_filename": "mp.json",
+        "config_url": (
+            "https://raw.githubusercontent.com/zmyybc/AlphaNet/jax_and_zbl/pretrained/"
+            "MPtrj/mp.json"
+        ),
+    },
+    "alphanet-oma-v1".casefold(): {
+        "display_name": "AlphaNet-oma-v1",
+        "aliases": ["oma", "oma-v1"],
+        "checkpoint_filename": "alphanet_oma_v1.ckpt",
+        "checkpoint_url": "https://api.figshare.com/v2/file/download/53851139",
+        "config_filename": "oma.json",
+        "config_url": (
+            "https://raw.githubusercontent.com/zmyybc/AlphaNet/jax_and_zbl/pretrained/"
+            "OMA/oma.json"
+        ),
+    },
+}
+_HIENET_NAMED_MODELS: Dict[str, Dict[str, Any]] = {
+    DEFAULT_HIENET_MODEL.casefold(): {
+        "display_name": DEFAULT_HIENET_MODEL,
+        "aliases": ["hienet", "hienet-0", "hienet-v3", "v3"],
+        "checkpoint_filename": "HIENet-V3.pth",
+        "checkpoint_url": (
+            "https://raw.githubusercontent.com/divelab/AIRS/"
+            "f7b0bde44400e2be8de0488009ee9f46925d6885/OpenMat/HIENet/checkpoints/HIENet-V3.pth"
+        ),
+    },
+}
 
 
 def _build_nequip_family_calculator(
@@ -1760,6 +1910,16 @@ def _coerce_bool_tag(value: str, tag_name: str) -> bool:
     raise ValueError(f"Invalid {tag_name} value: {value!r}")
 
 
+def _looks_like_filesystem_path(value: str, *, suffixes: Iterable[str] = ()) -> bool:
+    """Return whether a string likely denotes a local filesystem path."""
+
+    altsep = os.path.altsep
+    if os.path.sep in value or (altsep is not None and altsep in value):
+        return True
+    lowered = value.lower()
+    return any(lowered.endswith(suffix.lower()) for suffix in suffixes)
+
+
 def _list_matlantis_calc_modes() -> str:
     """Return comma-separated list of available Matlantis calc modes."""
 
@@ -1868,6 +2028,805 @@ def _build_orb_calculator(bcar_tags: Dict[str, str]):
     )
 
     return ORBCalculator(model, device=device)
+
+
+def _load_matris_checkpoint_model(checkpoint_path: str, *, device: str | None):
+    """Load a MatRIS model directly from a checkpoint file."""
+
+    if MatRISModel is None:
+        raise RuntimeError("MatRIS model loader not available. Install matris and dependencies.")
+
+    import torch
+
+    checkpoint_state = torch.load(
+        checkpoint_path,
+        map_location=torch.device("cpu"),
+        weights_only=False,
+    )
+    model = MatRISModel.from_dict(checkpoint_state)
+    return model.to(device or "cpu")
+
+
+def _download_file_to_path(url: str, destination_path: str) -> None:
+    """Download a file to a local path atomically."""
+
+    os.makedirs(os.path.dirname(destination_path), exist_ok=True)
+    partial_path = f"{destination_path}.part"
+    request = urllib.request.Request(url, headers={"User-Agent": "vpmdk"})
+    try:
+        with urllib.request.urlopen(request) as response, open(partial_path, "wb") as handle:
+            shutil.copyfileobj(response, handle)
+        os.replace(partial_path, destination_path)
+    except Exception:
+        if os.path.exists(partial_path):
+            os.remove(partial_path)
+        raise
+
+
+def _ensure_matris_named_model_checkpoint(model_name: str) -> str | None:
+    """Download a known MatRIS named model into the standard cache when needed."""
+
+    download_info = _MATRIS_NAMED_MODEL_DOWNLOADS.get(model_name.lower())
+    if download_info is None:
+        return None
+
+    checkpoint_filename, url = download_info
+    cache_dir = os.path.expanduser("~/.cache/matris")
+    os.makedirs(cache_dir, exist_ok=True)
+    checkpoint_path = os.path.join(cache_dir, checkpoint_filename)
+    if not os.path.exists(checkpoint_path) or os.path.getsize(checkpoint_path) == 0:
+        print(f"MatRIS checkpoint not found, downloading to {checkpoint_path} ...")
+        _download_file_to_path(url, checkpoint_path)
+    return checkpoint_path
+
+
+def _instantiate_matris_calculator(*, model, task: str, device: str | None):
+    """Create a MatRIS ASE calculator from a preloaded model instance."""
+
+    if MatRISCalculator is None:
+        raise RuntimeError("MatRIS calculator not available. Install matris and dependencies.")
+
+    calculator = MatRISCalculator.__new__(MatRISCalculator)
+    Calculator.__init__(calculator)
+    calculator.task = task
+    calculator.device = device or "cpu"
+    calculator.model = model
+    calculator.stress_unit = units.GPa
+    calculator.key = {"atoms_per_graph", "ref_energy", *task}
+    return calculator
+
+
+def _build_matris_calculator(bcar_tags: Dict[str, str]):
+    """Create the MatRIS ASE calculator configured from BCAR tags."""
+
+    if MatRISCalculator is None:
+        raise RuntimeError("MatRIS calculator not available. Install matris and dependencies.")
+
+    device = _resolve_device(bcar_tags.get("DEVICE"))
+    task = (bcar_tags.get("MATRIS_TASK") or "efs").lower()
+    model_value = bcar_tags.get("MODEL") or DEFAULT_MATRIS_MODEL
+
+    if os.path.exists(model_value):
+        model = _load_matris_checkpoint_model(model_value, device=device)
+        return _instantiate_matris_calculator(model=model, task=task, device=device)
+
+    if _looks_like_filesystem_path(
+        model_value,
+        suffixes=(".ckpt", ".pt", ".pth", ".pth.tar", ".tar"),
+    ):
+        raise FileNotFoundError(f"MatRIS model not found: {model_value}")
+
+    checkpoint_path = _ensure_matris_named_model_checkpoint(model_value)
+    if checkpoint_path is not None:
+        model = _load_matris_checkpoint_model(checkpoint_path, device=device)
+        return _instantiate_matris_calculator(model=model, task=task, device=device)
+
+    return MatRISCalculator(model=model_value, task=task, device=device)
+
+
+def _normalize_eqnorm_key(value: str) -> str:
+    """Return a separator-insensitive Eqnorm lookup key."""
+
+    return re.sub(r"[^a-z0-9]+", "", str(value).strip().casefold())
+
+
+def _match_eqnorm_variant(value: str | None) -> str | None:
+    """Return a canonical Eqnorm variant when a value matches one."""
+
+    if not value:
+        return None
+
+    normalized = _normalize_eqnorm_key(value)
+    for variant, aliases in _EQNORM_VARIANT_ALIASES.items():
+        if normalized in {_normalize_eqnorm_key(alias) for alias in aliases}:
+            return variant
+    return None
+
+
+def _normalize_eqnorm_variant(value: str) -> str:
+    """Validate and normalize an Eqnorm model variant."""
+
+    variant = _match_eqnorm_variant(value)
+    if variant is not None:
+        return variant
+
+    supported = ", ".join(sorted(_EQNORM_VARIANT_ALIASES))
+    raise ValueError(f"Invalid EQNORM_VARIANT value: {value!r}. Available: {supported}")
+
+
+def _resolve_eqnorm_named_model_spec(model_name: str) -> Dict[str, Any] | None:
+    """Return Eqnorm named-model metadata for a model key or alias."""
+
+    normalized = _normalize_eqnorm_key(model_name)
+    for spec in _EQNORM_NAMED_MODELS.values():
+        aliases = [
+            spec["display_name"],
+            spec.get("model_variant", ""),
+            spec.get("model_name", ""),
+            *spec.get("aliases", []),
+        ]
+        if normalized in {_normalize_eqnorm_key(alias) for alias in aliases if alias}:
+            return spec
+    return None
+
+
+def _resolve_eqnorm_download_url(spec: Dict[str, Any]) -> str:
+    """Return the best available download URL for an Eqnorm named model."""
+
+    article_api_url = spec.get("article_api_url")
+    expected_filename = spec["checkpoint_filename"]
+    if article_api_url:
+        request = urllib.request.Request(article_api_url, headers={"User-Agent": "vpmdk"})
+        try:
+            with urllib.request.urlopen(request) as response:
+                payload = json.load(response)
+            for file_info in payload.get("files", []):
+                if file_info.get("name") == expected_filename and file_info.get("download_url"):
+                    return str(file_info["download_url"])
+        except Exception:
+            pass
+
+    return spec["checkpoint_url"]
+
+
+def _ensure_eqnorm_named_model_checkpoint(model_name: str) -> tuple[Dict[str, Any], str]:
+    """Download a known Eqnorm named model into the standard cache when needed."""
+
+    spec = _resolve_eqnorm_named_model_spec(model_name)
+    if spec is None:
+        supported = ", ".join(
+            sorted(named_spec["display_name"] for named_spec in _EQNORM_NAMED_MODELS.values())
+        )
+        raise ValueError(f"Unsupported Eqnorm model '{model_name}'. Available: {supported}")
+
+    cache_dir = os.path.expanduser("~/.cache/eqnorm")
+    os.makedirs(cache_dir, exist_ok=True)
+    checkpoint_path = os.path.join(cache_dir, spec["checkpoint_filename"])
+    if not os.path.exists(checkpoint_path) or os.path.getsize(checkpoint_path) == 0:
+        print(f"Eqnorm checkpoint not found, downloading to {checkpoint_path} ...")
+        _download_file_to_path(_resolve_eqnorm_download_url(spec), checkpoint_path)
+    return spec, checkpoint_path
+
+
+def _resolve_eqnorm_variant(
+    model_value: str,
+    bcar_tags: Dict[str, str],
+    *,
+    named_variant: str | None = None,
+) -> str:
+    """Resolve the Eqnorm architecture variant from BCAR tags or a checkpoint path."""
+
+    explicit_variant = bcar_tags.get("EQNORM_VARIANT")
+    if explicit_variant:
+        resolved = _normalize_eqnorm_variant(explicit_variant)
+        if named_variant is not None and resolved != named_variant:
+            raise ValueError(
+                f"EQNORM_VARIANT={explicit_variant!r} does not match named model variant "
+                f"{named_variant!r}."
+            )
+        return resolved
+
+    if named_variant is not None:
+        return named_variant
+
+    candidate = os.path.basename(model_value)
+    while candidate:
+        inferred = _match_eqnorm_variant(candidate)
+        if inferred is not None:
+            return inferred
+        stem, ext = os.path.splitext(candidate)
+        if not ext:
+            break
+        candidate = stem
+
+    supported = ", ".join(sorted(_EQNORM_VARIANT_ALIASES))
+    raise ValueError(
+        "Eqnorm local checkpoints require EQNORM_VARIANT set to one of "
+        f"{supported} when the variant cannot be inferred from the filename."
+    )
+
+
+def _stage_eqnorm_checkpoint(checkpoint_path: str, variant: str) -> str:
+    """Expose a checkpoint at the cache path expected by the upstream calculator."""
+
+    cache_dir = os.path.expanduser("~/.cache/eqnorm")
+    os.makedirs(cache_dir, exist_ok=True)
+    staged_path = os.path.join(cache_dir, f"{variant}.pt")
+    source_path = os.path.abspath(checkpoint_path)
+
+    if os.path.abspath(staged_path) == source_path:
+        return staged_path
+
+    try:
+        if os.path.exists(staged_path) and os.path.samefile(staged_path, source_path):
+            return staged_path
+    except FileNotFoundError:
+        pass
+
+    if os.path.lexists(staged_path):
+        os.remove(staged_path)
+
+    try:
+        os.symlink(source_path, staged_path)
+    except Exception:
+        shutil.copy2(source_path, staged_path)
+
+    return staged_path
+
+
+@contextmanager
+def _temporarily_stage_eqnorm_local_checkpoint(checkpoint_path: str, variant: str):
+    """Temporarily expose a local Eqnorm checkpoint without poisoning the named cache."""
+
+    cache_dir = os.path.expanduser("~/.cache/eqnorm")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    staged_path = os.path.join(cache_dir, f"{variant}.pt")
+    source_path = os.path.abspath(checkpoint_path)
+    if os.path.abspath(staged_path) == source_path:
+        yield staged_path
+        return
+
+    try:
+        if os.path.exists(staged_path) and os.path.samefile(staged_path, source_path):
+            yield staged_path
+            return
+    except FileNotFoundError:
+        pass
+
+    backup_path = None
+    if os.path.lexists(staged_path):
+        backup_path = os.path.join(
+            cache_dir,
+            f".{variant}.vpmdk-backup-{time.time_ns()}.pt",
+        )
+        os.replace(staged_path, backup_path)
+
+    staged_path = _stage_eqnorm_checkpoint(source_path, variant)
+    try:
+        yield staged_path
+    finally:
+        if os.path.lexists(staged_path):
+            os.remove(staged_path)
+        if backup_path is not None:
+            os.replace(backup_path, staged_path)
+
+
+def _ensure_eqnorm_torch_safe_globals() -> None:
+    """Allowlist globals needed by e3nn constants on PyTorch 2.6+."""
+
+    try:
+        import torch.serialization
+
+        torch.serialization.add_safe_globals([slice])
+    except Exception:
+        pass
+
+
+def _build_eqnorm_calculator(bcar_tags: Dict[str, str]):
+    """Create the Eqnorm ASE calculator configured from BCAR tags."""
+
+    if EqnormCalculator is None:
+        raise RuntimeError("Eqnorm calculator not available. Install eqnorm and dependencies.")
+
+    model_value = bcar_tags.get("MODEL") or DEFAULT_EQNORM_MODEL
+    device = _resolve_device(bcar_tags.get("DEVICE")) or "cpu"
+    compile_flag = False
+    compile_value = bcar_tags.get("EQNORM_COMPILE")
+    if compile_value is not None:
+        compile_flag = _coerce_bool_tag(compile_value, "EQNORM_COMPILE")
+
+    _ensure_eqnorm_torch_safe_globals()
+
+    if os.path.exists(model_value):
+        variant = _resolve_eqnorm_variant(model_value, bcar_tags)
+        with _temporarily_stage_eqnorm_local_checkpoint(model_value, variant):
+            return EqnormCalculator(
+                model_name="eqnorm",
+                model_variant=variant,
+                device=device,
+                compile=compile_flag,
+            )
+    if _looks_like_filesystem_path(model_value, suffixes=(".pt", ".pth", ".ckpt")):
+        raise FileNotFoundError(f"Eqnorm model not found: {model_value}")
+
+    spec, _ = _ensure_eqnorm_named_model_checkpoint(model_value)
+    variant = _resolve_eqnorm_variant(
+        model_value,
+        bcar_tags,
+        named_variant=spec["model_variant"],
+    )
+    return EqnormCalculator(
+        model_name="eqnorm",
+        model_variant=variant,
+        device=device,
+        compile=compile_flag,
+    )
+
+
+def _normalize_hienet_file_type(value: str | None) -> str:
+    """Return the normalized HIENet file type."""
+
+    if value is None:
+        return "checkpoint"
+    normalized = str(value).strip().lower()
+    if normalized in {"checkpoint", "torchscript"}:
+        return normalized
+    raise ValueError(f"Invalid HIENET_FILE_TYPE value: {value!r}")
+
+
+def _resolve_hienet_named_model_spec(model_name: str) -> Dict[str, Any] | None:
+    """Return HIENet named-model metadata for a model key or alias."""
+
+    normalized = model_name.strip().casefold()
+    direct = _HIENET_NAMED_MODELS.get(normalized)
+    if direct is not None:
+        return direct
+
+    for spec in _HIENET_NAMED_MODELS.values():
+        aliases = spec.get("aliases", [])
+        if any(normalized == alias.casefold() for alias in aliases):
+            return spec
+    return None
+
+
+def _ensure_hienet_named_model_checkpoint(model_name: str) -> tuple[Dict[str, Any], str]:
+    """Download a known HIENet named model into the standard cache when needed."""
+
+    spec = _resolve_hienet_named_model_spec(model_name)
+    if spec is None:
+        supported = ", ".join(
+            sorted(named_spec["display_name"] for named_spec in _HIENET_NAMED_MODELS.values())
+        )
+        raise ValueError(f"Unsupported HIENet model '{model_name}'. Available: {supported}")
+
+    cache_dir = os.path.expanduser("~/.cache/hienet")
+    os.makedirs(cache_dir, exist_ok=True)
+    checkpoint_path = os.path.join(cache_dir, spec["checkpoint_filename"])
+    if not os.path.exists(checkpoint_path) or os.path.getsize(checkpoint_path) == 0:
+        print(f"HIENet checkpoint not found, downloading to {checkpoint_path} ...")
+        _download_file_to_path(spec["checkpoint_url"], checkpoint_path)
+    return spec, checkpoint_path
+
+
+def _build_hienet_calculator(bcar_tags: Dict[str, str]):
+    """Create the HIENet ASE calculator configured from BCAR tags."""
+
+    if HIENetCalculator is None:
+        raise RuntimeError("HIENet calculator not available. Install hienet and dependencies.")
+
+    model_value = bcar_tags.get("MODEL") or DEFAULT_HIENET_MODEL
+    device = _resolve_device(bcar_tags.get("DEVICE")) or "cpu"
+    file_type = _normalize_hienet_file_type(bcar_tags.get("HIENET_FILE_TYPE"))
+
+    model_path = model_value
+    if os.path.exists(model_value):
+        pass
+    elif _looks_like_filesystem_path(
+        model_value,
+        suffixes=(".pth", ".pt", ".ckpt", ".jit", ".ts"),
+    ):
+        raise FileNotFoundError(f"HIENet model not found: {model_value}")
+    else:
+        if file_type != "checkpoint":
+            raise ValueError(
+                "HIENET_FILE_TYPE=torchscript requires MODEL pointing to a local TorchScript file."
+            )
+        _, model_path = _ensure_hienet_named_model_checkpoint(model_value)
+
+    return HIENetCalculator(model=model_path, file_type=file_type, device=device)
+
+
+def _normalize_nequix_backend(value: str | None) -> str:
+    """Return the normalized Nequix backend name."""
+
+    if value is None:
+        return "jax"
+    normalized = str(value).strip().lower()
+    if normalized in {"jax", "torch"}:
+        return normalized
+    raise ValueError(f"Invalid NEQUIX_BACKEND value: {value!r}")
+
+
+def _list_nequix_named_models() -> List[str]:
+    """Return the named Nequix models exposed by the upstream calculator."""
+
+    urls = getattr(NequixCalculator, "URLS", None)
+    if isinstance(urls, dict):
+        return sorted(str(name) for name in urls)
+    return []
+
+
+def _resolve_nequix_model_name(model_name: str) -> str:
+    """Resolve a named Nequix model case-insensitively when metadata is available."""
+
+    normalized = model_name.strip().casefold()
+    supported = _list_nequix_named_models()
+    for candidate in supported:
+        if normalized == candidate.casefold():
+            return candidate
+    if supported:
+        supported_text = ", ".join(supported)
+        raise ValueError(f"Unsupported Nequix model '{model_name}'. Available: {supported_text}")
+    return model_name
+
+
+def _build_nequix_calculator(bcar_tags: Dict[str, str], *, structure=None):
+    """Create the Nequix ASE calculator configured from BCAR tags."""
+
+    if NequixCalculator is None:
+        raise RuntimeError("Nequix calculator not available. Install nequix and dependencies.")
+
+    model_value = bcar_tags.get("MODEL") or DEFAULT_NEQUIX_MODEL
+    backend = _normalize_nequix_backend(bcar_tags.get("NEQUIX_BACKEND"))
+
+    use_kernel_tag = bcar_tags.get("NEQUIX_USE_KERNEL")
+    if use_kernel_tag is None:
+        use_kernel_tag = bcar_tags.get("NEQUIX_KERNEL")
+    use_kernel = (
+        _coerce_bool_tag(use_kernel_tag, "NEQUIX_USE_KERNEL")
+        if use_kernel_tag is not None
+        else False
+    )
+
+    use_compile_tag = bcar_tags.get("NEQUIX_USE_COMPILE")
+    if use_compile_tag is None:
+        use_compile_tag = bcar_tags.get("NEQUIX_COMPILE")
+    use_compile = (
+        _coerce_bool_tag(use_compile_tag, "NEQUIX_USE_COMPILE")
+        if use_compile_tag is not None
+        else False
+    )
+
+    capacity_multiplier = 1.1
+    capacity_tag = bcar_tags.get("NEQUIX_CAPACITY_MULTIPLIER")
+    if capacity_tag is not None:
+        try:
+            capacity_multiplier = float(capacity_tag)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"Invalid NEQUIX_CAPACITY_MULTIPLIER value: {capacity_tag!r}"
+            ) from None
+
+    kwargs: Dict[str, Any] = {
+        "backend": backend,
+        "use_kernel": use_kernel,
+        "use_compile": use_compile,
+        "capacity_multiplier": capacity_multiplier,
+    }
+
+    if os.path.exists(model_value):
+        kwargs["model_path"] = model_value
+        kwargs["model_name"] = os.path.splitext(os.path.basename(model_value))[0]
+    elif _looks_like_filesystem_path(model_value, suffixes=(".nqx", ".pt", ".pth", ".ckpt")):
+        raise FileNotFoundError(f"Nequix model not found: {model_value}")
+    else:
+        kwargs["model_name"] = _resolve_nequix_model_name(model_value)
+
+    requested_device = bcar_tags.get("DEVICE")
+    if backend == "torch":
+        try:
+            import torch
+
+            nequix_module = importlib.import_module("nequix.calculator")
+            nequix_data_module = importlib.import_module("nequix.data")
+
+            torch_device = torch.device(
+                _resolve_device(requested_device)
+                or ("cuda" if torch.cuda.is_available() else "cpu")
+            )
+            model, config = nequix_module.from_pretrained(
+                model_name=kwargs.get("model_name"),
+                model_path=kwargs.get("model_path"),
+                backend="torch",
+                use_kernel=use_kernel,
+            )
+
+            calculator = NequixCalculator.__new__(NequixCalculator)
+            Calculator.__init__(calculator)
+            calculator.model = model.to(torch_device)
+            calculator.config = config
+            calculator.device = torch_device
+            calculator.model.eval()
+            calculator.compile_state = False if use_compile and torch_device.type == "cuda" else True
+            calculator.atom_indices = nequix_data_module.atomic_numbers_to_indices(
+                config["atomic_numbers"]
+            )
+            calculator.cutoff = config["cutoff"]
+            calculator._capacity = None
+            calculator._capacity_multiplier = capacity_multiplier
+            calculator.backend = "torch"
+            return calculator
+        except Exception as exc:
+            raise RuntimeError(
+                f"Unable to initialize Nequix torch backend for DEVICE={requested_device!r}."
+            ) from exc
+
+    return NequixCalculator(**kwargs)
+
+
+def _normalize_alphanet_precision(value: str | None) -> str:
+    """Return AlphaNet precision in the calculator's expected form."""
+
+    if value is None:
+        return "32"
+    normalized = str(value).strip().lower()
+    if normalized in {"32", "float32", "fp32"}:
+        return "32"
+    if normalized in {"64", "float64", "fp64"}:
+        return "64"
+    raise ValueError(f"Invalid ALPHANET_PRECISION value: {value!r}")
+
+
+def _resolve_alphanet_named_model_spec(model_name: str) -> Dict[str, Any] | None:
+    """Return AlphaNet named-model metadata for a model key or alias."""
+
+    normalized = model_name.strip().casefold()
+    direct = _ALPHANET_NAMED_MODELS.get(normalized)
+    if direct is not None:
+        return direct
+
+    for spec in _ALPHANET_NAMED_MODELS.values():
+        aliases = [spec["display_name"], *spec.get("aliases", [])]
+        if normalized in {alias.casefold() for alias in aliases}:
+            return spec
+    return None
+
+
+def _ensure_alphanet_named_model_files(model_name: str) -> tuple[str, str]:
+    """Download a known AlphaNet named model and config when needed."""
+
+    spec = _resolve_alphanet_named_model_spec(model_name)
+    if spec is None:
+        supported = ", ".join(
+            sorted(named_spec["display_name"] for named_spec in _ALPHANET_NAMED_MODELS.values())
+        )
+        raise ValueError(f"Unsupported AlphaNet model '{model_name}'. Available: {supported}")
+
+    cache_dir = os.path.join(
+        os.path.expanduser("~/.cache/alphanet"),
+        spec["display_name"].replace("/", "_"),
+    )
+    os.makedirs(cache_dir, exist_ok=True)
+
+    checkpoint_path = os.path.join(cache_dir, spec["checkpoint_filename"])
+    config_path = os.path.join(cache_dir, spec["config_filename"])
+
+    if not os.path.exists(config_path) or os.path.getsize(config_path) == 0:
+        print(f"AlphaNet config not found, downloading to {config_path} ...")
+        _download_file_to_path(spec["config_url"], config_path)
+
+    if not os.path.exists(checkpoint_path) or os.path.getsize(checkpoint_path) == 0:
+        print(f"AlphaNet checkpoint not found, downloading to {checkpoint_path} ...")
+        _download_file_to_path(spec["checkpoint_url"], checkpoint_path)
+
+    return checkpoint_path, config_path
+
+
+def _resolve_alphanet_config_path(
+    model_path: str,
+    bcar_tags: Dict[str, str],
+    *,
+    default_config_path: str | None = None,
+) -> str:
+    """Resolve AlphaNet config JSON from BCAR or neighboring files."""
+
+    config_path = bcar_tags.get("ALPHANET_CONFIG") or default_config_path
+    if config_path:
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"AlphaNet config not found: {config_path}")
+        return config_path
+
+    parent_dir = os.path.dirname(model_path) or "."
+    json_candidates = sorted(
+        os.path.join(parent_dir, name)
+        for name in os.listdir(parent_dir)
+        if name.lower().endswith(".json")
+    )
+    if len(json_candidates) == 1:
+        return json_candidates[0]
+
+    raise ValueError(
+        "AlphaNet requires ALPHANET_CONFIG pointing to a JSON config when it cannot "
+        "be inferred from the checkpoint directory."
+    )
+
+
+def _load_alphanet_config(
+    config_path: str,
+    *,
+    precision: str,
+    use_pbc: bool,
+    compute_stress: bool,
+):
+    """Load and normalize AlphaNet config for ASE inference."""
+
+    if AlphaNetAllConfig is None:
+        raise RuntimeError("AlphaNet config loader not available. Install AlphaNet and dependencies.")
+
+    config = AlphaNetAllConfig.from_json(config_path)
+    model_config = getattr(config, "model", config)
+    model_config.compute_forces = True
+    model_config.compute_stress = compute_stress
+    model_config.use_pbc = use_pbc
+    model_config.dtype = precision
+    return config
+
+
+def _build_alphanet_calculator(bcar_tags: Dict[str, str], *, structure=None):
+    """Create the AlphaNet ASE calculator configured from BCAR tags."""
+
+    if AlphaNetCalculator is None:
+        raise RuntimeError("AlphaNet calculator not available. Install AlphaNet and dependencies.")
+
+    model_value = bcar_tags.get("MODEL") or DEFAULT_ALPHANET_MODEL
+    precision = _normalize_alphanet_precision(
+        bcar_tags.get("ALPHANET_PRECISION") or bcar_tags.get("ALPHANET_DTYPE")
+    )
+    device = _resolve_device(bcar_tags.get("DEVICE")) or "cpu"
+
+    config_path = None
+    checkpoint_path = model_value
+
+    if os.path.exists(model_value):
+        config_path = _resolve_alphanet_config_path(model_value, bcar_tags)
+    elif _looks_like_filesystem_path(model_value, suffixes=(".ckpt", ".pt", ".pth")):
+        raise FileNotFoundError(f"AlphaNet model not found: {model_value}")
+    else:
+        checkpoint_path, config_path = _ensure_alphanet_named_model_files(model_value)
+        config_path = _resolve_alphanet_config_path(
+            checkpoint_path,
+            bcar_tags,
+            default_config_path=config_path,
+        )
+
+    use_pbc = True if structure is None else getattr(structure, "lattice", None) is not None
+    config = _load_alphanet_config(
+        config_path,
+        precision=precision,
+        use_pbc=use_pbc,
+        compute_stress=use_pbc,
+    )
+
+    return AlphaNetCalculator(
+        ckpt_path=checkpoint_path,
+        config=config,
+        device=device,
+        precision=precision,
+    )
+
+
+def _build_upet_calculator(bcar_tags: Dict[str, str]):
+    """Create the UPET ASE calculator configured from BCAR tags."""
+
+    if UPETCalculator is None:
+        raise RuntimeError("UPET calculator not available. Install upet and dependencies.")
+
+    model_value = bcar_tags.get("MODEL")
+    if not model_value:
+        raise ValueError(
+            "UPET requires MODEL set to a checkpoint path or a named model such as pet-oam-xl."
+        )
+
+    device = _resolve_device(bcar_tags.get("DEVICE"))
+    kwargs: Dict[str, Any] = {"device": device}
+
+    version = bcar_tags.get("UPET_VERSION")
+    if version:
+        kwargs["version"] = version
+
+    non_conservative_value = bcar_tags.get("UPET_NON_CONSERVATIVE")
+    if non_conservative_value is not None:
+        kwargs["non_conservative"] = _coerce_bool_tag(
+            non_conservative_value, "UPET_NON_CONSERVATIVE"
+        )
+
+    if os.path.exists(model_value):
+        return UPETCalculator(checkpoint_path=model_value, **kwargs)
+
+    if _looks_like_filesystem_path(model_value, suffixes=(".ckpt", ".pt", ".pth")):
+        raise FileNotFoundError(f"UPET model not found: {model_value}")
+
+    return UPETCalculator(model=model_value, **kwargs)
+
+
+def _callable_supports_parameter(callable_obj: object, parameter_name: str) -> bool:
+    """Return whether a callable exposes a named parameter."""
+
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError):
+        return False
+    return parameter_name in signature.parameters
+
+
+def _build_tace_calculator(bcar_tags: Dict[str, str]):
+    """Create the TACE ASE calculator configured from BCAR tags."""
+
+    if TACEAseCalc is None:
+        raise RuntimeError("TACE calculator not available. Install TACE and dependencies.")
+
+    model_value = bcar_tags.get("MODEL")
+    if not model_value:
+        raise ValueError(
+            "TACE requires MODEL set to a checkpoint path or a named model such as TACE-v1-OMat24-M."
+        )
+
+    model_path = model_value
+    if not os.path.exists(model_value):
+        if _looks_like_filesystem_path(model_value, suffixes=(".ckpt", ".pt", ".pth")):
+            raise FileNotFoundError(f"TACE model not found: {model_value}")
+
+        if tace_foundations is None:
+            raise RuntimeError(
+                "TACE named-model registry is not available. Install TACE with foundation-model "
+                "support or provide MODEL as a local checkpoint path."
+            )
+        try:
+            model_path = os.fspath(tace_foundations[model_value])
+        except KeyError as exc:
+            supported = (
+                ", ".join(tace_foundations.list_models())
+                if hasattr(tace_foundations, "list_models")
+                else ""
+            )
+            if supported:
+                raise ValueError(
+                    f"Unsupported TACE model '{model_value}'. Available: {supported}"
+                ) from exc
+            raise ValueError(f"Unsupported TACE model '{model_value}'.") from exc
+
+    kwargs: Dict[str, Any] = {
+        "model": model_path,
+        "device": _resolve_device(bcar_tags.get("DEVICE")),
+    }
+
+    dtype = bcar_tags.get("TACE_DTYPE")
+    if dtype:
+        kwargs["dtype"] = dtype
+
+    spin_on_value = bcar_tags.get("TACE_SPIN_ON")
+    if spin_on_value is not None:
+        kwargs["spin_on"] = _coerce_bool_tag(spin_on_value, "TACE_SPIN_ON")
+
+    neighborlist_backend = bcar_tags.get("TACE_NEIGHBORLIST_BACKEND")
+    if neighborlist_backend:
+        kwargs["neighborlist_backend"] = neighborlist_backend
+
+    level_tag = None
+    if "TACE_FIDELITY_IDX" in bcar_tags:
+        level_tag = "TACE_FIDELITY_IDX"
+    elif "TACE_LEVEL" in bcar_tags:
+        level_tag = "TACE_LEVEL"
+
+    if level_tag is not None:
+        level_value = _coerce_int_tag(bcar_tags[level_tag], level_tag)
+        if _callable_supports_parameter(TACEAseCalc, "fidelity_idx"):
+            kwargs["fidelity_idx"] = level_value
+        elif _callable_supports_parameter(TACEAseCalc, "level"):
+            kwargs["level"] = level_value
+
+    return TACEAseCalc(**kwargs)
 
 
 _FAIRCHEM_V1_IMPORT_PATHS = (
@@ -2247,10 +3206,17 @@ _CALCULATOR_BUILDERS: Dict[str, str] = {
     "MATGL": "_build_m3gnet_calculator",
     "M3GNET": "_build_m3gnet_calculator",
     "MACE": "_build_mace_calculator",
+    "EQNORM": "_build_eqnorm_calculator",
+    "MATRIS": "_build_matris_calculator",
+    "ALPHANET": "_build_alphanet_calculator",
+    "HIENET": "_build_hienet_calculator",
+    "NEQUIX": "_build_nequix_calculator",
     "ALLEGRO": "_build_allegro_calculator",
     "NEQUIP": "_build_nequip_calculator",
     "MATLANTIS": "_build_matlantis_calculator",
     "ORB": "_build_orb_calculator",
+    "UPET": "_build_upet_calculator",
+    "TACE": "_build_tace_calculator",
     "FAIRCHEM": "_build_fairchem_calculator",
     "FAIRCHEM_V2": "_build_fairchem_calculator",
     "ESEN": "_build_fairchem_calculator",
@@ -2317,7 +3283,20 @@ def get_calculator(bcar_tags: Dict[str, str], *, structure=None):
     if builder is None:
         raise RuntimeError(f"Calculator builder not available: {builder_entry}")
 
-    if builder_name == "_build_deepmd_calculator":
+    try:
+        builder_signature = inspect.signature(builder)
+    except (TypeError, ValueError):
+        builder_signature = None
+
+    accepts_structure = builder_name == "_build_deepmd_calculator"
+    if builder_signature is not None:
+        accepts_structure = accepts_structure or "structure" in builder_signature.parameters
+        accepts_structure = accepts_structure or any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in builder_signature.parameters.values()
+        )
+
+    if accepts_structure:
         return builder(bcar_tags, structure=structure)
     return builder(bcar_tags)
 
