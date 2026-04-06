@@ -131,6 +131,25 @@ def test_get_calculator_accepts_eqnorm_named_model(monkeypatch: pytest.MonkeyPat
     assert captured["calc_variant"] == vpmdk.DEFAULT_EQNORM_MODEL
 
 
+def test_get_calculator_accepts_nequix_named_model(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    class FakeNequixCalculator:
+        URLS = {vpmdk.DEFAULT_NEQUIX_MODEL: "https://example.invalid/nequix-mp-1.nqx"}
+
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(vpmdk, "NequixCalculator", FakeNequixCalculator)
+
+    calculator = vpmdk.get_calculator({"MLP": "NEQUIX", "MODEL": "NEQUIX-MP-1"})
+
+    assert isinstance(calculator, FakeNequixCalculator)
+    assert captured["model_name"] == vpmdk.DEFAULT_NEQUIX_MODEL
+    assert captured["backend"] == "jax"
+    assert captured["use_kernel"] is False
+
+
 def test_get_calculator_accepts_alphanet_named_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

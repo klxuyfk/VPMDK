@@ -13,6 +13,7 @@ Optional backends (skipped unless env vars are set):
 - Eqnorm: VPMDK_EQNORM_MODEL, optional VPMDK_EQNORM_VARIANT
 - MatRIS: VPMDK_MATRIS_MODEL, optional VPMDK_MATRIS_TASK
 - AlphaNet: VPMDK_ALPHANET_MODEL, optional VPMDK_ALPHANET_CONFIG / VPMDK_ALPHANET_PRECISION
+- Nequix: VPMDK_NEQUIX_MODEL, optional VPMDK_NEQUIX_BACKEND / VPMDK_NEQUIX_USE_KERNEL
 - GRACE: VPMDK_GRACE_MODEL
 - DeePMD: VPMDK_DEEPMD_MODEL, optional VPMDK_DEEPMD_HEAD
 - NequIP: VPMDK_NEQUIP_MODEL
@@ -187,6 +188,32 @@ def test_md_alphanet_optional(tmp_path: Path, data_dir: Path) -> None:
         bcar_lines.append(f"ALPHANET_CONFIG={config_path}")
     if precision:
         bcar_lines.append(f"ALPHANET_PRECISION={precision}")
+    bcar = "\n".join(bcar_lines) + "\n"
+    _write_inputs(tmp_path, data_dir, bcar)
+    _run_vpmdk(tmp_path)
+    _assert_outputs(tmp_path)
+
+
+@pytest.mark.integration
+def test_md_nequix_optional(tmp_path: Path, data_dir: Path) -> None:
+    if not _module_available("nequix"):
+        pytest.skip("nequix is not installed.")
+    _require_cuda()
+    model_value = os.environ.get("VPMDK_NEQUIX_MODEL")
+    if not model_value:
+        pytest.skip("Set VPMDK_NEQUIX_MODEL to run Nequix integration.")
+    looks_like_path = os.path.sep in model_value or model_value.endswith(
+        (".nqx", ".pt", ".pth", ".ckpt")
+    )
+    if looks_like_path and not Path(model_value).exists():
+        pytest.fail(f"Nequix model not found: {model_value}")
+    backend = os.environ.get("VPMDK_NEQUIX_BACKEND", "")
+    use_kernel = os.environ.get("VPMDK_NEQUIX_USE_KERNEL", "")
+    bcar_lines = ["MLP=NEQUIX", f"MODEL={model_value}", "DEVICE=cuda"]
+    if backend:
+        bcar_lines.append(f"NEQUIX_BACKEND={backend}")
+    if use_kernel:
+        bcar_lines.append(f"NEQUIX_USE_KERNEL={use_kernel}")
     bcar = "\n".join(bcar_lines) + "\n"
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)
