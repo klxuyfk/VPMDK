@@ -9,6 +9,9 @@ Required:
 - MACE (set VPMDK_MACE_MODEL)
 
 Optional backends (skipped unless env vars are set):
+- SevenNet: VPMDK_SEVENNET_MODEL, optional VPMDK_SEVENNET_MODAL / VPMDK_SEVENNET_FILE_TYPE
+- FlashTP: VPMDK_FLASHTP_MODEL, optional VPMDK_FLASHTP_MODAL
+- EquFlash: VPMDK_EQUFLASH_MODEL
 - MatGL: VPMDK_MATGL_MODEL
 - Eqnorm: VPMDK_EQNORM_MODEL, optional VPMDK_EQNORM_VARIANT
 - MatRIS: VPMDK_MATRIS_MODEL, optional VPMDK_MATRIS_TASK
@@ -45,7 +48,14 @@ MDALGO = 0
 
 
 def _module_available(name: str) -> bool:
-    return importlib.util.find_spec(name) is not None
+    try:
+        return importlib.util.find_spec(name) is not None
+    except ModuleNotFoundError:
+        return False
+
+
+def _any_module_available(*names: str) -> bool:
+    return any(_module_available(name) for name in names)
 
 
 def _require_cuda() -> None:
@@ -90,6 +100,73 @@ def test_md_chgnet_required(tmp_path: Path, data_dir: Path) -> None:
         pytest.skip("chgnet is not installed.")
     _require_cuda()
     bcar = "MLP=CHGNET\nDEVICE=cuda\n"
+    _write_inputs(tmp_path, data_dir, bcar)
+    _run_vpmdk(tmp_path)
+    _assert_outputs(tmp_path)
+
+
+@pytest.mark.integration
+def test_md_sevennet_optional(tmp_path: Path, data_dir: Path) -> None:
+    if not _any_module_available("sevenn", "sevennet"):
+        pytest.skip("SevenNet is not installed.")
+    _require_cuda()
+    model_value = os.environ.get("VPMDK_SEVENNET_MODEL")
+    if not model_value:
+        pytest.skip("Set VPMDK_SEVENNET_MODEL to run SevenNet integration.")
+    looks_like_path = os.path.sep in model_value or model_value.endswith(
+        (".ckpt", ".pth", ".pt", ".jit", ".ts")
+    )
+    if looks_like_path and not Path(model_value).exists():
+        pytest.fail(f"SevenNet model not found: {model_value}")
+    modal = os.environ.get("VPMDK_SEVENNET_MODAL", "")
+    file_type = os.environ.get("VPMDK_SEVENNET_FILE_TYPE", "")
+    bcar_lines = ["MLP=SEVENNET", f"MODEL={model_value}", "DEVICE=cuda"]
+    if modal:
+        bcar_lines.append(f"SEVENNET_MODAL={modal}")
+    if file_type:
+        bcar_lines.append(f"SEVENNET_FILE_TYPE={file_type}")
+    bcar = "\n".join(bcar_lines) + "\n"
+    _write_inputs(tmp_path, data_dir, bcar)
+    _run_vpmdk(tmp_path)
+    _assert_outputs(tmp_path)
+
+
+@pytest.mark.integration
+def test_md_flashtp_optional(tmp_path: Path, data_dir: Path) -> None:
+    if not _any_module_available("sevenn", "sevennet"):
+        pytest.skip("SevenNet is not installed.")
+    if not _module_available("flashTP_e3nn"):
+        pytest.skip("flashTP_e3nn is not installed.")
+    _require_cuda()
+    model_value = os.environ.get("VPMDK_FLASHTP_MODEL")
+    if not model_value:
+        pytest.skip("Set VPMDK_FLASHTP_MODEL to run FlashTP integration.")
+    looks_like_path = os.path.sep in model_value or model_value.endswith(
+        (".ckpt", ".pth", ".pt")
+    )
+    if looks_like_path and not Path(model_value).exists():
+        pytest.fail(f"FlashTP/SevenNet model not found: {model_value}")
+    modal = os.environ.get("VPMDK_FLASHTP_MODAL", "")
+    bcar_lines = ["MLP=FLASHTP", f"MODEL={model_value}", "DEVICE=cuda"]
+    if modal:
+        bcar_lines.append(f"SEVENNET_MODAL={modal}")
+    bcar = "\n".join(bcar_lines) + "\n"
+    _write_inputs(tmp_path, data_dir, bcar)
+    _run_vpmdk(tmp_path)
+    _assert_outputs(tmp_path)
+
+
+@pytest.mark.integration
+def test_md_equflash_optional(tmp_path: Path, data_dir: Path) -> None:
+    if not _module_available("GGNN.common.calculator"):
+        pytest.skip("EquFlash calculator package is not installed.")
+    _require_cuda()
+    model_value = os.environ.get("VPMDK_EQUFLASH_MODEL")
+    if not model_value:
+        pytest.skip("Set VPMDK_EQUFLASH_MODEL to run EquFlash integration.")
+    if not Path(model_value).exists():
+        pytest.fail(f"EquFlash model not found: {model_value}")
+    bcar = f"MLP=EQUFLASH\nMODEL={model_value}\nDEVICE=cuda\n"
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)
     _assert_outputs(tmp_path)
