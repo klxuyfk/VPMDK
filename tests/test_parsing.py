@@ -509,6 +509,44 @@ def test_build_chgnet_calculator_forwards_graph_converter_algorithm(
     assert captured["device"] == "cuda:0"
 
 
+def test_load_chgnet_model_falls_back_to_legacy_load_signature(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, object] = {}
+    legacy_model = object()
+
+    class DummyCHGNetModel:
+        @classmethod
+        def load(cls, model_name="0.3.0"):
+            captured["model_name"] = model_name
+            return legacy_model
+
+    def fake_override(model, *, algorithm: str, backend_name: str):
+        captured["override"] = {
+            "model": model,
+            "algorithm": algorithm,
+            "backend_name": backend_name,
+        }
+        return "overridden-model"
+
+    monkeypatch.setattr(vpmdk, "CHGNetModel", DummyCHGNetModel)
+    monkeypatch.setattr(vpmdk, "_override_model_graph_converter_algorithm", fake_override)
+
+    model = vpmdk._load_chgnet_model(
+        model_path=None,
+        device="cuda",
+        graph_converter_algorithm="fast",
+    )
+
+    assert model == "overridden-model"
+    assert captured["model_name"] == "0.3.0"
+    assert captured["override"] == {
+        "model": legacy_model,
+        "algorithm": "fast",
+        "backend_name": "CHGNet",
+    }
+
+
 def test_build_m3gnet_calculator_respects_device(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
