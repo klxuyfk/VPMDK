@@ -572,9 +572,14 @@ def _load_chgnet_model(
             )
         return CHGNetModel.from_file(model_path)
 
+    load_kwargs: Dict[str, Any] = {}
+    if model_path:
+        load_kwargs["model_name"] = model_path
+
     model = _call_with_optional_kwargs(
         CHGNetModel.load,
         optional_kwargs={"verbose": False, "use_device": device},
+        **load_kwargs,
     )
     if graph_converter_algorithm is not None:
         model = _override_model_graph_converter_algorithm(
