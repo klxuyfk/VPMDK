@@ -560,6 +560,8 @@ def test_load_chgnet_model_reapplies_algorithm_when_from_file_ignores_it(
         def from_file(cls, path, **kwargs):
             captured["path"] = path
             captured["kwargs"] = kwargs
+            if "graph_converter_algorithm" in kwargs:
+                raise TypeError("got multiple values for keyword argument 'graph_converter_algorithm'")
             return legacy_model
 
     def fake_override(model, *, algorithm: str, backend_name: str):
@@ -581,7 +583,7 @@ def test_load_chgnet_model_reapplies_algorithm_when_from_file_ignores_it(
 
     assert model == "overridden-model"
     assert captured["path"] == str(model_path)
-    assert captured["kwargs"] == {"graph_converter_algorithm": "fast"}
+    assert captured["kwargs"] == {}
     assert captured["override"] == {
         "model": legacy_model,
         "algorithm": "fast",

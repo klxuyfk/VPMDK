@@ -564,11 +564,7 @@ def _load_chgnet_model(
 
     if model_path and os.path.exists(model_path):
         if graph_converter_algorithm is not None:
-            model = _call_with_optional_kwargs(
-                CHGNetModel.from_file,
-                model_path,
-                optional_kwargs={"graph_converter_algorithm": graph_converter_algorithm},
-            )
+            model = CHGNetModel.from_file(model_path)
             return _override_model_graph_converter_algorithm(
                 model,
                 algorithm=graph_converter_algorithm,
