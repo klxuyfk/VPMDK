@@ -515,6 +515,35 @@ def _override_model_graph_converter_algorithm(model, *, algorithm: str, backend_
     return model
 
 
+def _call_with_optional_kwargs(func, /, *args, optional_kwargs: Dict[str, Any] | None = None, **kwargs):
+    """Call ``func`` while dropping unsupported optional keyword arguments."""
+
+    filtered_optional_kwargs = {
+        key: value for key, value in (optional_kwargs or {}).items() if value is not None
+    }
+    if not filtered_optional_kwargs:
+        return func(*args, **kwargs)
+
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        try:
+            return func(*args, **kwargs, **filtered_optional_kwargs)
+        except TypeError:
+            return func(*args, **kwargs)
+
+    if any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    ):
+        return func(*args, **kwargs, **filtered_optional_kwargs)
+
+    supported_optional_kwargs = {
+        key: value for key, value in filtered_optional_kwargs.items() if key in signature.parameters
+    }
+    return func(*args, **kwargs, **supported_optional_kwargs)
+
+
 def _load_chgnet_model(
     *,
     model_path: str | None,
@@ -542,10 +571,10 @@ def _load_chgnet_model(
                 )
         return CHGNetModel.from_file(model_path)
 
-    try:
-        model = CHGNetModel.load(verbose=False, use_device=device)
-    except TypeError:
-        model = CHGNetModel.load(verbose=False)
+    model = _call_with_optional_kwargs(
+        CHGNetModel.load,
+        optional_kwargs={"verbose": False, "use_device": device},
+    )
     if graph_converter_algorithm is not None:
         model = _override_model_graph_converter_algorithm(
             model,
@@ -2316,10 +2345,22 @@ def _build_matris_calculator(bcar_tags: Dict[str, str]):
             )
         return _instantiate_matris_calculator(model=model, task=task, device=device)
 
-    kwargs: Dict[str, Any] = {}
+    calculator = _call_with_optional_kwargs(
+        MatRISCalculator,
+        model=model_value,
+        task=task,
+        device=device,
+        optional_kwargs={"graph_converter_algorithm": graph_converter_algorithm},
+    )
     if graph_converter_algorithm is not None:
-        kwargs["graph_converter_algorithm"] = graph_converter_algorithm
-    return MatRISCalculator(model=model_value, task=task, device=device, **kwargs)
+        model = getattr(calculator, "model", None)
+        if model is not None:
+            calculator.model = _override_model_graph_converter_algorithm(
+                model,
+                algorithm=graph_converter_algorithm,
+                backend_name="MatRIS",
+            )
+    return calculator
 
 
 def _normalize_eqnorm_key(value: str) -> str:

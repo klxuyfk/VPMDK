@@ -756,6 +756,47 @@ def test_matris_unknown_named_model_falls_back_to_upstream_calculator(
     }
 
 
+def test_matris_unknown_named_model_falls_back_when_constructor_lacks_algorithm(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    seen: dict[str, object] = {}
+
+    class DummyCalculator:
+        def __init__(self, *, model, task="efs", device=None):
+            seen["init"] = {"model": model, "task": task, "device": device}
+            self.model = "legacy-model"
+
+    def fake_override(model, *, algorithm: str, backend_name: str):
+        seen["override"] = {
+            "model": model,
+            "algorithm": algorithm,
+            "backend_name": backend_name,
+        }
+        return "updated-model"
+
+    monkeypatch.setattr(vpmdk, "MatRISCalculator", DummyCalculator)
+    monkeypatch.setattr(vpmdk, "_ensure_matris_named_model_checkpoint", lambda model: None)
+    monkeypatch.setattr(vpmdk, "_override_model_graph_converter_algorithm", fake_override)
+
+    calc = vpmdk._build_matris_calculator(
+        {
+            "MODEL": "custom-model",
+            "MATRIS_TASK": "efsm",
+            "DEVICE": "cpu",
+            "MATRIS_GRAPH_CONVERTER_ALGORITHM": "fast",
+        }
+    )
+
+    assert isinstance(calc, DummyCalculator)
+    assert seen["init"] == {"model": "custom-model", "task": "efsm", "device": "cpu"}
+    assert seen["override"] == {
+        "model": "legacy-model",
+        "algorithm": "fast",
+        "backend_name": "MatRIS",
+    }
+    assert calc.model == "updated-model"
+
+
 def test_matris_missing_checkpoint_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(vpmdk, "MatRISCalculator", object)
 
