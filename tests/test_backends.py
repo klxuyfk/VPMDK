@@ -576,6 +576,35 @@ def test_override_model_graph_converter_algorithm_rebuilds_converter():
     assert model.graph_converter.on_isolated_atoms == "error"
 
 
+def test_override_model_graph_converter_algorithm_rejects_silent_fallback():
+    class DummyConverter:
+        def __init__(
+            self,
+            *,
+            atom_graph_cutoff: float,
+            bond_graph_cutoff: float,
+            algorithm: str = "legacy",
+        ):
+            self.atom_graph_cutoff = atom_graph_cutoff
+            self.bond_graph_cutoff = bond_graph_cutoff
+            self.algorithm = "legacy"
+            self.on_isolated_atoms = "warn"
+
+        def set_isolated_atom_response(self, value: str):
+            self.on_isolated_atoms = value
+
+    model = SimpleNamespace(
+        graph_converter=DummyConverter(atom_graph_cutoff=6, bond_graph_cutoff=3)
+    )
+
+    with pytest.raises(RuntimeError, match="requested 'fast' but initialized 'legacy'"):
+        vpmdk._override_model_graph_converter_algorithm(
+            model,
+            algorithm="fast",
+            backend_name="CHGNet",
+        )
+
+
 def test_override_model_graph_converter_algorithm_supports_make_graph_switch(
     monkeypatch: pytest.MonkeyPatch,
 ):

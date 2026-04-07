@@ -511,6 +511,13 @@ def _override_model_graph_converter_algorithm(model, *, algorithm: str, backend_
     ):
         new_converter.set_isolated_atom_response(isolated_atoms_response)
 
+    actual_algorithm = getattr(new_converter, "algorithm", None)
+    if actual_algorithm != algorithm:
+        raise RuntimeError(
+            f"{backend_name} graph converter requested {algorithm!r} but initialized "
+            f"{actual_algorithm!r}."
+        )
+
     model.graph_converter = new_converter
     return model
 
@@ -557,18 +564,16 @@ def _load_chgnet_model(
 
     if model_path and os.path.exists(model_path):
         if graph_converter_algorithm is not None:
-            try:
-                return CHGNetModel.from_file(
-                    model_path,
-                    graph_converter_algorithm=graph_converter_algorithm,
-                )
-            except TypeError:
-                model = CHGNetModel.from_file(model_path)
-                return _override_model_graph_converter_algorithm(
-                    model,
-                    algorithm=graph_converter_algorithm,
-                    backend_name="CHGNet",
-                )
+            model = _call_with_optional_kwargs(
+                CHGNetModel.from_file,
+                model_path,
+                optional_kwargs={"graph_converter_algorithm": graph_converter_algorithm},
+            )
+            return _override_model_graph_converter_algorithm(
+                model,
+                algorithm=graph_converter_algorithm,
+                backend_name="CHGNet",
+            )
         return CHGNetModel.from_file(model_path)
 
     model = _call_with_optional_kwargs(
