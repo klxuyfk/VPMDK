@@ -529,6 +529,160 @@ def test_matris_uses_checkpoint_path_and_bcar_tags(
     }
 
 
+def test_override_model_graph_converter_algorithm_rebuilds_converter():
+    calls: list[dict[str, object]] = []
+
+    class DummyConverter:
+        def __init__(
+            self,
+            *,
+            atom_graph_cutoff: float,
+            bond_graph_cutoff: float,
+            algorithm: str = "legacy",
+        ):
+            calls.append(
+                {
+                    "atom_graph_cutoff": atom_graph_cutoff,
+                    "bond_graph_cutoff": bond_graph_cutoff,
+                    "algorithm": algorithm,
+                }
+            )
+            self.atom_graph_cutoff = atom_graph_cutoff
+            self.bond_graph_cutoff = bond_graph_cutoff
+            self.algorithm = algorithm
+            self.on_isolated_atoms = "warn"
+
+        def set_isolated_atom_response(self, value: str):
+            self.on_isolated_atoms = value
+
+    model = SimpleNamespace(
+        graph_converter=DummyConverter(atom_graph_cutoff=6, bond_graph_cutoff=3)
+    )
+    model.graph_converter.set_isolated_atom_response("error")
+
+    updated_model = vpmdk._override_model_graph_converter_algorithm(
+        model,
+        algorithm="fast",
+        backend_name="MatRIS",
+    )
+
+    assert updated_model is model
+    assert calls[-1] == {
+        "atom_graph_cutoff": 6,
+        "bond_graph_cutoff": 3,
+        "algorithm": "fast",
+    }
+    assert model.graph_converter.algorithm == "fast"
+    assert model.graph_converter.on_isolated_atoms == "error"
+
+
+def test_override_model_graph_converter_algorithm_supports_make_graph_switch(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake_module = SimpleNamespace(make_graph=object(), __package__=None)
+
+    class DummyConverter:
+        def __init__(
+            self,
+            *,
+            atom_graph_cutoff: float,
+            line_graph_cutoff: float,
+            verbose: bool = False,
+        ):
+            self.atom_graph_cutoff = atom_graph_cutoff
+            self.line_graph_cutoff = line_graph_cutoff
+            self.verbose = verbose
+            self.algorithm = "fast" if fake_module.make_graph is not None else "legacy"
+            self.on_isolated_atoms = "warn"
+
+        def set_isolated_atom_response(self, value: str):
+            self.on_isolated_atoms = value
+
+    monkeypatch.setattr(vpmdk.inspect, "getmodule", lambda cls: fake_module)
+
+    model = SimpleNamespace(
+        graph_converter=DummyConverter(atom_graph_cutoff=6, line_graph_cutoff=4)
+    )
+    model.graph_converter.set_isolated_atom_response("error")
+
+    vpmdk._override_model_graph_converter_algorithm(
+        model,
+        algorithm="legacy",
+        backend_name="MatRIS",
+    )
+    assert model.graph_converter.algorithm == "legacy"
+    assert model.graph_converter.on_isolated_atoms == "error"
+
+    vpmdk._override_model_graph_converter_algorithm(
+        model,
+        algorithm="fast",
+        backend_name="MatRIS",
+    )
+    assert model.graph_converter.algorithm == "fast"
+    assert model.graph_converter.on_isolated_atoms == "error"
+
+
+def test_matris_checkpoint_path_applies_graph_converter_algorithm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "MatRIS_10M_OAM.pth.tar"
+    model_path.write_text("dummy")
+
+    class DummyConverter:
+        def __init__(
+            self,
+            *,
+            atom_graph_cutoff: float,
+            bond_graph_cutoff: float,
+            algorithm: str = "legacy",
+        ):
+            self.atom_graph_cutoff = atom_graph_cutoff
+            self.bond_graph_cutoff = bond_graph_cutoff
+            self.algorithm = algorithm
+            self.on_isolated_atoms = "warn"
+
+        def set_isolated_atom_response(self, value: str):
+            self.on_isolated_atoms = value
+
+    model = SimpleNamespace(
+        graph_converter=DummyConverter(atom_graph_cutoff=6, bond_graph_cutoff=3)
+    )
+    seen: dict[str, object] = {}
+
+    def fake_load(path: str, *, device: str | None):
+        seen["load_path"] = path
+        seen["load_device"] = device
+        return model
+
+    def fake_instantiate(*, model, task: str, device: str | None):
+        seen["algorithm"] = model.graph_converter.algorithm
+        seen["task"] = task
+        seen["device"] = device
+        return "matris"
+
+    monkeypatch.setattr(vpmdk, "MatRISCalculator", object)
+    monkeypatch.setattr(vpmdk, "_load_matris_checkpoint_model", fake_load)
+    monkeypatch.setattr(vpmdk, "_instantiate_matris_calculator", fake_instantiate)
+
+    calc = vpmdk._build_matris_calculator(
+        {
+            "MODEL": str(model_path),
+            "DEVICE": "cuda:0",
+            "MATRIS_TASK": "efsm",
+            "MATRIS_GRAPH_CONVERTER_ALGORITHM": "fast",
+        }
+    )
+
+    assert calc == "matris"
+    assert seen == {
+        "load_path": str(model_path),
+        "load_device": "cuda:0",
+        "algorithm": "fast",
+        "task": "efsm",
+        "device": "cuda:0",
+    }
+
+
 def test_matris_downloads_named_model_and_defaults(monkeypatch: pytest.MonkeyPatch):
     seen: dict[str, object] = {}
 
@@ -570,19 +724,36 @@ def test_matris_unknown_named_model_falls_back_to_upstream_calculator(
 ):
     seen: dict[str, object] = {}
 
-    def fake_calc(*, model, task="efs", device=None):
-        seen.update({"model": model, "task": task, "device": device})
+    def fake_calc(*, model, task="efs", device=None, graph_converter_algorithm=None):
+        seen.update(
+            {
+                "model": model,
+                "task": task,
+                "device": device,
+                "graph_converter_algorithm": graph_converter_algorithm,
+            }
+        )
         return "matris"
 
     monkeypatch.setattr(vpmdk, "MatRISCalculator", fake_calc)
     monkeypatch.setattr(vpmdk, "_ensure_matris_named_model_checkpoint", lambda model: None)
 
     calc = vpmdk._build_matris_calculator(
-        {"MODEL": "custom-model", "MATRIS_TASK": "efsm", "DEVICE": "cpu"}
+        {
+            "MODEL": "custom-model",
+            "MATRIS_TASK": "efsm",
+            "DEVICE": "cpu",
+            "MATRIS_GRAPH_CONVERTER_ALGORITHM": "legacy",
+        }
     )
 
     assert calc == "matris"
-    assert seen == {"model": "custom-model", "task": "efsm", "device": "cpu"}
+    assert seen == {
+        "model": "custom-model",
+        "task": "efsm",
+        "device": "cpu",
+        "graph_converter_algorithm": "legacy",
+    }
 
 
 def test_matris_missing_checkpoint_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

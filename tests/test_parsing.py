@@ -450,8 +450,10 @@ def test_build_chgnet_calculator_respects_device(
     captured: dict[str, object] = {}
 
     class DummyCHGNet:
-        def __init__(self, model_name=None, use_device=None, **_):
+        @classmethod
+        def from_file(cls, model_name=None, use_device=None, **_):
             captured.update({"model": model_name, "device": use_device})
+            return cls()
 
     model_path = tmp_path / "chgnet.pt"
     model_path.write_text("dummy")
@@ -464,6 +466,47 @@ def test_build_chgnet_calculator_respects_device(
 
     assert isinstance(calculator, DummyCHGNet)
     assert captured == {"model": str(model_path), "device": "cpu"}
+
+
+def test_build_chgnet_calculator_forwards_graph_converter_algorithm(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, object] = {}
+
+    class DummyModel:
+        pass
+
+    class DummyCHGNet:
+        def __init__(self, model=None, use_device=None, **_):
+            captured.update({"model": model, "device": use_device})
+
+    def fake_load(*, model_path: str | None, device: str | None, graph_converter_algorithm: str):
+        captured.update(
+            {
+                "load_model_path": model_path,
+                "load_device": device,
+                "graph_converter_algorithm": graph_converter_algorithm,
+            }
+        )
+        return DummyModel()
+
+    monkeypatch.setattr(vpmdk, "CHGNetCalculator", DummyCHGNet)
+    monkeypatch.setattr(vpmdk, "_load_chgnet_model", fake_load)
+
+    calculator = vpmdk._build_chgnet_calculator(
+        {
+            "MLP": "CHGNET",
+            "DEVICE": "cuda:0",
+            "CHGNET_GRAPH_CONVERTER_ALGORITHM": "fast",
+        }
+    )
+
+    assert isinstance(calculator, DummyCHGNet)
+    assert captured["load_model_path"] is None
+    assert captured["load_device"] == "cuda:0"
+    assert captured["graph_converter_algorithm"] == "fast"
+    assert isinstance(captured["model"], DummyModel)
+    assert captured["device"] == "cuda:0"
 
 
 def test_build_m3gnet_calculator_respects_device(

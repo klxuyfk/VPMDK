@@ -132,6 +132,7 @@ DEVICE=cuda           # Optional device override when the backend supports it
 | `EQNORM_VARIANT` | Eqnorm | Eqnorm architecture variant used with a local checkpoint (`eqnorm-mptrj`, `eqnorm-omat`, `eqnorm-max-mptrj`) | Inferred from `MODEL` filename or `eqnorm-mptrj` for named models |
 | `EQNORM_COMPILE` | Eqnorm | Whether to `torch.compile` the Eqnorm model (`0/1`, `true/false`, …) | `0` |
 | `MATRIS_TASK` | MatRIS | Prediction task forwarded to `MatRISCalculator` (`e`, `ef`, `efs`, `efsm`) | `efs` |
+| `GRAPH_CONVERTER` / `GRAPH_CONVERTER_ALGORITHM` | CHGNet, MatRIS | Select the graph converter implementation (`fast`, `legacy`); backend-specific overrides `CHGNET_GRAPH_CONVERTER[_ALGORITHM]` and `MATRIS_GRAPH_CONVERTER[_ALGORITHM]` take precedence | Upstream default |
 | `ALPHANET_CONFIG` | AlphaNet | Path to the AlphaNet JSON config when `MODEL` is a local checkpoint and the config cannot be inferred | Paired config for named models or inferred sibling JSON |
 | `ALPHANET_PRECISION` | AlphaNet | Floating-point precision forwarded to the AlphaNet ASE calculator (`32`, `64`, `float32`, `float64`) | `32` |
 | `HIENET_FILE_TYPE` | HIENet | Model serialization type accepted by `HIENetCalculator` (`checkpoint`, `torchscript`) | `checkpoint` |
