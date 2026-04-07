@@ -89,6 +89,36 @@ def test_get_calculator_accepts_upet_named_model(monkeypatch: pytest.MonkeyPatch
     assert captured["model"] == "pet-oam-xl"
 
 
+def test_get_calculator_accepts_flashtp_backend(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    def fake_builder(tags):
+        captured["tags"] = tags
+        return "flashtp"
+
+    monkeypatch.setattr(vpmdk, "_build_flashtp_calculator", fake_builder)
+
+    calculator = vpmdk.get_calculator({"MLP": "FlashTP", "MODEL": "7net-0"})
+
+    assert calculator == "flashtp"
+    assert captured["tags"] == {"MLP": "FlashTP", "MODEL": "7net-0"}
+
+
+def test_get_calculator_accepts_equflash_backend(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    def fake_builder(tags):
+        captured["tags"] = tags
+        return "equflash"
+
+    monkeypatch.setattr(vpmdk, "_build_equflash_calculator", fake_builder)
+
+    calculator = vpmdk.get_calculator({"MLP": "EquFlash", "MODEL": "/tmp/equflash.ckpt"})
+
+    assert calculator == "equflash"
+    assert captured["tags"] == {"MLP": "EquFlash", "MODEL": "/tmp/equflash.ckpt"}
+
+
 def test_get_calculator_accepts_eqnorm_named_model(monkeypatch: pytest.MonkeyPatch):
     captured: dict[str, object] = {}
 
