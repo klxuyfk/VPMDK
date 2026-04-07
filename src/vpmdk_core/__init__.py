@@ -31,8 +31,10 @@ from pymatgen.io.vasp import Incar, Poscar, Potcar
 from pymatgen.io.ase import AseAtomsAdaptor
 
 try:
+    from chgnet.model import CHGNet as CHGNetModel
     from chgnet.model import CHGNetCalculator
 except Exception:  # pragma: no cover - optional dependency
+    CHGNetModel = None  # type: ignore
     CHGNetCalculator = None  # type: ignore
 
 LegacyM3GNet = None
@@ -228,6 +230,7 @@ else:  # pragma: no cover - optional dependency
 DEFAULT_ORB_MODEL = "orb-v3-conservative-20-omat"
 DEFAULT_EQNORM_MODEL = "eqnorm-mptrj"
 DEFAULT_MATRIS_MODEL = "matris_10m_oam"
+_GRAPH_CONVERTER_ALGORITHMS = frozenset({"fast", "legacy"})
 DEFAULT_ALPHANET_MODEL = "AlphaNet-MATPES-r2scan"
 DEFAULT_HIENET_MODEL = "HIENet-0"
 DEFAULT_NEQUIX_MODEL = "nequix-mp-1"
@@ -394,6 +397,164 @@ def _build_allegro_calculator(bcar_tags: Dict[str, str], *, structure=None):
     )
 
 
+def _resolve_graph_converter_algorithm(
+    bcar_tags: Dict[str, str], *, backend_tag: str
+) -> str | None:
+    """Return an optional fast/legacy graph-converter selection from BCAR."""
+
+    for tag_name in (
+        f"{backend_tag}_GRAPH_CONVERTER_ALGORITHM",
+        f"{backend_tag}_GRAPH_CONVERTER",
+        "GRAPH_CONVERTER_ALGORITHM",
+        "GRAPH_CONVERTER",
+    ):
+        raw_value = bcar_tags.get(tag_name)
+        if raw_value is None:
+            continue
+        algorithm = str(raw_value).strip().lower()
+        if algorithm in _GRAPH_CONVERTER_ALGORITHMS:
+            return algorithm
+        supported = ", ".join(sorted(_GRAPH_CONVERTER_ALGORITHMS))
+        raise ValueError(
+            f"Invalid {tag_name} value: {raw_value!r}. Expected one of: {supported}."
+        )
+    return None
+
+
+def _override_model_graph_converter_algorithm(model, *, algorithm: str, backend_name: str):
+    """Replace a model's graph converter with the requested algorithm."""
+
+    if algorithm not in _GRAPH_CONVERTER_ALGORITHMS:
+        supported = ", ".join(sorted(_GRAPH_CONVERTER_ALGORITHMS))
+        raise ValueError(
+            f"Unsupported {backend_name} graph converter algorithm {algorithm!r}. "
+            f"Expected one of: {supported}."
+        )
+
+    graph_converter = getattr(model, "graph_converter", None)
+    if graph_converter is None:
+        raise RuntimeError(
+            f"{backend_name} model does not expose graph_converter; cannot set "
+            f"{algorithm!r}."
+        )
+
+    if getattr(graph_converter, "algorithm", None) == algorithm:
+        return model
+
+    try:
+        signature = inspect.signature(type(graph_converter))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"{backend_name} graph converter cannot be reconfigured dynamically."
+        ) from exc
+
+    kwargs: Dict[str, Any] = {}
+    for name, parameter in signature.parameters.items():
+        if name == "self":
+            continue
+        if name == "algorithm":
+            kwargs[name] = algorithm
+            continue
+        if hasattr(graph_converter, name):
+            kwargs[name] = getattr(graph_converter, name)
+            continue
+        if parameter.default is inspect.Signature.empty:
+            raise RuntimeError(
+                f"{backend_name} graph converter requires {name!r}; cannot set "
+                f"{algorithm!r} from the loaded model."
+            )
+
+    converter_cls = type(graph_converter)
+    module = inspect.getmodule(converter_cls)
+    make_graph = getattr(module, "make_graph", None) if module is not None else None
+
+    try:
+        if "algorithm" in signature.parameters:
+            kwargs["algorithm"] = algorithm
+            new_converter = converter_cls(**kwargs)
+        elif module is not None and hasattr(module, "make_graph"):
+            original_make_graph = make_graph
+            if algorithm == "legacy":
+                module.make_graph = None
+            else:
+                if make_graph is None:
+                    package = getattr(module, "__package__", None)
+                    if package:
+                        try:
+                            cygraph_module = importlib.import_module(f"{package}.cygraph")
+                            module.make_graph = getattr(cygraph_module, "make_graph", None)
+                        except Exception:
+                            module.make_graph = None
+                if module.make_graph is None:
+                    raise RuntimeError(
+                        f"{backend_name} fast graph converter is not available in this "
+                        f"environment."
+                    )
+            try:
+                new_converter = converter_cls(**kwargs)
+            finally:
+                module.make_graph = original_make_graph
+        else:
+            raise RuntimeError(
+                f"{backend_name} graph converter does not accept an algorithm selector."
+            )
+    except Exception as exc:
+        if isinstance(exc, RuntimeError):
+            raise
+        raise RuntimeError(
+            f"Failed to build {backend_name} graph converter with algorithm={algorithm!r}."
+        ) from exc
+
+    isolated_atoms_response = getattr(graph_converter, "on_isolated_atoms", None)
+    if isolated_atoms_response is not None and hasattr(
+        new_converter, "set_isolated_atom_response"
+    ):
+        new_converter.set_isolated_atom_response(isolated_atoms_response)
+
+    model.graph_converter = new_converter
+    return model
+
+
+def _load_chgnet_model(
+    *,
+    model_path: str | None,
+    device: str | None,
+    graph_converter_algorithm: str | None,
+):
+    """Load a CHGNet model with optional graph-converter override."""
+
+    if CHGNetModel is None:
+        raise RuntimeError("CHGNet model loader not available. Install chgnet.")
+
+    if model_path and os.path.exists(model_path):
+        if graph_converter_algorithm is not None:
+            try:
+                return CHGNetModel.from_file(
+                    model_path,
+                    graph_converter_algorithm=graph_converter_algorithm,
+                )
+            except TypeError:
+                model = CHGNetModel.from_file(model_path)
+                return _override_model_graph_converter_algorithm(
+                    model,
+                    algorithm=graph_converter_algorithm,
+                    backend_name="CHGNet",
+                )
+        return CHGNetModel.from_file(model_path)
+
+    try:
+        model = CHGNetModel.load(verbose=False, use_device=device)
+    except TypeError:
+        model = CHGNetModel.load(verbose=False)
+    if graph_converter_algorithm is not None:
+        model = _override_model_graph_converter_algorithm(
+            model,
+            algorithm=graph_converter_algorithm,
+            backend_name="CHGNet",
+        )
+    return model
+
+
 def _build_chgnet_calculator(bcar_tags: Dict[str, str]):
     """Create a CHGNet calculator with optional DEVICE hint."""
 
@@ -402,9 +563,27 @@ def _build_chgnet_calculator(bcar_tags: Dict[str, str]):
 
     model_path = bcar_tags.get("MODEL")
     device = _resolve_device(bcar_tags.get("DEVICE"))
+    graph_converter_algorithm = _resolve_graph_converter_algorithm(
+        bcar_tags,
+        backend_tag="CHGNET",
+    )
     kwargs = {"use_device": device} if device is not None else {}
 
+    if graph_converter_algorithm is not None:
+        model = _load_chgnet_model(
+            model_path=model_path,
+            device=device,
+            graph_converter_algorithm=graph_converter_algorithm,
+        )
+        return CHGNetCalculator(model=model, **kwargs)
+
     if model_path and os.path.exists(model_path):
+        from_file = getattr(CHGNetCalculator, "from_file", None)
+        if callable(from_file):
+            try:
+                return from_file(model_path, **kwargs)
+            except TypeError:
+                return from_file(model_path)
         try:
             return CHGNetCalculator(model_path, **kwargs)
         except TypeError:
@@ -2105,9 +2284,19 @@ def _build_matris_calculator(bcar_tags: Dict[str, str]):
     device = _resolve_device(bcar_tags.get("DEVICE"))
     task = (bcar_tags.get("MATRIS_TASK") or "efs").lower()
     model_value = bcar_tags.get("MODEL") or DEFAULT_MATRIS_MODEL
+    graph_converter_algorithm = _resolve_graph_converter_algorithm(
+        bcar_tags,
+        backend_tag="MATRIS",
+    )
 
     if os.path.exists(model_value):
         model = _load_matris_checkpoint_model(model_value, device=device)
+        if graph_converter_algorithm is not None:
+            model = _override_model_graph_converter_algorithm(
+                model,
+                algorithm=graph_converter_algorithm,
+                backend_name="MatRIS",
+            )
         return _instantiate_matris_calculator(model=model, task=task, device=device)
 
     if _looks_like_filesystem_path(
@@ -2119,9 +2308,18 @@ def _build_matris_calculator(bcar_tags: Dict[str, str]):
     checkpoint_path = _ensure_matris_named_model_checkpoint(model_value)
     if checkpoint_path is not None:
         model = _load_matris_checkpoint_model(checkpoint_path, device=device)
+        if graph_converter_algorithm is not None:
+            model = _override_model_graph_converter_algorithm(
+                model,
+                algorithm=graph_converter_algorithm,
+                backend_name="MatRIS",
+            )
         return _instantiate_matris_calculator(model=model, task=task, device=device)
 
-    return MatRISCalculator(model=model_value, task=task, device=device)
+    kwargs: Dict[str, Any] = {}
+    if graph_converter_algorithm is not None:
+        kwargs["graph_converter_algorithm"] = graph_converter_algorithm
+    return MatRISCalculator(model=model_value, task=task, device=device, **kwargs)
 
 
 def _normalize_eqnorm_key(value: str) -> str:
