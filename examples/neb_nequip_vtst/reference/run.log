@@ -1,0 +1,16 @@
+/home/nei/miniconda3/envs/ase_env/lib/python3.13/site-packages/e3nn/o3/_wigner.py:10: UserWarning: Environment variable TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD detected, since the`weights_only` argument was not explicitly passed to `torch.load`, forcing weights_only=False.
+  _Jd, _W3j_flat, _W3j_indices = torch.load(os.path.join(os.path.dirname(__file__), 'constants.pt'))
+<NEQUIP_SOURCE>/nequip/ase/nequip_calculator.py:59: UserWarning: Defaulting to using model type names as chemical symbols. If the model type names correspond exactly to chemical species (e.g., 'H', 'C', 'O'), this is correct. Otherwise, this is wrong and will cause errors. To silence this warning, explicitly set `chemical_species_to_atom_type_map=True` for identity mapping, or provide the correct mapping as a dict.
+  warnings.warn(
+cuequivariance or cuequivariance_torch is not available. Cuequivariance acceleration will be disabled.
+Running NEB image 00 (1/3)
+   1 F= -.10824314E+02 E0= -.10824314E+02  d E =+.00000000E+00
+Running NEB image 01 (2/3)
+   1 F= -.10522577E+02 E0= -.10522577E+02  d E =+.00000000E+00
+   2 F= -.10692040E+02 E0= -.10692040E+02  d E =-.16946311E+00
+   3 F= -.10811832E+02 E0= -.10811832E+02  d E =-.11979199E+00
+Running NEB image 02 (3/3)
+   1 F= -.95939513E+01 E0= -.95939513E+01  d E =+.00000000E+00
+   2 F= -.10373901E+02 E0= -.10373901E+02  d E =-.77994960E+00
+   3 F= -.10612653E+02 E0= -.10612653E+02  d E =-.23875233E+00
+Calculation completed.

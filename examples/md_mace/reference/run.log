@@ -1,0 +1,12 @@
+/home/nei/miniconda3/envs/ase_env/lib/python3.13/site-packages/e3nn/o3/_wigner.py:10: UserWarning: Environment variable TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD detected, since the`weights_only` argument was not explicitly passed to `torch.load`, forcing weights_only=False.
+  _Jd, _W3j_flat, _W3j_indices = torch.load(os.path.join(os.path.dirname(__file__), 'constants.pt'))
+/home/nei/miniconda3/envs/ase_env/lib/python3.13/site-packages/mace/calculators/mace.py:197: UserWarning: Environment variable TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD detected, since the`weights_only` argument was not explicitly passed to `torch.load`, forcing weights_only=False.
+  torch.load(f=model_path, map_location=device)
+cuequivariance or cuequivariance_torch is not available. Cuequivariance acceleration will be disabled.
+Using head Default out of ['Default']
+No dtype selected, switching to float64 to match model dtype.
+      1 T=  656.2 E= -.10571666E+02 F= -.10741314E+02 E0= -.10741314E+02  EK= +.16964800E+00 SP= +.00000000E+00 SK= +.00000000E+00
+      2 T=  651.3 E= -.10571664E+02 F= -.10740032E+02 E0= -.10740032E+02  EK= +.16836784E+00 SP= +.00000000E+00 SK= +.00000000E+00
+      3 T=  643.2 E= -.10571661E+02 F= -.10737933E+02 E0= -.10737933E+02  EK= +.16627182E+00 SP= +.00000000E+00 SK= +.00000000E+00
+      4 T=  632.1 E= -.10571657E+02 F= -.10735064E+02 E0= -.10735064E+02  EK= +.16340653E+00 SP= +.00000000E+00 SK= +.00000000E+00
+Calculation completed.

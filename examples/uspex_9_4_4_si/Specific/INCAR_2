@@ -1,0 +1,12 @@
+SYSTEM = Si
+PREC = Normal
+EDIFF = 1e-3
+IBRION = 1
+ISIF = 4
+NSW = 85
+ISMEAR = 1 ; SIGMA = 0.06
+POTIM = 0.20
+LCHARG = FALSE
+LWAVE = FALSE
+# Crude optimisation
+EDIFFG = 1e-2
