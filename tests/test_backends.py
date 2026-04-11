@@ -236,42 +236,54 @@ def test_build_sevennet_flash_requires_checkpoint(monkeypatch: pytest.MonkeyPatc
 
 def test_build_sevennet_rejects_unsupported_oeq(monkeypatch: pytest.MonkeyPatch):
     class FakeSevenNetCalculator:
-        def __init__(self, *, model, device="auto", file_type="checkpoint", **_):
-            self.model = model
-            self.device = device
-            self.file_type = file_type
+        def __init__(
+            self,
+            *,
+            model,
+            device="auto",
+            file_type="checkpoint",
+            enable_cueq=None,
+            enable_flash=None,
+            **_,
+        ):
+            raise AssertionError("constructor should not be reached")
 
     monkeypatch.setattr(vpmdk, "SevenNetCalculator", FakeSevenNetCalculator)
     monkeypatch.setattr(vpmdk, "_SEVENNET_PACKAGE", "sevenn")
 
     with pytest.raises(RuntimeError, match="SEVENNET_ENABLE_OEQ"):
-        vpmdk._build_sevennet_calculator({"MODEL": "7net-0", "SEVENNET_ENABLE_OEQ": "1"})
+        vpmdk._build_sevennet_calculator(
+            {
+                "MODEL": "7net-0",
+                "SEVENNET_ENABLE_OEQ": "1",
+            }
+        )
 
 
-def test_build_equflash_uses_ucalculator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_build_equflash_uses_ucalculator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     model_path = tmp_path / "equflash.ckpt"
     model_path.write_text("dummy")
     seen: dict[str, object] = {}
 
-    class FakeEquFlashCalculator:
-        def __init__(self, checkpoint_path, cpu=False, device=None):
-            seen.update(
-                {
-                    "checkpoint_path": checkpoint_path,
-                    "cpu": cpu,
-                    "device": device,
-                }
-            )
+    class FakeUCalculator:
+        def __init__(self, *, checkpoint_path, cpu=False, device=None):
+            seen["checkpoint_path"] = checkpoint_path
+            seen["cpu"] = cpu
+            seen["device"] = device
 
-    monkeypatch.setattr(vpmdk, "_get_equflash_calculator_cls", lambda: FakeEquFlashCalculator)
+    monkeypatch.setattr(vpmdk, "_get_equflash_calculator_cls", lambda: FakeUCalculator)
 
-    calc = vpmdk._build_equflash_calculator({"MODEL": str(model_path), "DEVICE": "cuda"})
+    calc = vpmdk._build_equflash_calculator(
+        {"MODEL": str(model_path), "DEVICE": "cuda:0"}
+    )
 
-    assert isinstance(calc, FakeEquFlashCalculator)
+    assert isinstance(calc, FakeUCalculator)
     assert seen == {
         "checkpoint_path": str(model_path),
         "cpu": False,
-        "device": "cuda",
+        "device": "cuda:0",
     }
 
 
@@ -279,7 +291,7 @@ def test_build_equflash_requires_local_checkpoint(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(vpmdk, "_get_equflash_calculator_cls", lambda: object)
 
     with pytest.raises(ValueError, match="local checkpoint"):
-        vpmdk._build_equflash_calculator({"MODEL": "equflash-unreleased"})
+        vpmdk._build_equflash_calculator({"MODEL": "equflash-29M-oam"})
 
 
 def test_eqnorm_uses_checkpoint_path_and_bcar_tags(
@@ -784,9 +796,7 @@ def test_override_model_graph_converter_algorithm_rebuilds_converter():
         def set_isolated_atom_response(self, value: str):
             self.on_isolated_atoms = value
 
-    model = SimpleNamespace(
-        graph_converter=DummyConverter(atom_graph_cutoff=6, bond_graph_cutoff=3)
-    )
+    model = SimpleNamespace(graph_converter=DummyConverter(atom_graph_cutoff=6, bond_graph_cutoff=3))
     model.graph_converter.set_isolated_atom_response("error")
 
     updated_model = vpmdk._override_model_graph_converter_algorithm(
@@ -902,9 +912,7 @@ def test_matris_checkpoint_path_applies_graph_converter_algorithm(
         def set_isolated_atom_response(self, value: str):
             self.on_isolated_atoms = value
 
-    model = SimpleNamespace(
-        graph_converter=DummyConverter(atom_graph_cutoff=6, bond_graph_cutoff=3)
-    )
+    model = SimpleNamespace(graph_converter=DummyConverter(atom_graph_cutoff=6, bond_graph_cutoff=3))
     seen: dict[str, object] = {}
 
     def fake_load(path: str, *, device: str | None):

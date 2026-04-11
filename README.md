@@ -38,9 +38,25 @@ The typical workflow is to enter the directory that already contains your VASP-s
 └── BCAR
 ```
 
-### 3. Start from this minimal relaxation setup
+### 3. Start from one of these minimal inputs
 
-For a first run, a geometry relaxation is the simplest example:
+Single-point calculation:
+
+`INCAR`
+
+```text
+IBRION = -1
+NSW = 0
+```
+
+`BCAR`
+
+```text
+MLP=CHGNET
+DEVICE=cuda
+```
+
+Geometry relaxation:
 
 `INCAR`
 
@@ -58,7 +74,26 @@ MLP=CHGNET
 DEVICE=cuda
 ```
 
-For single-point calculations or molecular dynamics, prepare an `INCAR` that matches that mode and add any mode-specific settings you need.
+Molecular dynamics:
+
+`INCAR`
+
+```text
+IBRION = 0
+NSW = 1000
+POTIM = 1.0
+TEBEG = 300
+TEEND = 300
+MDALGO = 3
+```
+
+`BCAR`
+
+```text
+MLP=MATRIS
+MODEL=matris_10m_oam
+DEVICE=cuda
+```
 
 ### 4. Run
 
