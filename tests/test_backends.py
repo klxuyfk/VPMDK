@@ -56,6 +56,232 @@ def test_matgl_load_model_path_is_used(tmp_path: Path, monkeypatch: pytest.Monke
     assert seen["calc_args"] == ("potential",)
 
 
+def test_build_sevennet_calculator_uses_new_backend_and_tags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "sevennet.ckpt"
+    model_path.write_text("dummy")
+    seen: dict[str, object] = {}
+
+    class FakeSevenNetCalculator:
+        def __init__(
+            self,
+            *,
+            model,
+            device="auto",
+            file_type="checkpoint",
+            modal=None,
+            enable_cueq=None,
+            enable_flash=None,
+            enable_oeq=None,
+            **_,
+        ):
+            seen.update(
+                {
+                    "model": model,
+                    "device": device,
+                    "file_type": file_type,
+                    "modal": modal,
+                    "enable_cueq": enable_cueq,
+                    "enable_flash": enable_flash,
+                    "enable_oeq": enable_oeq,
+                }
+            )
+
+    monkeypatch.setattr(vpmdk, "SevenNetCalculator", FakeSevenNetCalculator)
+    monkeypatch.setattr(vpmdk, "_SEVENNET_PACKAGE", "sevenn")
+    monkeypatch.setattr(vpmdk, "_is_sevennet_flash_available", lambda: True)
+
+    calc = vpmdk._build_sevennet_calculator(
+        {
+            "MODEL": str(model_path),
+            "DEVICE": "cuda:0",
+            "SEVENNET_MODAL": "mpa",
+            "SEVENNET_ENABLE_FLASH": "1",
+        }
+    )
+
+    assert isinstance(calc, FakeSevenNetCalculator)
+    assert seen == {
+        "model": str(model_path),
+        "device": "cuda:0",
+        "file_type": "checkpoint",
+        "modal": "mpa",
+        "enable_cueq": False,
+        "enable_flash": True,
+        "enable_oeq": False,
+    }
+
+
+def test_build_flashtp_calculator_forces_flash(monkeypatch: pytest.MonkeyPatch):
+    seen: dict[str, object] = {}
+
+    class FakeSevenNetCalculator:
+        def __init__(
+            self,
+            *,
+            model,
+            device="auto",
+            file_type="checkpoint",
+            modal=None,
+            enable_cueq=None,
+            enable_flash=None,
+            enable_oeq=None,
+            **_,
+        ):
+            seen.update(
+                {
+                    "model": model,
+                    "device": device,
+                    "file_type": file_type,
+                    "modal": modal,
+                    "enable_cueq": enable_cueq,
+                    "enable_flash": enable_flash,
+                    "enable_oeq": enable_oeq,
+                }
+            )
+
+    monkeypatch.setattr(vpmdk, "SevenNetCalculator", FakeSevenNetCalculator)
+    monkeypatch.setattr(vpmdk, "_SEVENNET_PACKAGE", "sevenn")
+    monkeypatch.setattr(vpmdk, "_is_sevennet_flash_available", lambda: True)
+
+    calc = vpmdk._build_flashtp_calculator({"DEVICE": "cuda"})
+
+    assert isinstance(calc, FakeSevenNetCalculator)
+    assert seen == {
+        "model": vpmdk.DEFAULT_SEVENNET_MODEL,
+        "device": "cuda",
+        "file_type": "checkpoint",
+        "modal": None,
+        "enable_cueq": False,
+        "enable_flash": True,
+        "enable_oeq": False,
+    }
+
+
+def test_build_flashtp_rejects_conflicting_accelerators(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class FakeSevenNetCalculator:
+        def __init__(self, **_):
+            raise AssertionError("constructor should not be reached")
+
+    monkeypatch.setattr(vpmdk, "SevenNetCalculator", FakeSevenNetCalculator)
+    monkeypatch.setattr(vpmdk, "_SEVENNET_PACKAGE", "sevenn")
+
+    with pytest.raises(ValueError, match="MLP=FLASHTP"):
+        vpmdk._build_flashtp_calculator({"SEVENNET_ENABLE_CUEQ": "1"})
+
+
+def test_build_flashtp_supports_partial_sevennet_accelerators(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    seen: dict[str, object] = {}
+
+    class FakeSevenNetCalculator:
+        def __init__(
+            self,
+            *,
+            model,
+            device="auto",
+            file_type="checkpoint",
+            enable_cueq=None,
+            enable_flash=None,
+            **_,
+        ):
+            seen.update(
+                {
+                    "model": model,
+                    "device": device,
+                    "file_type": file_type,
+                    "enable_cueq": enable_cueq,
+                    "enable_flash": enable_flash,
+                }
+            )
+
+    monkeypatch.setattr(vpmdk, "SevenNetCalculator", FakeSevenNetCalculator)
+    monkeypatch.setattr(vpmdk, "_SEVENNET_PACKAGE", "sevenn")
+    monkeypatch.setattr(vpmdk, "_is_sevennet_flash_available", lambda: True)
+
+    calc = vpmdk._build_flashtp_calculator({"MODEL": "7net-0", "DEVICE": "cuda"})
+
+    assert isinstance(calc, FakeSevenNetCalculator)
+    assert seen == {
+        "model": "7net-0",
+        "device": "cuda",
+        "file_type": "checkpoint",
+        "enable_cueq": False,
+        "enable_flash": True,
+    }
+
+
+def test_build_sevennet_flash_requires_checkpoint(monkeypatch: pytest.MonkeyPatch):
+    class FakeSevenNetCalculator:
+        def __init__(self, **_):
+            raise AssertionError("constructor should not be reached")
+
+    monkeypatch.setattr(vpmdk, "SevenNetCalculator", FakeSevenNetCalculator)
+    monkeypatch.setattr(vpmdk, "_SEVENNET_PACKAGE", "sevenn")
+    monkeypatch.setattr(vpmdk, "_is_sevennet_flash_available", lambda: True)
+
+    with pytest.raises(ValueError, match="SEVENNET_FILE_TYPE=checkpoint"):
+        vpmdk._build_sevennet_calculator(
+            {
+                "MODEL": "7net-0",
+                "SEVENNET_FILE_TYPE": "torchscript",
+                "SEVENNET_ENABLE_FLASH": "1",
+            }
+        )
+
+
+def test_build_sevennet_rejects_unsupported_oeq(monkeypatch: pytest.MonkeyPatch):
+    class FakeSevenNetCalculator:
+        def __init__(self, *, model, device="auto", file_type="checkpoint", **_):
+            self.model = model
+            self.device = device
+            self.file_type = file_type
+
+    monkeypatch.setattr(vpmdk, "SevenNetCalculator", FakeSevenNetCalculator)
+    monkeypatch.setattr(vpmdk, "_SEVENNET_PACKAGE", "sevenn")
+
+    with pytest.raises(RuntimeError, match="SEVENNET_ENABLE_OEQ"):
+        vpmdk._build_sevennet_calculator({"MODEL": "7net-0", "SEVENNET_ENABLE_OEQ": "1"})
+
+
+def test_build_equflash_uses_ucalculator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    model_path = tmp_path / "equflash.ckpt"
+    model_path.write_text("dummy")
+    seen: dict[str, object] = {}
+
+    class FakeEquFlashCalculator:
+        def __init__(self, checkpoint_path, cpu=False, device=None):
+            seen.update(
+                {
+                    "checkpoint_path": checkpoint_path,
+                    "cpu": cpu,
+                    "device": device,
+                }
+            )
+
+    monkeypatch.setattr(vpmdk, "_get_equflash_calculator_cls", lambda: FakeEquFlashCalculator)
+
+    calc = vpmdk._build_equflash_calculator({"MODEL": str(model_path), "DEVICE": "cuda"})
+
+    assert isinstance(calc, FakeEquFlashCalculator)
+    assert seen == {
+        "checkpoint_path": str(model_path),
+        "cpu": False,
+        "device": "cuda",
+    }
+
+
+def test_build_equflash_requires_local_checkpoint(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(vpmdk, "_get_equflash_calculator_cls", lambda: object)
+
+    with pytest.raises(ValueError, match="local checkpoint"):
+        vpmdk._build_equflash_calculator({"MODEL": "equflash-unreleased"})
+
+
 def test_eqnorm_uses_checkpoint_path_and_bcar_tags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -101,6 +327,7 @@ def test_eqnorm_uses_checkpoint_path_and_bcar_tags(
 
 def test_eqnorm_accepts_named_model_and_defaults(monkeypatch: pytest.MonkeyPatch):
     seen: dict[str, object] = {}
+    expected_device = vpmdk._resolve_device(None) or "cpu"
 
     def fake_ensure(model_name: str):
         seen["model_name"] = model_name
@@ -131,7 +358,7 @@ def test_eqnorm_accepts_named_model_and_defaults(monkeypatch: pytest.MonkeyPatch
         "safe_globals": True,
         "calc_model_name": "eqnorm",
         "calc_variant": vpmdk.DEFAULT_EQNORM_MODEL,
-        "device": "cpu",
+        "device": expected_device,
         "compile": False,
     }
 
@@ -197,6 +424,7 @@ def test_eqnorm_requires_variant_for_unknown_local_checkpoint(
 
 def test_hienet_accepts_named_model_and_defaults(monkeypatch: pytest.MonkeyPatch):
     seen: dict[str, object] = {}
+    expected_device = vpmdk._resolve_device(None) or "cpu"
 
     def fake_ensure(model_name: str):
         seen["model_name"] = model_name
@@ -218,7 +446,7 @@ def test_hienet_accepts_named_model_and_defaults(monkeypatch: pytest.MonkeyPatch
         "model_name": vpmdk.DEFAULT_HIENET_MODEL,
         "calc_model": "/tmp/HIENet-V3.pth",
         "file_type": "checkpoint",
-        "device": "cpu",
+        "device": expected_device,
     }
 
 
@@ -433,6 +661,7 @@ def test_alphanet_accepts_named_model_and_defaults(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     seen: dict[str, object] = {}
+    expected_device = vpmdk._resolve_device(None) or "cpu"
     config_path = tmp_path / "matpes.json"
     config_path.write_text("{}")
 
@@ -469,7 +698,7 @@ def test_alphanet_accepts_named_model_and_defaults(
         "compute_stress": True,
         "ckpt_path": "/tmp/r2scan_1021.ckpt",
         "config": "alpha-config",
-        "device": "cpu",
+        "device": expected_device,
         "calc_precision": "32",
     }
 
