@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
+
 import pytest
 
 import vpmdk
@@ -70,6 +72,7 @@ def test_run_md_executes_multiple_steps(tmp_path, load_atoms):
     assert "total drift:" in outcar
     assert "energy  without entropy=" in outcar
     assert "General timing and accounting informations for this job" in outcar
+    assert "Voluntary context switches" in outcar
     assert (tmp_path / "OSZICAR").exists()
     assert (tmp_path / "vasprun.xml").exists()
 
@@ -129,6 +132,50 @@ def test_run_md_writes_lammps_dump_on_interval(tmp_path, load_atoms):
         monkeypatch.undo()
 
     assert lammps_steps == [0, 2]
+
+
+def test_run_md_uses_local_incar_pseudo_scf_settings_when_enabled(tmp_path, load_atoms):
+    atoms = load_atoms()
+    (tmp_path / "INCAR").write_text("NELM = 39\nNELMIN = 5\nNELMDL = -1\nEDIFF = 2E-06\n")
+
+    class DummyDynamics:
+        def run(self, n):
+            assert n == 1
+            atoms.positions += 0.01
+
+    def fake_selector(atoms_arg, mdalgo, timestep, initial_temperature, smass, params):
+        return DummyDynamics(), lambda temp: None
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "_select_md_dynamics", fake_selector)
+    monkeypatch.setattr(
+        vpmdk.velocitydistribution,
+        "MaxwellBoltzmannDistribution",
+        lambda *a, **k: None,
+    )
+    try:
+        vpmdk.run_md(
+            atoms,
+            DummyCalculator(),
+            steps=1,
+            temperature=300,
+            timestep=1.0,
+            mdalgo=0,
+            oszicar_pseudo_scf=True,
+        )
+    finally:
+        monkeypatch.undo()
+
+    outcar = (tmp_path / "OUTCAR").read_text()
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    electronic = root.find("./parameters/separator[@name='electronic']")
+    assert "NELM   =     39;" in outcar
+    assert electronic is not None
+    assert electronic.find("./i[@name='NELM']").text.strip() == "39"
+    assert electronic.find("./i[@name='NELMIN']").text.strip() == "5"
+    assert electronic.find("./i[@name='NELMDL']").text.strip() == "-1"
+    assert root.find("./incar/i[@name='EDIFF']").text.strip() == "2.00000000E-06"
 
 
 def test_lammps_dump_writes_box_bounds_from_prism(tmp_path, load_atoms):

@@ -47,6 +47,7 @@ def test_relaxation_isif2_moves_ions_without_changing_cell(
     assert "total drift:" in outcar
     assert "energy  without entropy=" in outcar
     assert "General timing and accounting informations for this job" in outcar
+    assert "Voluntary context switches" in outcar
     assert (tmp_path / "OSZICAR").exists()
     assert (tmp_path / "vasprun.xml").exists()
 
@@ -195,12 +196,29 @@ def test_relaxation_oszicar_pseudo_scf_is_off_by_default(tmp_path: Path, load_at
         monkeypatch.undo()
 
     oszicar = (tmp_path / "OSZICAR").read_text()
+    outcar = (tmp_path / "OUTCAR").read_text()
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    electronic = root.find("./parameters/separator[@name='electronic']")
     assert "DAV:" not in oszicar
     assert "N       E" not in oszicar
+    assert "NELM   =" not in outcar
+    assert "Iteration      1(   1)" in outcar
+    assert "Voluntary context switches" in outcar
+    assert electronic is not None
+    assert root.find("./parameters/separator[@name='electronic convergence']") is None
+    assert root.find("./incar/i[@name='NELM']") is None
+    assert electronic.find("./i[@name='NELM']") is not None
+    assert electronic.find("./i[@name='NELMIN']") is None
+    assert electronic.find("./i[@name='EDIFF']") is None
+    assert electronic.find("./i[@name='NBANDS']") is None
+    assert root.find("./incar/i[@name='NELMIN']") is None
+    assert root.find(".//scstep/energy") is None
+    assert root.find("./calculation/time[@name='totalsc']") is None
 
 
 def test_relaxation_oszicar_pseudo_scf_is_written_when_enabled(tmp_path: Path, load_atoms):
     atoms = load_atoms()
+    (tmp_path / "INCAR").write_text("NELM = 37\nNELMIN = 4\nNELMDL = -3\nEDIFF = 5E-07\n")
 
     class DummyBFGS:
         def __init__(self, obj, logfile=None):
@@ -233,8 +251,55 @@ def test_relaxation_oszicar_pseudo_scf_is_written_when_enabled(tmp_path: Path, l
         monkeypatch.undo()
 
     oszicar = (tmp_path / "OSZICAR").read_text()
+    outcar = (tmp_path / "OUTCAR").read_text()
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    electronic = root.find("./parameters/separator[@name='electronic']")
     assert "DAV:" in oszicar
     assert "N       E" in oszicar
+    assert "NELM   =     37;" in outcar
+    assert "Iteration      1(   1)" in outcar
+    assert electronic is not None
+    assert root.find("./parameters/separator[@name='electronic convergence']") is None
+    assert electronic.find("./i[@name='NBANDS']") is not None
+    assert electronic.find("./i[@name='NELM']").text.strip() == "37"
+    assert electronic.find("./i[@name='NELMIN']").text.strip() == "4"
+    assert electronic.find("./i[@name='NELMDL']").text.strip() == "-3"
+    assert electronic.find("./i[@name='EDIFF']").text.strip() == "5.00000000E-07"
+    assert root.find("./incar/i[@name='NELM']").text.strip() == "37"
+    assert root.find("./incar/i[@name='NELMIN']").text.strip() == "4"
+    assert root.find("./incar/i[@name='NELMDL']").text.strip() == "-3"
+    assert root.find("./incar/i[@name='EDIFF']").text.strip() == "5.00000000E-07"
+    assert root.find(".//scstep") is not None
+    assert root.find(".//i[@name='NELM']") is not None
+    assert root.find("./calculation/time[@name='totalsc']") is not None
+
+
+def test_single_point_oszicar_pseudo_scf_reads_local_incar_when_enabled(
+    tmp_path: Path, load_atoms
+):
+    atoms = load_atoms()
+    (tmp_path / "INCAR").write_text("NELM = 41\nNELMIN = 3\nNELMDL = -2\nEDIFF = 1E-06\n")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    try:
+        vpmdk.run_single_point(
+            atoms,
+            DummyCalculator(),
+            oszicar_pseudo_scf=True,
+        )
+    finally:
+        monkeypatch.undo()
+
+    outcar = (tmp_path / "OUTCAR").read_text()
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    electronic = root.find("./parameters/separator[@name='electronic']")
+    assert "NELM   =     41;" in outcar
+    assert electronic is not None
+    assert electronic.find("./i[@name='NELM']").text.strip() == "41"
+    assert electronic.find("./i[@name='NELMIN']").text.strip() == "3"
+    assert electronic.find("./i[@name='NELMDL']").text.strip() == "-2"
+    assert root.find("./incar/i[@name='EDIFF']").text.strip() == "1.00000000E-06"
 
 
 def test_relaxation_writes_stress_block_when_isif_allows(tmp_path: Path, load_atoms):
@@ -314,7 +379,9 @@ def test_relaxation_omits_stress_block_when_isif_zero(tmp_path: Path, load_atoms
     assert "FORCE on cell =-STRESS in cart. coord." not in outcar
 
 
-def test_relaxation_vasprun_includes_kpoints_and_timing(tmp_path: Path, load_atoms):
+def test_relaxation_vasprun_includes_kpoints_and_omits_pseudo_scf_timing_by_default(
+    tmp_path: Path, load_atoms
+):
     atoms = load_atoms()
 
     class DummyBFGS:
@@ -350,7 +417,8 @@ def test_relaxation_vasprun_includes_kpoints_and_timing(tmp_path: Path, load_ato
     assert root.find("./varray[@name='primitive_index']") is not None
     first_calc = root.find("calculation")
     assert first_calc is not None
-    assert first_calc.find("./time[@name='totalsc']") is not None
+    assert first_calc.find("./time[@name='totalsc']") is None
+    assert first_calc.find("scstep") is None
 
 
 def test_relaxation_isif3_moves_ions_and_cell(tmp_path: Path, load_atoms, arrays_close):
