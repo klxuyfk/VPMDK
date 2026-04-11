@@ -140,8 +140,8 @@ def test_md_sevennet_optional(tmp_path: Path, data_dir: Path) -> None:
 
 @pytest.mark.integration
 def test_md_flashtp_optional(tmp_path: Path, data_dir: Path) -> None:
-    if not _any_module_available("sevenn", "sevennet"):
-        pytest.skip("SevenNet is not installed.")
+    if vpmdk._SEVENNET_PACKAGE != "sevenn":
+        pytest.skip("FlashTP requires the modern sevenn backend.")
     if not _module_available("flashTP_e3nn"):
         pytest.skip("flashTP_e3nn is not installed.")
     _require_cuda()
@@ -165,7 +165,7 @@ def test_md_flashtp_optional(tmp_path: Path, data_dir: Path) -> None:
 
 @pytest.mark.integration
 def test_md_equflash_optional(tmp_path: Path, data_dir: Path) -> None:
-    if not _module_available("GGNN.common.calculator"):
+    if not _any_module_available("GGNN.common.calculator", "ggnn.common.calculator"):
         pytest.skip("EquFlash calculator package is not installed.")
     _require_cuda()
     model_value = os.environ.get("VPMDK_EQUFLASH_MODEL")

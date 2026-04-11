@@ -222,11 +222,12 @@ def test_build_sevennet_flash_requires_checkpoint(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(vpmdk, "SevenNetCalculator", FakeSevenNetCalculator)
     monkeypatch.setattr(vpmdk, "_SEVENNET_PACKAGE", "sevenn")
+    monkeypatch.setattr(vpmdk, "_is_sevennet_flash_available", lambda: True)
 
     with pytest.raises(ValueError, match="SEVENNET_FILE_TYPE=checkpoint"):
         vpmdk._build_sevennet_calculator(
             {
-                "MODEL": "sevennet.ts",
+                "MODEL": "7net-0",
                 "SEVENNET_FILE_TYPE": "torchscript",
                 "SEVENNET_ENABLE_FLASH": "1",
             }
@@ -548,13 +549,34 @@ def test_nequix_uses_checkpoint_path_and_torch_device(
         def eval(self):
             seen["eval_called"] = True
 
-    class FakeNequixCalculator:
+    class FakeNequixCalculator(vpmdk.Calculator):
         def __init__(self, **kwargs):
-            seen["kwargs"] = kwargs
-            self.model = FakeModel()
-            self.device = None
+            raise AssertionError("torch path should not call NequixCalculator.__init__")
+
+    def fake_from_pretrained(*, model_name=None, model_path=None, backend="jax", use_kernel=True):
+        seen["from_pretrained"] = {
+            "model_name": model_name,
+            "model_path": model_path,
+            "backend": backend,
+            "use_kernel": use_kernel,
+        }
+        return FakeModel(), {"atomic_numbers": [8, 14], "cutoff": 6.0}
+
+    def fake_atomic_numbers_to_indices(atomic_numbers):
+        seen["atomic_numbers"] = list(atomic_numbers)
+        return {number: index for index, number in enumerate(atomic_numbers)}
+
+    original_import_module = vpmdk.importlib.import_module
+
+    def fake_import_module(name: str):
+        if name == "nequix.calculator":
+            return SimpleNamespace(from_pretrained=fake_from_pretrained)
+        if name == "nequix.data":
+            return SimpleNamespace(atomic_numbers_to_indices=fake_atomic_numbers_to_indices)
+        return original_import_module(name)
 
     monkeypatch.setattr(vpmdk, "NequixCalculator", FakeNequixCalculator)
+    monkeypatch.setattr(vpmdk.importlib, "import_module", fake_import_module)
 
     calc = vpmdk._build_nequix_calculator(
         {
@@ -568,16 +590,19 @@ def test_nequix_uses_checkpoint_path_and_torch_device(
     )
 
     assert isinstance(calc, FakeNequixCalculator)
-    assert seen["kwargs"] == {
+    assert seen["from_pretrained"] == {
         "model_path": str(model_path),
         "model_name": "nequix-oam-1",
         "backend": "torch",
         "use_kernel": True,
-        "use_compile": True,
-        "capacity_multiplier": 1.25,
     }
+    assert seen["atomic_numbers"] == [8, 14]
     assert seen["moved_to"] == "cpu"
     assert seen["eval_called"] is True
+    assert str(calc.device) == "cpu"
+    assert calc.backend == "torch"
+    assert calc.cutoff == 6.0
+    assert calc._capacity_multiplier == 1.25
 
 
 def test_nequix_missing_checkpoint_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -790,6 +815,35 @@ def test_override_model_graph_converter_algorithm_rebuilds_converter():
     assert model.graph_converter.on_isolated_atoms == "error"
 
 
+def test_override_model_graph_converter_algorithm_rejects_silent_fallback():
+    class DummyConverter:
+        def __init__(
+            self,
+            *,
+            atom_graph_cutoff: float,
+            bond_graph_cutoff: float,
+            algorithm: str = "legacy",
+        ):
+            self.atom_graph_cutoff = atom_graph_cutoff
+            self.bond_graph_cutoff = bond_graph_cutoff
+            self.algorithm = "legacy"
+            self.on_isolated_atoms = "warn"
+
+        def set_isolated_atom_response(self, value: str):
+            self.on_isolated_atoms = value
+
+    model = SimpleNamespace(
+        graph_converter=DummyConverter(atom_graph_cutoff=6, bond_graph_cutoff=3)
+    )
+
+    with pytest.raises(RuntimeError, match="requested 'fast' but initialized 'legacy'"):
+        vpmdk._override_model_graph_converter_algorithm(
+            model,
+            algorithm="fast",
+            backend_name="CHGNet",
+        )
+
+
 def test_override_model_graph_converter_algorithm_supports_make_graph_switch(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -966,6 +1020,47 @@ def test_matris_unknown_named_model_falls_back_to_upstream_calculator(
         "device": "cpu",
         "graph_converter_algorithm": "legacy",
     }
+
+
+def test_matris_unknown_named_model_falls_back_when_constructor_lacks_algorithm(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    seen: dict[str, object] = {}
+
+    class DummyCalculator:
+        def __init__(self, *, model, task="efs", device=None):
+            seen["init"] = {"model": model, "task": task, "device": device}
+            self.model = "legacy-model"
+
+    def fake_override(model, *, algorithm: str, backend_name: str):
+        seen["override"] = {
+            "model": model,
+            "algorithm": algorithm,
+            "backend_name": backend_name,
+        }
+        return "updated-model"
+
+    monkeypatch.setattr(vpmdk, "MatRISCalculator", DummyCalculator)
+    monkeypatch.setattr(vpmdk, "_ensure_matris_named_model_checkpoint", lambda model: None)
+    monkeypatch.setattr(vpmdk, "_override_model_graph_converter_algorithm", fake_override)
+
+    calc = vpmdk._build_matris_calculator(
+        {
+            "MODEL": "custom-model",
+            "MATRIS_TASK": "efsm",
+            "DEVICE": "cpu",
+            "MATRIS_GRAPH_CONVERTER_ALGORITHM": "fast",
+        }
+    )
+
+    assert isinstance(calc, DummyCalculator)
+    assert seen["init"] == {"model": "custom-model", "task": "efsm", "device": "cpu"}
+    assert seen["override"] == {
+        "model": "legacy-model",
+        "algorithm": "fast",
+        "backend_name": "MatRIS",
+    }
+    assert calc.model == "updated-model"
 
 
 def test_matris_missing_checkpoint_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

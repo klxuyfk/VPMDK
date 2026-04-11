@@ -199,5 +199,12 @@ def _override_model_graph_converter_algorithm(model, *, algorithm: str, backend_
     ):
         new_converter.set_isolated_atom_response(isolated_atoms_response)
 
+    actual_algorithm = getattr(new_converter, "algorithm", None)
+    if actual_algorithm != algorithm:
+        raise RuntimeError(
+            f"{backend_name} graph converter requested {algorithm!r} but initialized "
+            f"{actual_algorithm!r}."
+        )
+
     model.graph_converter = new_converter
     return model
