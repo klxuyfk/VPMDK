@@ -24,6 +24,7 @@ import xml.etree.ElementTree as ET
 from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List
 
 import numpy as np
@@ -171,14 +172,22 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     DeePMDCalculator = None  # type: ignore
 
-_sevennet_spec = importlib.util.find_spec("sevennet")
-if _sevennet_spec is not None:  # pragma: no cover - optional dependency
-    try:
-        from sevennet.ase import SevenNetCalculator
-    except Exception:  # pragma: no cover - handled dynamically
-        SevenNetCalculator = None  # type: ignore
-else:  # pragma: no cover - optional dependency
-    SevenNetCalculator = None  # type: ignore
+SevenNetCalculator = None  # type: ignore
+_SEVENNET_PACKAGE = None
+try:  # pragma: no cover - optional dependency
+    from sevenn.calculator import SevenNetCalculator
+
+    _SEVENNET_PACKAGE = "sevenn"
+except Exception:  # pragma: no cover - optional dependency compatibility
+    _sevennet_spec = importlib.util.find_spec("sevennet")
+    if _sevennet_spec is not None:
+        try:
+            from sevennet.ase import SevenNetCalculator
+
+            _SEVENNET_PACKAGE = "sevennet"
+        except Exception:  # pragma: no cover - handled dynamically
+            SevenNetCalculator = None  # type: ignore
+            _SEVENNET_PACKAGE = None
 
 from ase import units
 from ase.calculators.calculator import Calculator, all_changes
@@ -228,6 +237,7 @@ else:  # pragma: no cover - optional dependency
     NequIPCalculator = None  # type: ignore
 
 DEFAULT_ORB_MODEL = "orb-v3-conservative-20-omat"
+DEFAULT_SEVENNET_MODEL = "7net-0"
 DEFAULT_EQNORM_MODEL = "eqnorm-mptrj"
 DEFAULT_MATRIS_MODEL = "matris_10m_oam"
 _GRAPH_CONVERTER_ALGORITHMS = frozenset({"fast", "legacy"})
@@ -236,6 +246,7 @@ DEFAULT_HIENET_MODEL = "HIENet-0"
 DEFAULT_NEQUIX_MODEL = "nequix-mp-1"
 DEFAULT_FAIRCHEM_MODEL = "esen-sm-direct-all-oc25"
 DEFAULT_GRACE_MODEL = "GRACE-2L-MP-r6"
+_SEVENNET_FILE_TYPES = frozenset({"checkpoint", "torchscript"})
 _EQNORM_VARIANT_ALIASES: Dict[str, List[str]] = {
     DEFAULT_EQNORM_MODEL: [DEFAULT_EQNORM_MODEL, "eqnorm", "eqnormmptrj"],
     "eqnorm-omat": ["eqnorm-omat", "eqnormomat", "omat"],
@@ -2961,6 +2972,267 @@ def _build_alphanet_calculator(bcar_tags: Dict[str, str], *, structure=None):
     )
 
 
+def _parse_optional_bool_tag(
+    bcar_tags: Dict[str, str], tag_name: str
+) -> bool | None:
+    """Return an optional boolean BCAR tag, preserving the unset state."""
+
+    raw_value = bcar_tags.get(tag_name)
+    if raw_value is None:
+        return None
+    return _coerce_bool_tag(raw_value, tag_name)
+
+
+def _normalize_sevennet_file_type(value: str | None) -> str:
+    """Return a normalized SevenNet file type accepted from BCAR."""
+
+    file_type = (value or "checkpoint").strip().lower()
+    if file_type == "model_instance":
+        raise ValueError(
+            "SEVENNET_FILE_TYPE=model_instance is not supported from BCAR. "
+            "Use checkpoint or torchscript."
+        )
+    if file_type not in _SEVENNET_FILE_TYPES:
+        supported = ", ".join(sorted(_SEVENNET_FILE_TYPES))
+        raise ValueError(
+            f"Invalid SEVENNET_FILE_TYPE value: {value!r}. Expected one of: {supported}."
+        )
+    return file_type
+
+
+def _resolve_sevennet_accelerators(
+    bcar_tags: Dict[str, str], *, force_flash: bool = False
+) -> tuple[bool | None, bool | None, bool | None]:
+    """Resolve SevenNet accelerator flags from BCAR with conflict checking."""
+
+    enable_cueq = _parse_optional_bool_tag(bcar_tags, "SEVENNET_ENABLE_CUEQ")
+    enable_flash = _parse_optional_bool_tag(bcar_tags, "SEVENNET_ENABLE_FLASH")
+    enable_oeq = _parse_optional_bool_tag(bcar_tags, "SEVENNET_ENABLE_OEQ")
+
+    if sum(flag is True for flag in (enable_cueq, enable_flash, enable_oeq)) > 1:
+        raise ValueError(
+            "Only one of SEVENNET_ENABLE_CUEQ, SEVENNET_ENABLE_FLASH, or "
+            "SEVENNET_ENABLE_OEQ may be enabled at once."
+        )
+
+    if force_flash:
+        if enable_cueq is True or enable_oeq is True or enable_flash is False:
+            raise ValueError(
+                "MLP=FLASHTP forces FlashTP acceleration and cannot be combined with "
+                "SEVENNET_ENABLE_CUEQ=1, SEVENNET_ENABLE_OEQ=1, or "
+                "SEVENNET_ENABLE_FLASH=0."
+            )
+        return False, True, False
+
+    if any(flag is True for flag in (enable_cueq, enable_flash, enable_oeq)):
+        return (
+            False if enable_cueq is None else enable_cueq,
+            False if enable_flash is None else enable_flash,
+            False if enable_oeq is None else enable_oeq,
+        )
+
+    return enable_cueq, enable_flash, enable_oeq
+
+
+def _callable_declares_parameter(callable_obj: object, parameter_name: str) -> bool:
+    """Return whether a callable explicitly declares a named parameter."""
+
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError):
+        return False
+    return parameter_name in signature.parameters
+
+
+def _sevennet_supported_accelerator_tags() -> Dict[str, str]:
+    """Return supported SevenNet accelerator BCAR tags keyed by kwarg name."""
+
+    if SevenNetCalculator is None or _SEVENNET_PACKAGE != "sevenn":
+        return {}
+
+    supported: Dict[str, str] = {}
+    for kwarg_name, tag_name in (
+        ("enable_cueq", "SEVENNET_ENABLE_CUEQ"),
+        ("enable_flash", "SEVENNET_ENABLE_FLASH"),
+        ("enable_oeq", "SEVENNET_ENABLE_OEQ"),
+    ):
+        if _callable_declares_parameter(SevenNetCalculator, kwarg_name):
+            supported[kwarg_name] = tag_name
+    return supported
+
+
+def _sevennet_supports_modal() -> bool:
+    """Return whether the loaded SevenNet calculator supports modal selection."""
+
+    return SevenNetCalculator is not None and _callable_declares_parameter(
+        SevenNetCalculator, "modal"
+    )
+
+
+def _is_sevennet_flash_available() -> bool:
+    """Return whether FlashTP is available through the current SevenNet install."""
+
+    if _SEVENNET_PACKAGE != "sevenn":
+        return False
+    try:
+        module = importlib.import_module("sevenn.nn.flash_helper")
+    except Exception:
+        return False
+    checker = getattr(module, "is_flash_available", None)
+    if callable(checker):
+        try:
+            return bool(checker())
+        except Exception:
+            return False
+    return False
+
+
+def _build_sevennet_family_calculator(
+    bcar_tags: Dict[str, str], *, force_flash: bool = False
+):
+    """Create a SevenNet-family calculator from BCAR tags."""
+
+    backend_name = "FlashTP" if force_flash else "SevenNet"
+    if SevenNetCalculator is None:
+        install_message = (
+            "Install sevenn (preferred)"
+            if not force_flash
+            else "Install sevenn plus flashTP_e3nn"
+        )
+        raise RuntimeError(f"{backend_name} calculator not available. {install_message}.")
+
+    file_type = _normalize_sevennet_file_type(bcar_tags.get("SEVENNET_FILE_TYPE"))
+    modal = bcar_tags.get("SEVENNET_MODAL")
+    model_value = bcar_tags.get("MODEL") or DEFAULT_SEVENNET_MODEL
+    device = _resolve_device(bcar_tags.get("DEVICE")) or "cpu"
+    enable_cueq, enable_flash, enable_oeq = _resolve_sevennet_accelerators(
+        bcar_tags,
+        force_flash=force_flash,
+    )
+    supported_accelerators = _sevennet_supported_accelerator_tags()
+
+    if file_type != "checkpoint" and (
+        enable_flash is True or enable_cueq is True or enable_oeq is True
+    ):
+        raise ValueError(
+            f"{backend_name} accelerator flags require SEVENNET_FILE_TYPE=checkpoint."
+        )
+
+    if os.path.exists(model_value):
+        model_spec: str | Path = model_value
+    elif _looks_like_filesystem_path(
+        model_value,
+        suffixes=(".pt", ".pth", ".ckpt", ".jit", ".ts"),
+    ):
+        raise FileNotFoundError(f"{backend_name} model not found: {model_value}")
+    else:
+        model_spec = model_value
+
+    unsupported_accelerators = [
+        tag_name
+        for kwarg_name, tag_name, flag_value in (
+            ("enable_cueq", "SEVENNET_ENABLE_CUEQ", enable_cueq),
+            ("enable_flash", "SEVENNET_ENABLE_FLASH", enable_flash),
+            ("enable_oeq", "SEVENNET_ENABLE_OEQ", enable_oeq),
+        )
+        if flag_value is True and kwarg_name not in supported_accelerators
+    ]
+    if unsupported_accelerators:
+        tags_text = ", ".join(unsupported_accelerators)
+        raise RuntimeError(f"The installed SevenNet backend does not support {tags_text}.")
+
+    if enable_flash is True and not _is_sevennet_flash_available():
+        raise RuntimeError(
+            "FlashTP is not available. Install flashTP_e3nn and ensure CUDA is visible."
+        )
+
+    kwargs: Dict[str, Any] = {"model": model_spec, "device": device}
+    if _callable_declares_parameter(SevenNetCalculator, "file_type"):
+        kwargs["file_type"] = file_type
+    elif file_type != "checkpoint":
+        raise RuntimeError(
+            "The installed SevenNet backend does not support SEVENNET_FILE_TYPE."
+        )
+
+    if modal is not None:
+        if not _sevennet_supports_modal():
+            raise RuntimeError(
+                "The installed SevenNet backend does not support SEVENNET_MODAL."
+            )
+        kwargs["modal"] = modal
+
+    if "enable_cueq" in supported_accelerators:
+        kwargs["enable_cueq"] = enable_cueq
+    if "enable_flash" in supported_accelerators:
+        kwargs["enable_flash"] = enable_flash
+    if "enable_oeq" in supported_accelerators:
+        kwargs["enable_oeq"] = enable_oeq
+
+    return SevenNetCalculator(**kwargs)
+
+
+def _build_sevennet_calculator(bcar_tags: Dict[str, str]):
+    """Create the SevenNet ASE calculator configured from BCAR tags."""
+
+    return _build_sevennet_family_calculator(bcar_tags, force_flash=False)
+
+
+def _build_flashtp_calculator(bcar_tags: Dict[str, str]):
+    """Create a FlashTP-accelerated SevenNet ASE calculator."""
+
+    return _build_sevennet_family_calculator(bcar_tags, force_flash=True)
+
+
+def _get_equflash_calculator_cls():
+    """Return the optional EquFlash ASE calculator class when installed."""
+
+    for module_name in ("GGNN.common.calculator", "ggnn.common.calculator"):
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            continue
+        calculator_cls = getattr(module, "UCalculator", None)
+        if calculator_cls is not None:
+            return calculator_cls
+    return None
+
+
+def _build_equflash_calculator(bcar_tags: Dict[str, str]):
+    """Create the EquFlash ASE calculator configured from BCAR tags."""
+
+    calculator_cls = _get_equflash_calculator_cls()
+    if calculator_cls is None:
+        raise RuntimeError(
+            "EquFlash calculator not available. Install the EquFlash/GGNN package "
+            "that exposes GGNN.common.calculator.UCalculator and its dependencies."
+        )
+
+    model_value = bcar_tags.get("MODEL")
+    if not model_value:
+        raise ValueError(
+            "EquFlash requires MODEL pointing to a local checkpoint file. "
+            "Public checkpoints are not currently bundled."
+        )
+    if not os.path.exists(model_value):
+        if _looks_like_filesystem_path(
+            model_value,
+            suffixes=(".pt", ".pth", ".ckpt", ".tar"),
+        ):
+            raise FileNotFoundError(f"EquFlash model not found: {model_value}")
+        raise ValueError(
+            "EquFlash currently requires MODEL pointing to a local checkpoint file."
+        )
+
+    device = _resolve_device(bcar_tags.get("DEVICE")) or "cpu"
+    cpu_flag = str(device).strip().lower().startswith("cpu")
+    kwargs: Dict[str, Any] = {"checkpoint_path": model_value}
+    if _callable_supports_parameter(calculator_cls, "cpu"):
+        kwargs["cpu"] = cpu_flag
+    if _callable_supports_parameter(calculator_cls, "device"):
+        kwargs["device"] = device
+    return calculator_cls(**kwargs)
+
+
 def _build_upet_calculator(bcar_tags: Dict[str, str]):
     """Create the UPET ASE calculator configured from BCAR tags."""
 
@@ -3002,7 +3274,12 @@ def _callable_supports_parameter(callable_obj: object, parameter_name: str) -> b
         signature = inspect.signature(callable_obj)
     except (TypeError, ValueError):
         return False
-    return parameter_name in signature.parameters
+    if parameter_name in signature.parameters:
+        return True
+    return any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
 
 
 def _build_tace_calculator(bcar_tags: Dict[str, str]):
@@ -3435,10 +3712,6 @@ def _build_deepmd_calculator(bcar_tags: Dict[str, str], structure=None):
 
 
 _SIMPLE_CALCULATORS: Dict[str, tuple[str, str]] = {
-    "SEVENNET": (
-        "SevenNetCalculator",
-        "SevenNetCalculator not available. Install sevennet.",
-    ),
     "MATTERSIM": (
         "MatterSimCalculator",
         "MatterSimCalculator not available. Install mattersim and dependencies.",
@@ -3450,6 +3723,8 @@ _CALCULATOR_BUILDERS: Dict[str, str] = {
     "CHGNET": "_build_chgnet_calculator",
     "MATGL": "_build_m3gnet_calculator",
     "M3GNET": "_build_m3gnet_calculator",
+    "SEVENNET": "_build_sevennet_calculator",
+    "FLASHTP": "_build_flashtp_calculator",
     "MACE": "_build_mace_calculator",
     "EQNORM": "_build_eqnorm_calculator",
     "MATRIS": "_build_matris_calculator",
@@ -3468,6 +3743,7 @@ _CALCULATOR_BUILDERS: Dict[str, str] = {
     "FAIRCHEM_V1": "_build_fairchem_v1_calculator",
     "GRACE": "_build_grace_calculator",
     "DEEPMD": "_build_deepmd_calculator",
+    "EQUFLASH": "_build_equflash_calculator",
 }
 
 

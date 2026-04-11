@@ -2,7 +2,7 @@
 
 VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is a lightweight engine that **reads and writes VASP-style inputs/outputs** and performs **molecular dynamics and structure relaxations** using **machine-learning interatomic potentials**. Keep familiar VASP workflows and artifacts while computations run through ASE-compatible ML calculators. The `vpmdk` command (and legacy `vpmdk.py` wrapper) are provided.
 
-**Supported calculators (via ASE):** **CHGNet**, **SevenNet**, **MatterSim**, **MACE**, **Matlantis**, **Eqnorm**, **MatRIS**, **AlphaNet**, **HIENet**, **Nequix**, **NequIP**, **Allegro**, **ORB**, **UPET**, **TACE**, **MatGL** (via the M3GNet model), **FAIRChem** (including eSEN checkpoints), **GRACE** (TensorPotential foundation models or checkpoints), and **DeePMD-kit**. Availability depends on the corresponding Python packages being installed.
+**Supported calculators (via ASE):** **CHGNet**, **SevenNet**, **FlashTP** (via SevenNet), **MatterSim**, **MACE**, **Matlantis**, **Eqnorm**, **MatRIS**, **AlphaNet**, **HIENet**, **Nequix**, **NequIP**, **Allegro**, **ORB**, **UPET**, **TACE**, **EquFlash**, **MatGL** (via the M3GNet model), **FAIRChem** (including eSEN checkpoints), **GRACE** (TensorPotential foundation models or checkpoints), and **DeePMD-kit**. Availability depends on the corresponding Python packages being installed.
 
 *Not affiliated with, endorsed by, or a replacement for VASP; “VASP” is a trademark of its respective owner. VPMDK only mimics VASP I/O conventions for compatibility.*
 
@@ -20,8 +20,9 @@ pip install vpmdk
    `INCAR`, `POTCAR`, and `BCAR`. `KPOINTS`, `WAVECAR`, and `CHGCAR` are
    recognised but ignored (a note is printed if they are present).
 2. Install requirements: `ase`, `pymatgen` and, depending on the potential you
-   wish to use, `chgnet`, `mattersim`, `mace-torch`, `matgl`, `eqnorm`,
-   `matris`, `alphanet`, `hienet`, `nequix`, `upet`, or `tace`.
+   wish to use, `chgnet`, `sevenn`, `flashTP_e3nn`, `mattersim`, `mace-torch`,
+   `matgl`, `eqnorm`, `matris`, `alphanet`, `hienet`, `nequix`, `upet`, `tace`,
+   or the EquFlash/GGNN package that exposes `GGNN.common.calculator.UCalculator`.
 3. Run:
 
    ```bash
@@ -99,8 +100,8 @@ DEVICE=cuda           # Optional device override when the backend supports it
 
 | Tag | Meaning | Default |
 |-----|---------|---------|
-| `MLP` | Backend name (`CHGNET`, `MACE`, `MATGL`, `MATLANTIS`, `MATTERSIM`, `EQNORM`, `MATRIS`, `ALPHANET`, `HIENET`, `NEQUIX`, `NEQUIP`, `ALLEGRO`, `ORB`, `UPET`, `TACE`, `FAIRCHEM`, `FAIRCHEM_V2`, `FAIRCHEM_V1`, `GRACE`, `DEEPMD`, `SEVENNET`) | `CHGNET` |
-| `MODEL` | Path to a trained parameter set (Eqnorm accepts local `.pt` / `.pth` checkpoints or named models such as `eqnorm-mptrj`; MatRIS accepts local `.pth.tar` checkpoints or named models such as `matris_10m_oam`; AlphaNet accepts local `.ckpt` / `.pt` checkpoints or named models such as `AlphaNet-MATPES-r2scan`; HIENet accepts local `.pth` / `.pt` / `.ckpt` checkpoints or the named model `HIENet-0`; Nequix accepts local `.nqx` / `.pt` checkpoints or named models such as `nequix-mp-1`; ORB accepts checkpoints; UPET also accepts model names such as `pet-oam-xl`; TACE also accepts foundation-model names such as `TACE-v1-OMat24-M`; FAIRChem also accepts model names such as `esen-sm-direct-all-oc25`) | Backend default or bundled weights |
+| `MLP` | Backend name (`CHGNET`, `MACE`, `MATGL`, `MATLANTIS`, `MATTERSIM`, `EQNORM`, `MATRIS`, `ALPHANET`, `HIENET`, `NEQUIX`, `NEQUIP`, `ALLEGRO`, `ORB`, `UPET`, `TACE`, `FAIRCHEM`, `FAIRCHEM_V2`, `FAIRCHEM_V1`, `GRACE`, `DEEPMD`, `SEVENNET`, `FLASHTP`, `EQUFLASH`) | `CHGNET` |
+| `MODEL` | Path to a trained parameter set (Eqnorm accepts local `.pt` / `.pth` checkpoints or named models such as `eqnorm-mptrj`; MatRIS accepts local `.pth.tar` checkpoints or named models such as `matris_10m_oam`; AlphaNet accepts local `.ckpt` / `.pt` checkpoints or named models such as `AlphaNet-MATPES-r2scan`; HIENet accepts local `.pth` / `.pt` / `.ckpt` checkpoints or the named model `HIENet-0`; Nequix accepts local `.nqx` / `.pt` checkpoints or named models such as `nequix-mp-1`; SevenNet and FlashTP accept local checkpoints or named models such as `7net-0`; ORB accepts checkpoints; UPET also accepts model names such as `pet-oam-xl`; TACE also accepts foundation-model names such as `TACE-v1-OMat24-M`; FAIRChem also accepts model names such as `esen-sm-direct-all-oc25`; EquFlash currently requires a local checkpoint file) | Backend default or bundled weights |
 | `DEVICE` | Device hint for backends that support it (`cpu`, `cuda`, `cuda:N`) | Auto-detects GPU when available |
 
 `NNP` is accepted as a backward-compatible alias of `MLP`.
@@ -126,6 +127,11 @@ DEVICE=cuda           # Optional device override when the backend supports it
 | `MATLANTIS_MODEL_VERSION` | Matlantis | Estimator version identifier | `v8.0.0` |
 | `MATLANTIS_PRIORITY` | Matlantis | Job priority forwarded to the estimator | `50` |
 | `MATLANTIS_CALC_MODE` | Matlantis | Calculation mode (`CRYSTAL`, `MOLECULE`, …) | `PBE` |
+| `SEVENNET_MODAL` | SevenNet / FlashTP | Modal key forwarded to the installed SevenNet calculator | Model default |
+| `SEVENNET_FILE_TYPE` | SevenNet / FlashTP | Model serialization type (`checkpoint`, `torchscript`) | `checkpoint` |
+| `SEVENNET_ENABLE_CUEQ` | SevenNet / FlashTP | Enable cuEquivariance acceleration when the installed `sevenn` backend exposes it (`1` to enable) | Unset |
+| `SEVENNET_ENABLE_FLASH` | SevenNet / FlashTP | Enable FlashTP acceleration when the installed `sevenn` backend exposes it (`1` to enable); `MLP=FLASHTP` forces this on | Unset |
+| `SEVENNET_ENABLE_OEQ` | SevenNet / FlashTP | Enable OpenEquivariance acceleration when the installed `sevenn` backend exposes it (`1` to enable) | Unset |
 | `ORB_MODEL` | ORB | Pretrained architecture key recognised by `orb_models` | `orb-v3-conservative-20-omat` |
 | `ORB_PRECISION` | ORB | Floating-point precision string forwarded to orb-models loaders | `float32-high` |
 | `ORB_COMPILE` | ORB | Whether to `torch.compile` the ORB model (`0/1`, `true/false`, …) | Library default |
@@ -217,6 +223,40 @@ use FAIRChem v2 checkpoints via `FAIRChemCalculator.from_model_checkpoint`, and
 `OCPCalculator`. Switching conda environments per checkpoint version is supported by
 selecting the appropriate tag.
 
+SevenNet calculations rely on the [SevenNet](https://github.com/MDIL-SNU/SevenNet)
+package. VPMDK prefers `sevenn.calculator.SevenNetCalculator` and falls back to the
+legacy `sevennet.ase` backend when necessary. Omitting `MODEL` uses the named model
+`7net-0`; set `MODEL=/path/to/model.ckpt` to use a local checkpoint instead. Optional
+tags such as `SEVENNET_MODAL` and `SEVENNET_FILE_TYPE` are forwarded only when the
+installed backend exposes the corresponding parameters.
+
+FlashTP calculations are selected with `MLP=FLASHTP`. This is a SevenNet-backed path
+that forces `enable_flash=True`, so it requires the modern `sevenn` package plus a
+working [flashTP](https://github.com/SNU-ARC/flashTP) / `flashTP_e3nn` build. FlashTP
+currently requires `SEVENNET_FILE_TYPE=checkpoint`, a CUDA-visible runtime, and
+`sevenn.nn.flash_helper.is_flash_available()` to return `True`.
+
+One practical installation flow is:
+
+```bash
+git clone https://github.com/SNU-ARC/flashTP.git
+cd flashTP
+pip install -r requirements.txt
+CUDA_ARCH_LIST="80;90" pip install . --no-build-isolation
+```
+
+Set `CUDA_ARCH_LIST` to your GPU generation, for example `70` for TITAN V, `80` for
+A100, or `90` for H100. The installed `sevenn` version also determines which
+accelerator flags are accepted. VPMDK forwards `SEVENNET_ENABLE_CUEQ`,
+`SEVENNET_ENABLE_FLASH`, and `SEVENNET_ENABLE_OEQ` only when the active SevenNet
+calculator explicitly declares those keyword arguments.
+
+EquFlash calculations are selected with `MLP=EQUFLASH`. VPMDK expects a Python package
+that exposes `GGNN.common.calculator.UCalculator` (or `ggnn.common.calculator`) plus a
+local checkpoint specified in `MODEL`. Public named models are not bundled, and the
+public matbench-discovery EquFlash entry currently does not provide a downloadable
+checkpoint, so `MODEL` must point to a checkpoint you already have locally.
+
 ## Output files
 
 Depending on the calculation type, VPMDK produces the following files in VASP format:
@@ -266,7 +306,8 @@ selected potential or thermostat:
 | Feature | Module to install | Notes |
 |---------|-------------------|-------|
 | CHGNet potential | `chgnet` (uses PyTorch) | Bundled with a default model; specify `MODEL` to use another |
-| SevenNet potential | `sevennet` (uses PyTorch) | Bundled with a default model; specify `MODEL` to use another |
+| SevenNet potential | `sevenn` (preferred) or legacy `sevennet` (uses PyTorch) | Uses the named model `7net-0` by default; `MODEL` may also point to a local checkpoint |
+| FlashTP potential | `sevenn` + `flashTP_e3nn` (uses PyTorch/CUDA) | Selected with `MLP=FLASHTP`; requires a successful FlashTP build and CUDA-visible runtime |
 | NequIP potential | `nequip` (uses PyTorch) | `MODEL` should point to a deployed model file; compiled/TorchScript models are also accepted when supported by the NequIP version (`from_compiled_model`) |
 | Allegro potential | `allegro` (uses PyTorch and depends on `nequip`) | `MODEL` should point to a deployed model file; compiled/TorchScript models are also accepted when supported by the NequIP version (`from_compiled_model`) |
 | MatGL (M3GNet) potential | `matgl` (uses PyTorch + DGL or JAX, depending on install) | Bundled with a default model; specify `MODEL` to use another. MatGL 1.x commonly expects a model directory passed through `matgl.load_model`. |
@@ -282,6 +323,7 @@ selected potential or thermostat:
 | UPET potential | `upet` (PyTorch) | Set `MODEL` to a local `.ckpt` checkpoint or a named model such as `pet-oam-xl`; optionally set `UPET_VERSION`/`UPET_NON_CONSERVATIVE` |
 | TACE potential | `TACE==0.1.0` (PyTorch) | Set `MODEL` to a local checkpoint or a named foundation model such as `TACE-v1-OMat24-M`; optionally set `TACE_DTYPE` / `TACE_FIDELITY_IDX` / `TACE_SPIN_ON` |
 | MatterSim potential | `mattersim` (PyTorch) | Set `MODEL` to the trained parameters |
+| EquFlash potential | EquFlash/GGNN package exposing `GGNN.common.calculator.UCalculator` | Requires `MODEL` pointing to a local checkpoint; no bundled public named model is currently assumed |
 | GRACE potential | `grace-tensorpotential` (TensorFlow) | Uses TensorPotential checkpoints (`MODEL=/path/to/model`) or foundation models when available |
 | Andersen thermostat | `ase.md.andersen` (part of ASE extras) | Install ASE with MD extras to enable |
 | Langevin thermostat | `ase.md.langevin` | Ships with ASE; ensure ASE is up to date |
@@ -295,28 +337,29 @@ version of PyTorch or JAX if you want to use GPUs.
 
 The model file is loaded from the path given by `MODEL` in `BCAR`. Typically the
 file is located within the calculation directory or specified via an absolute
-path. CHGNet, MatGL, Eqnorm, MatRIS, AlphaNet, HIENet, and Nequix ship with default
-models; omitting `MODEL` uses those defaults automatically. Eqnorm can resolve
-`eqnorm-mptrj` by downloading the official checkpoint into `~/.cache/eqnorm`
-when `MODEL` is not a filesystem path. MatRIS can also resolve named models such
-as `matris_10m_oam` and `matris_10m_mp` by downloading them into
-`~/.cache/matris` when `MODEL` is not a filesystem path. AlphaNet can resolve
-named models such as `AlphaNet-MATPES-r2scan` and `AlphaNet-oma-v1` by
-downloading a checkpoint plus JSON config into `~/.cache/alphanet` when `MODEL`
-is not a filesystem path. HIENet can resolve `HIENet-0` into `~/.cache/hienet`
-when `MODEL` is not a filesystem path. Nequix can resolve named models such as
-`nequix-mp-1` and `nequix-oam-1` into `~/.cache/nequix/models` when `MODEL` is
-not a filesystem path. UPET can also resolve named models such as
-`pet-oam-xl` through the `upet` package when `MODEL` is not a filesystem path.
-TACE can resolve named foundation models such as `TACE-v1-OMat24-M` through the
-`tace_foundations` registry.
+path. CHGNet, MatGL, SevenNet, Eqnorm, MatRIS, AlphaNet, HIENet, and Nequix ship
+with default or named models; omitting `MODEL` uses those defaults automatically
+when supported. SevenNet and FlashTP default to `7net-0` when `MODEL` is omitted.
+Eqnorm can resolve `eqnorm-mptrj` by downloading the official checkpoint into
+`~/.cache/eqnorm` when `MODEL` is not a filesystem path. MatRIS can also resolve
+named models such as `matris_10m_oam` and `matris_10m_mp` by downloading them into
+`~/.cache/matris` when `MODEL` is not a filesystem path. AlphaNet can resolve named
+models such as `AlphaNet-MATPES-r2scan` and `AlphaNet-oma-v1` by downloading a
+checkpoint plus JSON config into `~/.cache/alphanet` when `MODEL` is not a
+filesystem path. HIENet can resolve `HIENet-0` into `~/.cache/hienet` when `MODEL`
+is not a filesystem path. Nequix can resolve named models such as `nequix-mp-1`
+and `nequix-oam-1` into `~/.cache/nequix/models` when `MODEL` is not a filesystem
+path. UPET can also resolve named models such as `pet-oam-xl` through the `upet`
+package when `MODEL` is not a filesystem path. TACE can resolve named foundation
+models such as `TACE-v1-OMat24-M` through the `tace_foundations` registry.
+EquFlash currently requires a local checkpoint path and does not resolve named models.
 
 ### GPU usage
 
 This script does not directly manage GPU settings. Each potential selects a
-device on its own. CHGNet, MatGL/M3GNet, MACE, Eqnorm, MatRIS, AlphaNet, ORB,
-HIENet, UPET, TACE, and FAIRChem honour `DEVICE` in `BCAR` (e.g. `DEVICE=cpu` to force
-a CPU run). Nequix supports `DEVICE` when `NEQUIX_BACKEND=torch`; on the JAX
+device on its own. CHGNet, MatGL/M3GNet, SevenNet, FlashTP, MACE, Eqnorm, MatRIS,
+AlphaNet, ORB, HIENet, UPET, TACE, EquFlash, and FAIRChem honour `DEVICE` in `BCAR`
+(e.g. `DEVICE=cpu` to force a CPU run). Nequix supports `DEVICE` when `NEQUIX_BACKEND=torch`; on the JAX
 backend, placement follows the active JAX runtime (`JAX_PLATFORMS`,
 `CUDA_VISIBLE_DEVICES`, etc.). With CUDA devices you can choose which GPU to use
 with `CUDA_VISIBLE_DEVICES`. MatGL GPU tuning is backend-dependent
