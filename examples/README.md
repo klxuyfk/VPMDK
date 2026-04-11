@@ -7,6 +7,7 @@ Three runnable examples with pre-generated outputs in each `reference/` director
 - `relax_chgnet`: ionic relaxation with CHGNet
 - `md_mace`: short MD run with MACE
 - `neb_nequip_vtst`: NEB-style run with NequIP + VTST `nebresults.pl`
+- `uspex_9_4_4_si`: USPEX 9.4.4 input deck showing `vpmdk` as a drop-in executable in a VASP-oriented structure-search workflow
 
 ## Run
 
@@ -28,3 +29,4 @@ From repository root:
 - No checkpoint or VTST source code is stored in this repository.
 - `reference/` is only an easy-to-read example of expected output style.
 - Numerical values can change with checkpoint/model selection, so these examples are not intended as V&V baselines.
+- `uspex_9_4_4_si` is a workflow-integration example rather than a standalone runnable calculation. It intentionally omits proprietary VASP pseudopotential content.
