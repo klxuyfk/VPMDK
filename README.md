@@ -1,53 +1,204 @@
 # VPMDK
 
-VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is a lightweight engine that **reads and writes VASP-style inputs/outputs** and performs **molecular dynamics and structure relaxations** using **machine-learning interatomic potentials**. Keep familiar VASP workflows and artifacts while computations run through ASE-compatible ML calculators. The `vpmdk` command (and legacy `vpmdk.py` wrapper) are provided.
+VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is a lightweight engine that reads and writes VASP-style inputs and outputs while running molecular dynamics, relaxations, and single-point calculations with ASE-compatible machine-learning interatomic potentials.
 
-**Supported calculators (via ASE):** **CHGNet**, **SevenNet**, **MatterSim**, **MACE**, **Matlantis**, **NequIP**, **Allegro**, **ORB**, **MatGL** (via the M3GNet model), **FAIRChem** (including eSEN checkpoints), **GRACE** (TensorPotential foundation models or checkpoints), and **DeePMD-kit**. Availability depends on the corresponding Python packages being installed.
+It keeps familiar VASP artifacts such as `POSCAR`, `INCAR`, `OUTCAR`, `OSZICAR`, and `vasprun.xml`, while the actual calculator is an ML potential.
+
+Supported calculators currently include **CHGNet**, **SevenNet**, **FlashTP** (via SevenNet), **EquFlash** (with a local checkpoint), **MatterSim**, **MACE**, **Matlantis**, **Eqnorm**, **MatRIS**, **AlphaNet**, **HIENet**, **Nequix**, **NequIP**, **Allegro**, **ORB**, **UPET**, **TACE**, **MatGL** (via M3GNet), **FAIRChem**, **GRACE**, and **DeePMD-kit**. Availability depends on which Python packages are installed.
 
 *Not affiliated with, endorsed by, or a replacement for VASP; “VASP” is a trademark of its respective owner. VPMDK only mimics VASP I/O conventions for compatibility.*
 
+## Quick Start
+
+### 1. Install VPMDK and one backend
+
+The fastest way to start is CHGNet:
+
+```bash
+pip install vpmdk chgnet
+```
+
+If you want another backend, install `vpmdk` plus the corresponding package such as `mace-torch`, `matgl`, `matris`, `sevenn`, `eqnorm`, or `orb-models`.
+
+### 2. Prepare the current working directory
+
+You always need `POSCAR`.
+
+- `INCAR` is optional, but usually present
+- `BCAR` is optional, but usually the easiest way to choose a backend and model
+- `POTCAR` is accepted for compatibility and species alignment, but is not used as a real pseudopotential input
+- `KPOINTS`, `WAVECAR`, and `CHGCAR` are ignored
+
+The typical workflow is to enter the directory that already contains your VASP-style inputs and run VPMDK there:
+
+```text
+.
+├── POSCAR
+├── INCAR
+└── BCAR
+```
+
+### 3. Start from one of these minimal inputs
+
+Single-point calculation:
+
+`INCAR`
+
+```text
+IBRION = -1
+NSW = 0
+```
+
+`BCAR`
+
+```text
+MLP=CHGNET
+DEVICE=cuda
+```
+
+Geometry relaxation:
+
+`INCAR`
+
+```text
+IBRION = 2
+NSW = 200
+EDIFFG = -0.02
+ISIF = 3
+```
+
+`BCAR`
+
+```text
+MLP=CHGNET
+DEVICE=cuda
+```
+
+Molecular dynamics:
+
+`INCAR`
+
+```text
+IBRION = 0
+NSW = 1000
+POTIM = 1.0
+TEBEG = 300
+TEEND = 300
+MDALGO = 3
+```
+
+`BCAR`
+
+```text
+MLP=MATRIS
+MODEL=matris_10m_oam
+DEVICE=cuda
+```
+
+### 4. Run
+
+```bash
+vpmdk
+```
+
+### 5. Check the outputs
+
+Typical outputs are:
+
+- `CONTCAR`
+- `OUTCAR`
+- `OSZICAR`
+- `vasprun.xml`
+- `XDATCAR` for MD runs
+
+## Input Overview
+
+### What Each File Does
+
+| File | Required | Purpose |
+|------|----------|---------|
+| `POSCAR` | Yes | Structure, lattice, species, and coordinates |
+| `INCAR` | No | Run mode and control parameters such as MD vs relaxation |
+| `BCAR` | No | Backend selection, model selection, device, and backend-specific knobs |
+| `POTCAR` | No | Species-name compatibility only |
+
+If `BCAR` is omitted, VPMDK defaults to `MLP=CHGNET`.
+
+### Most-Used INCAR Tags
+
+These are the tags most users actually need first:
+
+| Tag | What it controls | Typical values |
+|-----|------------------|----------------|
+| `IBRION` | Run mode | `-1` single-point, `0` MD, `2` relaxation |
+| `NSW` | Number of steps | `0`, `100`, `1000`, ... |
+| `EDIFFG` | Relaxation stopping criterion | `-0.02` is a common force threshold |
+| `ISIF` | Whether the cell relaxes | `2` fixed cell, `3` relax ions + cell |
+| `POTIM` | MD time step in fs | `1.0` to `2.0` |
+| `TEBEG`, `TEEND` | MD temperature range | `300`, `1000`, ... |
+| `MDALGO` | MD thermostat/integrator | `0` NVE, `3` Langevin, `5` Bussi |
+| `MAGMOM` | Initial magnetic moments | VASP-style syntax such as `2*1.0 4*0.0` |
+
+### Most-Used BCAR Tags
+
+These are the tags most users need to understand immediately:
+
+| Tag | What it controls | Typical values |
+|-----|------------------|----------------|
+| `MLP` | Backend name | `CHGNET`, `MACE`, `MATGL`, `MATRIS`, ... |
+| `MODEL` | Checkpoint path or named model | `/path/to/model.pt`, `matris_10m_oam`, `7net-0`, ... |
+| `DEVICE` | Device hint | `cpu`, `cuda`, `cuda:0` |
+| `MATRIS_TASK` | MatRIS task | `e`, `ef`, `efs`, `efsm` |
+| `GRAPH_CONVERTER` / `GRAPH_CONVERTER_ALGORITHM` | CHGNet / MatRIS graph converter | `fast`, `legacy` |
+| `WRITE_PSEUDO_SCF` | Emit pseudo-SCF compatibility blocks | `0`, `1` |
+| `WRITE_LAMMPS_TRAJ` | Write `lammps.lammpstrj` during MD | `0`, `1` |
+| `LAMMPS_TRAJ_INTERVAL` | Trajectory write interval | `1`, `10`, ... |
+
+Backend-specific graph converter overrides take precedence over the shared tags:
+
+- `CHGNET_GRAPH_CONVERTER`
+- `CHGNET_GRAPH_CONVERTER_ALGORITHM`
+- `MATRIS_GRAPH_CONVERTER`
+- `MATRIS_GRAPH_CONVERTER_ALGORITHM`
+
 ## Installation
 
-Install the package from PyPI (or from a checkout):
+Install from PyPI:
 
 ```bash
 pip install vpmdk
 ```
 
-## Usage
-
-1. Prepare a directory containing at least `POSCAR`. Optional files are
-   `INCAR`, `POTCAR`, and `BCAR`. `KPOINTS`, `WAVECAR`, and `CHGCAR` are
-   recognised but ignored (a note is printed if they are present).
-2. Install requirements: `ase`, `pymatgen` and, depending on the potential you
-   wish to use, `chgnet`, `mattersim`, `mace-torch` or `matgl`.
-3. Run:
-
-   ```bash
-   vpmdk [--dir PATH_TO_INPUT]
-   ```
-
-If `--dir` is omitted, the current directory (`.`) is used.
-
-When running directly from a repository checkout, the legacy wrapper still works:
+Or from a checkout:
 
 ```bash
-python vpmdk.py [--dir PATH_TO_INPUT]
+pip install -e .
 ```
 
-## Input files
+You will also need:
 
-Calculation directories may contain the following files:
+- `ase`
+- `pymatgen`
+- one or more backend packages such as `chgnet`, `mace-torch`, `matgl`, `matris`, `sevenn`, `eqnorm`, `alphanet`, `hienet`, `nequix`, `upet`, `tace`, `orb-models`, `nequip`, or `deepmd-kit`
 
-- `POSCAR` *(required)* – atomic positions and cell.
-- `INCAR` – VASP-style run parameters; only a subset of tags is supported.
-- `BCAR` – simple `key=value` file selecting the machine-learning potential.
-- `POTCAR` – accepted for compatibility but ignored except for aligning species
-  names.
+Install the GPU-enabled build of PyTorch or JAX if you want GPU execution.
 
-### Supported INCAR tags
+## Optional Compatibility Modes
 
-The script reads a subset of common VASP `INCAR` settings. Other tags are ignored with a warning.
+The standard workflow is to run `vpmdk` in the current working directory.
+
+If needed, VPMDK also supports:
+
+- `vpmdk --dir calc_dir`
+  Run against a different input directory without changing the current directory.
+- `python vpmdk.py`
+  Legacy wrapper from a repository checkout.
+
+## Detailed INCAR Reference
+
+### Supported INCAR Tags
+
+VPMDK reads a subset of common VASP `INCAR` settings. Other tags are ignored with a warning.
 
 | Tag | Meaning | Default / Notes |
 |-----|---------|-----------------|
@@ -59,7 +210,7 @@ The script reads a subset of common VASP `INCAR` settings. Other tags are ignore
 | `TEEND` | Final temperature in kelvin when ramping MD runs. | Same as `TEBEG`. Temperature is linearly ramped between `TEBEG` and `TEEND` over the MD steps. |
 | `POTIM` | Time step in femtoseconds for molecular dynamics (`IBRION=0`). | `2`. |
 | `MDALGO` | Selects the MD integrator / thermostat. | `0` (NVE). When left at `0`, `SMASS>0` falls back to Nose–Hoover (`MDALGO=2`) and `SMASS<0` falls back to Langevin (`MDALGO=3`). See [MD algorithms](#md-algorithms) for details. |
-| `SMASS` | Thermostat-specific mass parameter. | Used for Nose–Hoover time constant (`abs(SMASS)` fs) or as a fallback to set `LANGEVIN_GAMMA` when negative. |
+| `SMASS` | Thermostat-specific mass parameter. | Used for Nose–Hoover time constant (`abs(SMASS)` fs) or as a fallback to set `LANGEVIN_GAMMA` when negative. |
 | `ANDERSEN_PROB` | Collision probability for the Andersen thermostat. | `0.1`. Only used with `MDALGO=1`. |
 | `LANGEVIN_GAMMA` | Friction coefficient (1/ps) for Langevin dynamics. | `1.0`. Only used with `MDALGO=3`; falls back to `abs(SMASS)` when `SMASS<0`. |
 | `CSVR_PERIOD` | Relaxation time (fs) for the canonical sampling velocity rescaling thermostat. | `max(100×POTIM, POTIM)`. Only used with `MDALGO=5`. |
@@ -70,7 +221,7 @@ The script reads a subset of common VASP `INCAR` settings. Other tags are ignore
 | `LCLIMB` | Climbing-image switch for NEB. | Used as a compatibility hint for VTST post-processing outputs. |
 | `SPRING` | Spring constant for NEB. | Used as a compatibility hint for VTST post-processing outputs. |
 
-### MD algorithms
+### MD Algorithms
 
 `MDALGO` selects between different ASE molecular dynamics drivers. Some options require optional ASE modules; if they are missing VPMDK falls back to plain velocity-Verlet (NVE) integration and prints a warning.
 
@@ -83,174 +234,208 @@ The script reads a subset of common VASP `INCAR` settings. Other tags are ignore
 | `4` | Nose–Hoover chain (three thermostats) | Chain length defaults to 3 unless overridden. |
 | `5` | Bussi (canonical sampling velocity rescaling) thermostat | Uses `CSVR_PERIOD`. |
 
-### BCAR tags
+## Detailed BCAR Reference
 
-`BCAR` is a concise `key=value` file that selects the backend, its weights, and a handful of quality-of-life options. A minimal
-file looks like:
+`BCAR` is a `key=value` file for backend selection, model selection, and backend-specific options.
 
+Minimal example:
+
+```text
+MLP=CHGNET
+MODEL=/path/to/model
+DEVICE=cuda
 ```
-MLP=CHGNET            # Potential backend
-MODEL=/path/to/model  # Optional path to weights (varies by backend)
-DEVICE=cuda           # Optional device override when the backend supports it
-```
 
-**Core selection.**
+### Core Selection
 
 | Tag | Meaning | Default |
 |-----|---------|---------|
-| `MLP` | Backend name (`CHGNET`, `MACE`, `MATGL`, `MATLANTIS`, `MATTERSIM`, `NEQUIP`, `ALLEGRO`, `ORB`, `FAIRCHEM`, `FAIRCHEM_V2`, `FAIRCHEM_V1`, `GRACE`, `DEEPMD`, `SEVENNET`) | `CHGNET` |
-| `MODEL` | Path to a trained parameter set (ORB accepts checkpoints; FAIRChem also accepts model names such as `esen-sm-direct-all-oc25`) | Backend default or bundled weights |
+| `MLP` | Backend name (`CHGNET`, `MACE`, `MATGL`, `MATLANTIS`, `MATTERSIM`, `EQNORM`, `MATRIS`, `ALPHANET`, `HIENET`, `NEQUIX`, `SEVENNET`, `FLASHTP`, `EQUFLASH`, `NEQUIP`, `ALLEGRO`, `ORB`, `UPET`, `TACE`, `FAIRCHEM`, `FAIRCHEM_V2`, `FAIRCHEM_V1`, `GRACE`, `DEEPMD`) | `CHGNET` |
+| `MODEL` | Path to a trained parameter set or a backend-defined named model | Backend default or bundled weights |
 | `DEVICE` | Device hint for backends that support it (`cpu`, `cuda`, `cuda:N`) | Auto-detects GPU when available |
 
 `NNP` is accepted as a backward-compatible alias of `MLP`.
 
-**Output and workflow aids.**
+### Output And Workflow Aids
 
 | Tag | Meaning | Default |
 |-----|---------|---------|
 | `WRITE_ENERGY_CSV` | Write `energy.csv` during relaxation (`1` to enable) | `0` |
 | `WRITE_LAMMPS_TRAJ` | Write a LAMMPS trajectory during MD (`1` to enable) | `0` |
 | `LAMMPS_TRAJ_INTERVAL` | MD steps between trajectory frames (only when `WRITE_LAMMPS_TRAJ=1`) | `1` |
-| `WRITE_OSZICAR_PSEUDO_SCF` | Add pseudo electronic-step (`DAV:`) lines to `OSZICAR` (`1` to enable) | `0` (OFF) |
+| `WRITE_PSEUDO_SCF` | Add pseudo electronic-step compatibility blocks to `OSZICAR`, `OUTCAR`, and `vasprun.xml` (`1` to enable) | `0` |
 | `DEEPMD_TYPE_MAP` | Comma/space-separated species list mapped to the DeePMD graph | Inferred from `POSCAR` order |
 | `DEEPMD_HEAD` | Select a DeePMD model head by name (when supported by the checkpoint) | Unset |
 
-`WRITE_PSEUDO_SCF` is accepted as a compatibility alias of
-`WRITE_OSZICAR_PSEUDO_SCF`.
+`WRITE_OSZICAR_PSEUDO_SCF` is accepted as a backward-compatible alias of `WRITE_PSEUDO_SCF`.
 
-**Backend-specific knobs.** Only relevant when the corresponding backend is chosen.
+### Backend-Specific Knobs
 
 | Tag | Applies to | Meaning | Default |
 |-----|-----------|---------|---------|
+| `GRAPH_CONVERTER` / `GRAPH_CONVERTER_ALGORITHM` | CHGNet, MatRIS | Shared graph converter selector (`fast`, `legacy`) | Upstream default |
+| `CHGNET_GRAPH_CONVERTER` / `CHGNET_GRAPH_CONVERTER_ALGORITHM` | CHGNet | CHGNet-specific graph converter selector | Shared/default behavior |
+| `MATRIS_GRAPH_CONVERTER` / `MATRIS_GRAPH_CONVERTER_ALGORITHM` | MatRIS | MatRIS-specific graph converter selector | Shared/default behavior |
 | `MATLANTIS_MODEL_VERSION` | Matlantis | Estimator version identifier | `v8.0.0` |
 | `MATLANTIS_PRIORITY` | Matlantis | Job priority forwarded to the estimator | `50` |
 | `MATLANTIS_CALC_MODE` | Matlantis | Calculation mode (`CRYSTAL`, `MOLECULE`, …) | `PBE` |
 | `ORB_MODEL` | ORB | Pretrained architecture key recognised by `orb_models` | `orb-v3-conservative-20-omat` |
-| `ORB_PRECISION` | ORB | Floating-point precision string forwarded to orb-models loaders | `float32-high` |
-| `ORB_COMPILE` | ORB | Whether to `torch.compile` the ORB model (`0/1`, `true/false`, …) | Library default |
-| `FAIRCHEM_TASK` | FAIRChem v2 (`FAIRCHEM`/`FAIRCHEM_V2`) | Task head to use (e.g. `omol`) | Auto-detected when possible |
-| `FAIRCHEM_INFERENCE_SETTINGS` | FAIRChem v2 (`FAIRCHEM`/`FAIRCHEM_V2`) | Inference profile forwarded to FAIRChem | `default` |
-| `FAIRCHEM_CONFIG` | FAIRChem v1 (`FAIRCHEM_V1`) | Path to the YAML config used with the checkpoint | Required for most checkpoints |
-| `FAIRCHEM_V1_PREDICTOR` | FAIRChem v1 (`FAIRCHEM_V1`) | Use the predictor directly instead of the OCPCalculator (`1` to enable) | `0` |
-| `GRACE_PAD_NEIGHBORS_FRACTION` | GRACE | Fake-neighbour padding fraction forwarded to TensorPotential | Library default (typically `0.05`) |
-| `GRACE_PAD_ATOMS_NUMBER` | GRACE | Number of fake atoms for padding | Library default (typically `10`) |
-| `GRACE_MAX_RECOMPILATION` | GRACE | Max recompilations triggered by padding reduction | Library default (typically `2`) |
-| `GRACE_MIN_DIST` | GRACE | Minimum allowed interatomic distance | Unset (no extra validation) |
+| `ORB_PRECISION` | ORB | Floating-point precision string forwarded to orb-model loaders | `float32-high` |
+| `ORB_COMPILE` | ORB | Whether to `torch.compile` the ORB model | Library default |
+| `EQNORM_VARIANT` | Eqnorm | Eqnorm architecture variant used with a local checkpoint (`eqnorm-mptrj`, `eqnorm-omat`, `eqnorm-max-mptrj`) | Inferred from `MODEL` filename or named-model default |
+| `EQNORM_COMPILE` | Eqnorm | Whether to `torch.compile` the Eqnorm model | `0` |
+| `MATRIS_TASK` | MatRIS | Prediction task forwarded to `MatRISCalculator` (`e`, `ef`, `efs`, `efsm`) | `efs` |
+| `ALPHANET_CONFIG` | AlphaNet | Path to the AlphaNet JSON config when `MODEL` is a local checkpoint and the config cannot be inferred | Paired config for named models or inferred sibling JSON |
+| `ALPHANET_PRECISION` | AlphaNet | Floating-point precision forwarded to the AlphaNet ASE calculator | `32` |
+| `HIENET_FILE_TYPE` | HIENet | Model serialization type accepted by `HIENetCalculator` (`checkpoint`, `torchscript`) | `checkpoint` |
+| `NEQUIX_BACKEND` | Nequix | Upstream backend (`jax` or `torch`) | `jax` |
+| `NEQUIX_USE_KERNEL` | Nequix | Enable OpenEquivariance kernels; `NEQUIX_KERNEL` is accepted as an alias | `0` |
+| `NEQUIX_USE_COMPILE` | Nequix | Enable `torch.compile` on the torch backend; `NEQUIX_COMPILE` is accepted as an alias | `0` |
+| `NEQUIX_CAPACITY_MULTIPLIER` | Nequix | JAX graph padding factor forwarded to `NequixCalculator` | `1.1` |
+| `SEVENNET_MODAL` | SevenNet / FlashTP | Multi-fidelity modal/task name forwarded to `SevenNetCalculator` | Unset |
+| `SEVENNET_FILE_TYPE` | SevenNet / FlashTP | Model serialization type (`checkpoint`, `torchscript`) | `checkpoint` |
+| `SEVENNET_ENABLE_CUEQ` | SevenNet | Enable cuEquivariance acceleration | Checkpoint default |
+| `SEVENNET_ENABLE_FLASH` | SevenNet | Enable FlashTP acceleration | Checkpoint default |
+| `SEVENNET_ENABLE_OEQ` | SevenNet | Enable OpenEquivariance acceleration when supported | Checkpoint default |
+| `UPET_VERSION` | UPET | Version string used when `MODEL` is a named model rather than a local checkpoint | Latest stable model version |
+| `UPET_NON_CONSERVATIVE` | UPET | Enable UPET direct-force/direct-stress inference | `0` |
+| `TACE_DTYPE` | TACE | Floating-point dtype forwarded to the TACE ASE calculator | Model default |
+| `TACE_FIDELITY_IDX` | TACE | Fidelity index / level for multi-fidelity models (`TACE_LEVEL` alias accepted) | Model default |
+| `TACE_SPIN_ON` | TACE | Enable spin-polarized inference when the model supports it | Model default |
+| `TACE_NEIGHBORLIST_BACKEND` | TACE | Neighbor-list backend (`matscipy`, `ase`, `vesin`) | `matscipy` |
+| `FAIRCHEM_TASK` | FAIRChem v2 | Task head to use | Auto-detected when possible |
+| `FAIRCHEM_INFERENCE_SETTINGS` | FAIRChem v2 | Inference profile forwarded to FAIRChem | `default` |
+| `FAIRCHEM_CONFIG` | FAIRChem v1 | Path to the YAML config used with the checkpoint | Required for most checkpoints |
+| `FAIRCHEM_V1_PREDICTOR` | FAIRChem v1 | Use the predictor directly instead of the OCPCalculator | `0` |
+| `GRACE_PAD_NEIGHBORS_FRACTION` | GRACE | Fake-neighbour padding fraction forwarded to TensorPotential | Library default |
+| `GRACE_PAD_ATOMS_NUMBER` | GRACE | Number of fake atoms for padding | Library default |
+| `GRACE_MAX_RECOMPILATION` | GRACE | Max recompilations triggered by padding reduction | Library default |
+| `GRACE_MIN_DIST` | GRACE | Minimum allowed interatomic distance | Unset |
 | `GRACE_FLOAT_DTYPE` | GRACE | Floating-point dtype passed to TensorPotential | `float64` |
 
-Matlantis calculations rely on the [Matlantis API](https://matlantis.com) via
-`pfp-api-client`; ensure your environment is configured with the required API
-credentials before running VPMDK with `MLP=MATLANTIS`.
+## Backend Packages And Model Conventions
 
-ORB calculations rely on the [orb-models](https://github.com/orbital-materials/orb-models)
-package. When `MODEL` is omitted, VPMDK downloads the pretrained weights specified by
-`ORB_MODEL` using orb-models; set `MODEL=/path/to/checkpoint.ckpt` to run with local weights.
+### Required Python Modules
 
-FAIRChem 2.x and 1.x are incompatible. Select `MLP=FAIRCHEM` (or `MLP=FAIRCHEM_V2`) to
-use FAIRChem v2 checkpoints via `FAIRChemCalculator.from_model_checkpoint`, and
-`MLP=FAIRCHEM_V1` when running legacy OCP/FAIRChem v1 checkpoints with
-`OCPCalculator`. Switching conda environments per checkpoint version is supported by
-selecting the appropriate tag.
+`ase` and `pymatgen` are always required. Additional modules depend on the selected potential or thermostat.
 
-## Output files
+| Feature | Module to install | Notes |
+|---------|-------------------|-------|
+| CHGNet potential | `chgnet` | Bundled with a default model; `MODEL` may also be a named CHGNet release or a local checkpoint |
+| SevenNet potential | `sevenn` | Bundled with a default model; specify `MODEL`, `SEVENNET_MODAL`, or `SEVENNET_FILE_TYPE` to override |
+| FlashTP backend | `sevenn` + `flashTP_e3nn` | Uses the SevenNet ASE calculator with `enable_flash=True` |
+| EquFlash backend | EquFlash / GGNN package exposing `GGNN.common.calculator.UCalculator` | Requires a local checkpoint via `MODEL=/path/to/equflash.ckpt` |
+| NequIP potential | `nequip` | `MODEL` should point to a deployed or compiled model file |
+| Allegro potential | `allegro` plus `nequip` | `MODEL` should point to a deployed or compiled model file |
+| MatGL (M3GNet) potential | `matgl` | Bundled with a default model; `MODEL` may be another model directory |
+| MACE potential | `mace-torch` | `MODEL` should point to a trained `.model` file |
+| DeePMD-kit potential | `deepmd-kit` | `MODEL` should point to a frozen graph or supported checkpoint |
+| Matlantis potential | `pfp-api-client` plus `matlantis-features` | Uses the Matlantis estimator service |
+| Eqnorm potential | `eqnorm` | Uses named models or local checkpoints |
+| MatRIS potential | `matris` | Uses named models such as `matris_10m_oam` or local `.pth.tar` checkpoints |
+| AlphaNet potential | `alphanet` | Uses named models or local checkpoints |
+| HIENet potential | `hienet` | Uses `HIENet-0` or local checkpoints |
+| Nequix potential | `nequix` | Uses named models or local `.nqx` / `.pt` checkpoints |
+| ORB potential | `orb-models` | Downloads pretrained weights unless `MODEL` points to a checkpoint |
+| UPET potential | `upet` | Accepts a local checkpoint or a named model such as `pet-oam-xl` |
+| TACE potential | `TACE==0.1.0` | Accepts a local checkpoint or a named foundation model |
+| MatterSim potential | `mattersim` | Set `MODEL` to the trained parameters when needed |
+| GRACE potential | `grace-tensorpotential` | Uses TensorPotential checkpoints or foundation models |
+| Andersen thermostat | `ase.md.andersen` | Optional ASE MD module |
+| Langevin thermostat | `ase.md.langevin` | Included with ASE |
+| Bussi thermostat | `ase.md.bussi` | Included in ASE >= 3.22 |
+| Nose–Hoover chain thermostat | `ase.md.nose_hoover_chain` | Included in ASE >= 3.22 |
+
+### Backend Notes
+
+Matlantis uses the [Matlantis API](https://matlantis.com) via `pfp-api-client`; configure credentials in the environment before running `MLP=MATLANTIS`.
+
+SevenNet now prefers the current `sevenn` package and `sevenn.calculator.SevenNetCalculator`. Omitting `MODEL` uses the default pretrained model `7net-0`. Use `SEVENNET_MODAL` for multi-fidelity checkpoints such as `7net-omni` or `7net-mf-ompa`.
+
+FlashTP is exposed as `MLP=FLASHTP`, which is effectively SevenNet with `enable_flash=True`. Install FlashTP separately and set `CUDA_ARCH_LIST` to match your GPU architecture.
+
+EquFlash is exposed as `MLP=EQUFLASH` for environments that provide the ASE-compatible `GGNN.common.calculator.UCalculator` entry point. Public named checkpoints are not bundled, so this path currently requires a local checkpoint.
+
+Eqnorm omits `MODEL` by default and uses `eqnorm-mptrj`, downloading the official checkpoint into `~/.cache/eqnorm` when necessary.
+
+MatRIS omits `MODEL` by default and uses `matris_10m_oam`. Named models such as `matris_10m_mp` are downloaded into `~/.cache/matris`.
+
+AlphaNet omits `MODEL` by default and uses `AlphaNet-MATPES-r2scan`. Named models and their configs are downloaded into `~/.cache/alphanet`.
+
+HIENet omits `MODEL` by default and uses `HIENet-0`, downloading the model into `~/.cache/hienet`.
+
+Nequix omits `MODEL` by default and uses `nequix-mp-1`, resolving named models through `~/.cache/nequix/models`.
+
+UPET accepts either a local checkpoint or a named model such as `pet-oam-xl`.
+
+TACE accepts either a local checkpoint or a named foundation model such as `TACE-v1-OMat24-M`.
+
+FAIRChem 2.x and 1.x are incompatible. Use `MLP=FAIRCHEM` / `FAIRCHEM_V2` for v2 checkpoints and `MLP=FAIRCHEM_V1` for legacy OCP / FAIRChem v1 checkpoints.
+
+### Where To Put Model Files
+
+If `MODEL` is a filesystem path, VPMDK loads that exact file. It can be:
+
+- inside the calculation directory
+- an absolute path elsewhere on the machine
+- a relative path from the run directory
+
+If `MODEL` is not a filesystem path, behavior depends on the backend:
+
+- some backends treat it as a named model and download / resolve it automatically
+- others expect a local checkpoint path
+- if omitted entirely, many backends fall back to a bundled or default named model
+
+## Output Files
 
 Depending on the calculation type, VPMDK produces the following files in VASP format:
 
 | File | When produced | Contents |
 |------|---------------|----------|
-| `CONTCAR` | Always | Final atomic positions and cell. |
-| `OUTCAR` | Always | VASP-like step blocks plus a simplified timing/memory footer at the end of each run. |
-| `OSZICAR` | Always | VASP-like ionic-step energy summary (`F`, `E0`, `dE`; and MD thermostat terms) with VASP-like aligned scientific notation. Optional pseudo electronic-step (`DAV:`) lines are added only when `WRITE_OSZICAR_PSEUDO_SCF=1`; these are compatibility placeholders, not real electronic SCF iterations. |
-| `vasprun.xml` | Always | Minimal VASP-like XML containing initial/final structures, per-step energies, and forces. |
-| `XDATCAR` | MD only (`IBRION=0`) | Atomic positions at each MD step (trajectory). |
-| `lammps.lammpstrj` | MD with `WRITE_LAMMPS_TRAJ=1` | LAMMPS text dump of atomic positions at the requested interval. |
-| `energy.csv` | Relaxations with `WRITE_ENERGY_CSV=1` | Potential energy at each relaxation step. |
+| `CONTCAR` | Always | Final atomic positions and cell |
+| `OUTCAR` | Always | VASP-like step blocks plus a simplified timing / memory footer |
+| `OSZICAR` | Always | Ionic-step energy summary and MD thermostat terms |
+| `vasprun.xml` | Always | Minimal VASP-like XML with structures, energies, and forces |
+| `XDATCAR` | MD only (`IBRION=0`) | Trajectory snapshots |
+| `lammps.lammpstrj` | MD with `WRITE_LAMMPS_TRAJ=1` | LAMMPS text trajectory |
+| `energy.csv` | Relaxations with `WRITE_ENERGY_CSV=1` | Per-step potential energy |
+
+When `WRITE_PSEUDO_SCF=1`, VPMDK also adds pseudo electronic-step compatibility blocks to `OSZICAR`, `OUTCAR`, and `vasprun.xml`.
 
 Relaxation convergence follows VASP-like `EDIFFG` sign semantics:
 
-- `EDIFFG < 0`: converged when the maximum force is below `abs(EDIFFG)` (eV/Å).
-- `EDIFFG > 0`: converged when `|ΔE|` between ionic steps is below `EDIFFG` (eV).
+- `EDIFFG < 0`: converged when the maximum force is below `abs(EDIFFG)` (eV/Å)
+- `EDIFFG > 0`: converged when `|ΔE|` between ionic steps is below `EDIFFG` (eV)
 
-When `INCAR` contains NEB-style tags (for example `IMAGES`, `LCLIMB`, or
-`SPRING`) and numbered image directories are present, VPMDK iterates over those
-directories (`00`, `01`, ...) and runs each image. For compatibility with VTST
-post-processing scripts, each image `OUTCAR` includes a
-`NEB: projections ...` line in every ionic block. This runner performs
-independent per-image calculations and does not apply spring-coupled NEB forces
-between images.
+When `INCAR` contains NEB-style tags such as `IMAGES`, `LCLIMB`, or `SPRING`, and numbered image directories are present, VPMDK runs the images sequentially and emits VTST-style compatibility lines in each image `OUTCAR`. These runs are independent per-image calculations; spring-coupled NEB forces are not applied.
 
-The NEB `CHAIN` block values are approximate: VPMDK estimates the local tangent
-from neighboring image position differences (`next-prev`, or one-sided at
-endpoints), then projects the per-atom force onto that tangent to populate
-`tangential force`, `TANGENT/CHAIN-FORCE`, and `CHAIN + TOTAL`.
-
-For NEB-style directory runs, VPMDK also writes parent-level aggregate
-`OUTCAR`, `OSZICAR`, and `vasprun.xml` files in the top NEB directory using the
-final state from each numbered image.
-
-Initial magnetic moments from `MAGMOM` are propagated to ASE when the value can
-be matched with the number of atoms or species counts in the POSCAR.
+Initial magnetic moments from `MAGMOM` are propagated to ASE when they can be matched to the atom count or species counts in the POSCAR.
 
 Final energies are also printed to the console for single-point calculations.
 
-### Required Python modules
+## GPU Usage
 
-`ase` and `pymatgen` are always required. Additional modules depend on the
-selected potential or thermostat:
+VPMDK itself does not manage GPU scheduling directly. Device selection is mostly delegated to the backend.
 
-| Feature | Module to install | Notes |
-|---------|-------------------|-------|
-| CHGNet potential | `chgnet` (uses PyTorch) | Bundled with a default model; specify `MODEL` to use another |
-| SevenNet potential | `sevennet` (uses PyTorch) | Bundled with a default model; specify `MODEL` to use another |
-| NequIP potential | `nequip` (uses PyTorch) | `MODEL` should point to a deployed model file; compiled/TorchScript models are also accepted when supported by the NequIP version (`from_compiled_model`) |
-| Allegro potential | `allegro` (uses PyTorch and depends on `nequip`) | `MODEL` should point to a deployed model file; compiled/TorchScript models are also accepted when supported by the NequIP version (`from_compiled_model`) |
-| MatGL (M3GNet) potential | `matgl` (uses PyTorch + DGL or JAX, depending on install) | Bundled with a default model; specify `MODEL` to use another. MatGL 1.x commonly expects a model directory passed through `matgl.load_model`. |
-| MACE potential | `mace-torch` (PyTorch) | Set `MODEL` to a trained `.model` file |
-| DeePMD-kit potential | `deepmd-kit` | Set `MODEL` to the frozen graph (`.pb`) or a PyTorch checkpoint (`.pt`), depending on the DeePMD backend, and optionally `DEEPMD_TYPE_MAP`/`DEEPMD_HEAD` |
-| Matlantis potential | `pfp-api-client` (plus `matlantis-features`) | Uses the Matlantis estimator service; configure with `MATLANTIS_*` BCAR tags |
-| ORB potential | `orb-models` (PyTorch) | Downloads pretrained weights unless `MODEL` points to a checkpoint |
-| MatterSim potential | `mattersim` (PyTorch) | Set `MODEL` to the trained parameters |
-| GRACE potential | `grace-tensorpotential` (TensorFlow) | Uses TensorPotential checkpoints (`MODEL=/path/to/model`) or foundation models when available |
-| Andersen thermostat | `ase.md.andersen` (part of ASE extras) | Install ASE with MD extras to enable |
-| Langevin thermostat | `ase.md.langevin` | Ships with ASE; ensure ASE is up to date |
-| Bussi thermostat | `ase.md.bussi` | Included in ASE >= 3.22 |
-| Nose–Hoover chain thermostat | `ase.md.nose_hoover_chain` | Included in ASE >= 3.22 |
+These backends honor `DEVICE` directly in `BCAR`:
 
-Install each module using `pip install MODULE_NAME`. Install the GPU-enabled
-version of PyTorch or JAX if you want to use GPUs.
+- CHGNet
+- MatGL / M3GNet
+- MACE
+- Eqnorm
+- MatRIS
+- AlphaNet
+- SevenNet
+- FlashTP
+- ORB
+- HIENet
+- UPET
+- TACE
+- FAIRChem
 
-### Where to place parameter files
+Nequix supports `DEVICE` on the torch backend. On the JAX backend, placement follows the active JAX runtime and environment variables such as `JAX_PLATFORMS` and `CUDA_VISIBLE_DEVICES`.
 
-The model file is loaded from the path given by `MODEL` in `BCAR`. Typically the
-file is located within the calculation directory or specified via an absolute
-path. CHGNet and MatGL ship with default models; omitting `MODEL` uses those
-defaults automatically.
-
-### GPU usage
-
-This script does not directly manage GPU settings. Each potential selects a
-device on its own. CHGNet, MatGL/M3GNet, MACE, ORB, and FAIRChem honour
-`DEVICE` in `BCAR` (e.g. `DEVICE=cpu` to force a CPU run). With CUDA devices you
-can choose which GPU to use with `CUDA_VISIBLE_DEVICES`. MatGL GPU tuning is
-backend-dependent (PyTorch+DGL vs JAX), so environment variables differ between
-installations. A GPU with at least 8 GB of memory is recommended, though running
-on a CPU also works.
-
-### Example directory layout
-
-```
-calc_dir/
-├── POSCAR      # required
-├── INCAR       # optional
-├── POTCAR      # optional
-└── BCAR        # optional, specify potential and model path
-```
-
-Example command:
-
-```bash
-vpmdk --dir calc_dir
-```
+Use `CUDA_VISIBLE_DEVICES` if you want to pin a specific GPU. A GPU with at least 8 GB of memory is a practical starting point for many models, but CPU execution also works.
 
 ## License
 
