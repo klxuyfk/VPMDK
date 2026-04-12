@@ -23,6 +23,16 @@ _MODEL_CONFIG_FIELDS = (
     "num_basis",
     "spin",
 )
+_DEFAULT_MODEL_CONFIG = {
+    "num_interactions": 3,
+    "num_neighbors": 20.0,
+    "mul": 500,
+    "lmax": 4,
+    "cutoff": 4.0,
+    "basis": "gaussian",
+    "num_basis": 20,
+    "spin": False,
+}
 _MODEL_CONFIG_ALIASES = {
     "num_interactions": ("num_interactions",),
     "num_neighbors": ("num_neighbors",),
@@ -311,12 +321,16 @@ def _resolve_model_config(
 ) -> dict[str, object]:
     state_dict = _normalize_state_dict(checkpoint)
     config = _extract_model_config_from_checkpoint(checkpoint)
-    inferred = _infer_model_config_from_state_dict(state_dict, model_cls)
-    for key, value in inferred.items():
-        config.setdefault(key, value)
+    if not config:
+        config = dict(_DEFAULT_MODEL_CONFIG)
     for key, value in explicit_config.items():
         if value is not None:
             config[key] = value
+    required_fields = ("num_interactions", "num_neighbors", "mul", "lmax", "basis", "num_basis", "spin")
+    if any(field not in config for field in required_fields):
+        inferred = _infer_model_config_from_state_dict(state_dict, model_cls)
+        for key, value in inferred.items():
+            config.setdefault(key, value)
     return config
 
 
