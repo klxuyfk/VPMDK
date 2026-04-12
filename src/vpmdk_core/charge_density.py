@@ -70,6 +70,15 @@ _RY_TO_EV = 13.605693009
 _ANGSTROM_TO_BOHR = 1.0 / 0.529177210903
 _DEFAULT_CHARGE_CUTOFF = 4.0
 _DEFAULT_MAX_PROBES_PER_BATCH = 2500
+_CHARGE_MODEL_CONFIG_TAGS = {
+    "CHARGE_NUM_INTERACTIONS": ("num_interactions", int),
+    "CHARGE_NUM_NEIGHBORS": ("num_neighbors", float),
+    "CHARGE_MUL": ("mul", int),
+    "CHARGE_LMAX": ("lmax", int),
+    "CHARGE_BASIS": ("basis", str),
+    "CHARGE_NUM_BASIS": ("num_basis", int),
+    "CHARGE_SPIN": ("spin", bool),
+}
 
 
 def _coerce_mapping_value(mapping: Mapping[str, Any], key: str):
@@ -218,6 +227,18 @@ def _charge_density_options_from_bcar(bcar_tags: Mapping[str, Any]) -> dict[str,
             str(max_batch),
             "CHARGE_MAX_PROBES_PER_BATCH",
         )
+    for tag_name, (option_name, value_type) in _CHARGE_MODEL_CONFIG_TAGS.items():
+        raw_value = bcar_tags.get(tag_name)
+        if raw_value is None:
+            continue
+        if value_type is bool:
+            options[option_name] = root._parse_optional_bool_tag(dict(bcar_tags), tag_name)
+        elif value_type is int:
+            options[option_name] = root._coerce_int_tag(str(raw_value), tag_name)
+        elif value_type is float:
+            options[option_name] = _coerce_float(raw_value, key=tag_name)
+        else:
+            options[option_name] = str(raw_value)
     return options
 
 
@@ -262,19 +283,21 @@ def _run_charge3net_backend(
     python_executable: str | None = None,
     cutoff: float = _DEFAULT_CHARGE_CUTOFF,
     max_probes_per_batch: int = _DEFAULT_MAX_PROBES_PER_BATCH,
+    num_interactions: int | None = None,
+    num_neighbors: float | None = None,
+    mul: int | None = None,
+    lmax: int | None = None,
+    basis: str | None = None,
+    num_basis: int | None = None,
+    spin: bool | None = None,
 ) -> np.ndarray:
     source_dir = _resolve_charge_source_dir(source_dir)
-    if not source_dir:
-        raise RuntimeError(
-            "ChargE3Net requires CHARGE_SOURCE_DIR (or VPMDK_CHARGE_SOURCE_DIR) "
-            "to point at a charge3net checkout."
-        )
-
     model_path = _resolve_charge_model_path(model_path, source_dir)
     if not model_path:
         raise RuntimeError(
             "ChargE3Net model checkpoint not found. Set CHARGE_MODEL (or "
-            "VPMDK_CHARGE_MODEL), or place charge3net_mp.pt under <CHARGE_SOURCE_DIR>/models/."
+            "VPMDK_CHARGE_MODEL). When CHARGE_SOURCE_DIR is set, VPMDK also checks "
+            "<CHARGE_SOURCE_DIR>/models/charge3net_mp.pt."
         )
 
     runner_path = Path(__file__).with_name("charge3net_runner.py")
@@ -304,11 +327,25 @@ def _run_charge3net_backend(
             str(float(cutoff)),
             "--max-probes-per-batch",
             str(int(max_probes_per_batch)),
-            "--source-dir",
-            str(source_dir),
         ]
+        if source_dir:
+            command.extend(["--source-dir", str(source_dir)])
         if device is not None:
             command.extend(["--device", str(_root()._resolve_device(device))])
+        if num_interactions is not None:
+            command.extend(["--num-interactions", str(int(num_interactions))])
+        if num_neighbors is not None:
+            command.extend(["--num-neighbors", str(float(num_neighbors))])
+        if mul is not None:
+            command.extend(["--mul", str(int(mul))])
+        if lmax is not None:
+            command.extend(["--lmax", str(int(lmax))])
+        if basis is not None:
+            command.extend(["--basis", str(basis)])
+        if num_basis is not None:
+            command.extend(["--num-basis", str(int(num_basis))])
+        if spin is not None:
+            command.extend(["--spin", "1" if spin else "0"])
         completed = subprocess.run(
             command,
             capture_output=True,
@@ -336,6 +373,13 @@ def predict_charge_density(
     python_executable: str | None = None,
     cutoff: float = _DEFAULT_CHARGE_CUTOFF,
     max_probes_per_batch: int = _DEFAULT_MAX_PROBES_PER_BATCH,
+    num_interactions: int | None = None,
+    num_neighbors: float | None = None,
+    mul: int | None = None,
+    lmax: int | None = None,
+    basis: str | None = None,
+    num_basis: int | None = None,
+    spin: bool | None = None,
 ) -> ChargeDensityResult:
     """Predict charge density on a user-specified or INCAR-derived grid."""
 
@@ -356,6 +400,13 @@ def predict_charge_density(
             python_executable=python_executable,
             cutoff=cutoff,
             max_probes_per_batch=max_probes_per_batch,
+            num_interactions=num_interactions,
+            num_neighbors=num_neighbors,
+            mul=mul,
+            lmax=lmax,
+            basis=basis,
+            num_basis=num_basis,
+            spin=spin,
         )
     else:
         raise ValueError(f"Unsupported charge-density backend: {backend_name}")
@@ -369,6 +420,19 @@ def predict_charge_density(
             "model_path": model_path,
             "device": "auto" if device is None else _root()._resolve_device(device),
             "source_dir": _resolve_charge_source_dir(source_dir),
+            "model_config": {
+                key: value
+                for key, value in {
+                    "num_interactions": num_interactions,
+                    "num_neighbors": num_neighbors,
+                    "mul": mul,
+                    "lmax": lmax,
+                    "basis": basis,
+                    "num_basis": num_basis,
+                    "spin": spin,
+                }.items()
+                if value is not None
+            },
         },
     )
 

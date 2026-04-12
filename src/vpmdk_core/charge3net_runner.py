@@ -3,17 +3,49 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import sys
+import warnings
+from collections.abc import Mapping
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
+
+
+_MODEL_CONFIG_FIELDS = (
+    "num_interactions",
+    "num_neighbors",
+    "mul",
+    "lmax",
+    "cutoff",
+    "basis",
+    "num_basis",
+    "spin",
+)
+_MODEL_CONFIG_ALIASES = {
+    "num_interactions": ("num_interactions",),
+    "num_neighbors": ("num_neighbors",),
+    "mul": ("mul",),
+    "lmax": ("lmax",),
+    "cutoff": ("cutoff",),
+    "basis": ("basis",),
+    "num_basis": ("num_basis", "number_of_basis"),
+    "spin": ("spin",),
+}
+_MODEL_SHAPE_KEYS = (
+    "atom_model.convolutions.0.lin1.weight",
+    "atom_model.convolutions.0.lin2.weight",
+    "atom_model.convolutions.0.lin3.weight",
+    "probe_model.readout.weight",
+)
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run ChargE3Net inference on one structure/grid.")
     parser.add_argument("--input", required=True, help="Input NPZ path.")
     parser.add_argument("--output", required=True, help="Output NPY path.")
-    parser.add_argument("--source-dir", required=True, help="charge3net source checkout.")
+    parser.add_argument("--source-dir", default=None, help="charge3net source checkout.")
     parser.add_argument("--model-path", required=True, help="ChargE3Net checkpoint path.")
     parser.add_argument("--device", default=None, help="Torch device string.")
     parser.add_argument("--cutoff", type=float, default=4.0, help="Probe/atom cutoff in Angstrom.")
@@ -23,6 +55,13 @@ def _parse_args() -> argparse.Namespace:
         default=2500,
         help="Maximum number of probe points to process per slice.",
     )
+    parser.add_argument("--num-interactions", type=int, default=None, help="Model interaction layers.")
+    parser.add_argument("--num-neighbors", type=float, default=None, help="Model neighbor normalization.")
+    parser.add_argument("--mul", type=int, default=None, help="Model multiplicity parameter.")
+    parser.add_argument("--lmax", type=int, default=None, help="Maximum angular momentum.")
+    parser.add_argument("--basis", default=None, help="Radial basis family.")
+    parser.add_argument("--num-basis", type=int, default=None, help="Number of radial basis functions.")
+    parser.add_argument("--spin", type=int, choices=(0, 1), default=None, help="Spin-density model flag.")
     return parser.parse_args()
 
 
@@ -52,12 +91,265 @@ def _resolve_device_argument(requested_device: str | None, torch_module) -> str:
     return "cuda" if torch_module.cuda.is_available() else "cpu"
 
 
+def _coerce_mapping(value: object) -> Mapping[str, object] | None:
+    if isinstance(value, Mapping):
+        return value
+    return None
+
+
+def _coerce_model_config_value(field: str, value: object):
+    if value is None:
+        return None
+    if field in {"num_interactions", "mul", "lmax", "num_basis"}:
+        return int(value)
+    if field in {"num_neighbors", "cutoff"}:
+        return float(value)
+    if field == "spin":
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+    return str(value)
+
+
+def _extract_model_config_from_mapping(mapping: Mapping[str, object]) -> dict[str, object]:
+    config: dict[str, object] = {}
+    for field, aliases in _MODEL_CONFIG_ALIASES.items():
+        for alias in aliases:
+            if alias in mapping and mapping[alias] is not None:
+                config[field] = _coerce_model_config_value(field, mapping[alias])
+                break
+    return config
+
+
+def _extract_model_config_from_checkpoint(checkpoint: object) -> dict[str, object]:
+    root_mapping = _coerce_mapping(checkpoint)
+    if root_mapping is None:
+        return {}
+
+    candidates: list[Mapping[str, object]] = [root_mapping]
+    for key in ("model_kwargs", "model_config", "hyper_parameters", "hparams", "config", "cfg"):
+        nested = _coerce_mapping(root_mapping.get(key))
+        if nested is None:
+            continue
+        candidates.append(nested)
+        model_nested = _coerce_mapping(nested.get("model"))
+        if model_nested is not None:
+            candidates.append(model_nested)
+            nested_model = _coerce_mapping(model_nested.get("model"))
+            if nested_model is not None:
+                candidates.append(nested_model)
+
+    merged: dict[str, object] = {}
+    for candidate in candidates:
+        merged.update(_extract_model_config_from_mapping(candidate))
+    return merged
+
+
+def _normalize_state_dict(checkpoint: Mapping[str, object]) -> Mapping[str, object]:
+    if "model" in checkpoint and isinstance(checkpoint["model"], Mapping):
+        return checkpoint["model"]
+    if "state_dict" in checkpoint and isinstance(checkpoint["state_dict"], Mapping):
+        return {
+            key.replace("network.", ""): value
+            for key, value in checkpoint["state_dict"].items()
+        }
+    raise RuntimeError("ChargE3Net checkpoint does not contain a supported state_dict.")
+
+
+def _infer_num_interactions(state_dict: Mapping[str, object]) -> int | None:
+    prefixes = {
+        int(key.split(".")[2])
+        for key in state_dict
+        if key.startswith("atom_model.convolutions.")
+    }
+    if not prefixes:
+        return None
+    return max(prefixes) + 1
+
+
+def _infer_num_basis(state_dict: Mapping[str, object]) -> int | None:
+    basis_mean = state_dict.get("atom_model.basis.mean")
+    if hasattr(basis_mean, "shape") and len(getattr(basis_mean, "shape", ())) == 1:
+        return int(basis_mean.shape[0])
+    fc_weight = state_dict.get("atom_model.convolutions.0.fc.layer0.weight")
+    if hasattr(fc_weight, "shape") and len(getattr(fc_weight, "shape", ())) == 2:
+        return int(fc_weight.shape[0])
+    return None
+
+
+def _infer_spin(state_dict: Mapping[str, object]) -> bool | None:
+    output_mask = state_dict.get("probe_model.readout.output_mask")
+    if hasattr(output_mask, "numel"):
+        return int(output_mask.numel()) == 2
+    return None
+
+
+@lru_cache(maxsize=256)
+def _candidate_shape_signature(
+    model_cls,
+    *,
+    num_interactions: int,
+    num_basis: int,
+    spin: bool,
+    lmax: int,
+    mul: int,
+) -> tuple[tuple[str, tuple[int, ...]], ...]:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model = model_cls(
+            num_interactions=num_interactions,
+            num_neighbors=20,
+            mul=mul,
+            lmax=lmax,
+            cutoff=4.0,
+            basis="gaussian",
+            num_basis=num_basis,
+            spin=spin,
+        )
+    state = model.state_dict()
+    signature = []
+    for key in _MODEL_SHAPE_KEYS:
+        if key in state:
+            signature.append((key, tuple(state[key].shape)))
+    return tuple(signature)
+
+
+def _infer_mul_lmax_from_state_dict(
+    state_dict: Mapping[str, object],
+    model_cls,
+    *,
+    num_interactions: int,
+    num_basis: int,
+    spin: bool,
+) -> dict[str, int]:
+    target_signature = tuple(
+        (key, tuple(state_dict[key].shape))
+        for key in _MODEL_SHAPE_KEYS
+        if key in state_dict and hasattr(state_dict[key], "shape")
+    )
+    if not target_signature:
+        return {}
+
+    target_readout = next(
+        (int(np.prod(shape)) for key, shape in target_signature if key == "probe_model.readout.weight"),
+        None,
+    )
+    max_lmax = 8
+    max_mul = 4096
+    for lmax in range(0, max_lmax + 1):
+        candidate_range: range
+        if target_readout is None:
+            candidate_range = range(1, min(max_mul, 1024) + 1)
+        else:
+            high = 1
+            while high < max_mul:
+                current = dict(
+                    _candidate_shape_signature(
+                        model_cls,
+                        num_interactions=num_interactions,
+                        num_basis=num_basis,
+                        spin=spin,
+                        lmax=lmax,
+                        mul=high,
+                    )
+                )
+                current_readout = int(np.prod(current.get("probe_model.readout.weight", (0,))))
+                if current_readout >= target_readout:
+                    break
+                high *= 2
+            low = max(1, high // 2)
+            candidate_range = range(max(1, low - 32), min(max_mul, high + 32) + 1)
+
+        for mul in candidate_range:
+            if (
+                _candidate_shape_signature(
+                    model_cls,
+                    num_interactions=num_interactions,
+                    num_basis=num_basis,
+                    spin=spin,
+                    lmax=lmax,
+                    mul=mul,
+                )
+                == target_signature
+            ):
+                return {"lmax": lmax, "mul": mul}
+    return {}
+
+
+def _infer_model_config_from_state_dict(
+    state_dict: Mapping[str, object],
+    model_cls,
+) -> dict[str, object]:
+    config: dict[str, object] = {}
+    num_interactions = _infer_num_interactions(state_dict)
+    if num_interactions is not None:
+        config["num_interactions"] = num_interactions
+    num_basis = _infer_num_basis(state_dict)
+    if num_basis is not None:
+        config["num_basis"] = num_basis
+    spin = _infer_spin(state_dict)
+    if spin is not None:
+        config["spin"] = spin
+    if num_interactions is not None and num_basis is not None and spin is not None:
+        config.update(
+            _infer_mul_lmax_from_state_dict(
+                state_dict,
+                model_cls,
+                num_interactions=num_interactions,
+                num_basis=num_basis,
+                spin=spin,
+            )
+        )
+    return config
+
+
+def _resolve_model_config(
+    checkpoint: Mapping[str, object],
+    *,
+    explicit_config: Mapping[str, object],
+    model_cls,
+) -> dict[str, object]:
+    state_dict = _normalize_state_dict(checkpoint)
+    config = _extract_model_config_from_checkpoint(checkpoint)
+    inferred = _infer_model_config_from_state_dict(state_dict, model_cls)
+    for key, value in inferred.items():
+        config.setdefault(key, value)
+    for key, value in explicit_config.items():
+        if value is not None:
+            config[key] = value
+    return config
+
+
+def _load_charge3net_modules(source_dir: str | None):
+    if source_dir:
+        resolved_source_dir = Path(source_dir).resolve()
+        if str(resolved_source_dir) not in sys.path:
+            sys.path.insert(0, str(resolved_source_dir))
+
+    last_error: Exception | None = None
+    for prefix in ("src.charge3net", "charge3net"):
+        try:
+            e3_module = importlib.import_module(f"{prefix}.models.e3")
+            graph_module = importlib.import_module(f"{prefix}.data.graph_construction")
+            collate_module = importlib.import_module(f"{prefix}.data.collate")
+            return (
+                e3_module.E3DensityModel,
+                graph_module.KdTreeGraphConstructor,
+                collate_module.collate_list_of_dicts,
+            )
+        except Exception as exc:  # pragma: no cover - exercised indirectly in subprocess
+            last_error = exc
+
+    details = f": {last_error}" if last_error is not None else ""
+    raise RuntimeError(
+        "Unable to import ChargE3Net modules. Install ChargE3Net in CHARGE_PYTHON "
+        "or set CHARGE_SOURCE_DIR to a checkout path"
+        f"{details}"
+    )
+
+
 def main() -> int:
     args = _parse_args()
-
-    source_dir = Path(args.source_dir).resolve()
-    if str(source_dir) not in sys.path:
-        sys.path.insert(0, str(source_dir))
 
     import torch
     from torch.serialization import add_safe_globals
@@ -65,9 +357,9 @@ def main() -> int:
 
     add_safe_globals([slice])
 
-    from src.charge3net.models.e3 import E3DensityModel
-    from src.charge3net.data.graph_construction import KdTreeGraphConstructor
-    from src.charge3net.data.collate import collate_list_of_dicts
+    E3DensityModel, KdTreeGraphConstructor, collate_list_of_dicts = _load_charge3net_modules(
+        args.source_dir
+    )
 
     payload = np.load(args.input)
     numbers = np.asarray(payload["numbers"], dtype=np.int64)
@@ -78,25 +370,39 @@ def main() -> int:
 
     atoms = Atoms(numbers=numbers, positions=positions, cell=cell, pbc=pbc)
     device = torch.device(_resolve_device_argument(args.device, torch))
+    checkpoint = torch.load(args.model_path, map_location=device, weights_only=False)
+    model_config = _resolve_model_config(
+        checkpoint,
+        explicit_config={
+            "num_interactions": args.num_interactions,
+            "num_neighbors": args.num_neighbors,
+            "mul": args.mul,
+            "lmax": args.lmax,
+            "cutoff": args.cutoff,
+            "basis": args.basis,
+            "num_basis": args.num_basis,
+            "spin": None if args.spin is None else bool(args.spin),
+        },
+        model_cls=E3DensityModel,
+    )
+    resolved_cutoff = float(model_config.get("cutoff", args.cutoff))
 
     model = E3DensityModel(
-        num_interactions=3,
-        num_neighbors=20,
-        mul=500,
-        lmax=4,
-        cutoff=float(args.cutoff),
-        basis="gaussian",
-        num_basis=20,
+        num_interactions=int(model_config.get("num_interactions", 3)),
+        num_neighbors=float(model_config.get("num_neighbors", 20)),
+        mul=int(model_config.get("mul", 500)),
+        lmax=int(model_config.get("lmax", 4)),
+        cutoff=resolved_cutoff,
+        basis=str(model_config.get("basis", "gaussian")),
+        num_basis=int(model_config.get("num_basis", 20)),
+        spin=bool(model_config.get("spin", False)),
     )
-    checkpoint = torch.load(args.model_path, map_location=device, weights_only=False)
-    state_dict = checkpoint["model"] if "model" in checkpoint else checkpoint["state_dict"]
-    if "model" not in checkpoint:
-        state_dict = {key.replace("network.", ""): value for key, value in state_dict.items()}
+    state_dict = _normalize_state_dict(checkpoint)
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
 
-    constructor = KdTreeGraphConstructor(cutoff=float(args.cutoff), num_probes=None)
+    constructor = KdTreeGraphConstructor(cutoff=resolved_cutoff, num_probes=None)
     atom_edges, atom_edges_displacement, _, _ = constructor.atoms_to_graph(atoms)
     default_type = torch.get_default_dtype()
     atom_graph = {
