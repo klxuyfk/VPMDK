@@ -24,20 +24,14 @@ def _load_chgnet_model(
         raise RuntimeError("CHGNet model loader not available. Install chgnet.")
 
     if model_path and os.path.exists(model_path):
+        model = root.CHGNetModel.from_file(model_path)
         if graph_converter_algorithm is not None:
-            try:
-                return root.CHGNetModel.from_file(
-                    model_path,
-                    graph_converter_algorithm=graph_converter_algorithm,
-                )
-            except TypeError:
-                model = root.CHGNetModel.from_file(model_path)
-                return root._override_model_graph_converter_algorithm(
-                    model,
-                    algorithm=graph_converter_algorithm,
-                    backend_name="CHGNet",
-                )
-        return root.CHGNetModel.from_file(model_path)
+            model = root._override_model_graph_converter_algorithm(
+                model,
+                algorithm=graph_converter_algorithm,
+                backend_name="CHGNet",
+            )
+        return model
 
     named_model = None
     if model_path and not root._looks_like_filesystem_path(
@@ -79,7 +73,6 @@ def _load_chgnet_model(
             continue
     if model is None:
         raise RuntimeError("CHGNet model loader does not expose a compatible load() signature.")
-
     if graph_converter_algorithm is not None:
         model = root._override_model_graph_converter_algorithm(
             model,
