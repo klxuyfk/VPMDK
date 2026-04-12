@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import os
 import sys
 from typing import Dict, List
@@ -129,9 +130,12 @@ def _build_nequix_calculator(bcar_tags: Dict[str, str], *, structure=None):
             calculator.atom_indices = nequix_data_module.atomic_numbers_to_indices(
                 config["atomic_numbers"]
             )
+            calculator.atomic_number_to_index = calculator.atom_indices
             calculator.cutoff = config["cutoff"]
             calculator._capacity = None
             calculator._capacity_multiplier = capacity_multiplier
+            calculator.use_kernel = use_kernel
+            calculator.use_compile = use_compile
             calculator.backend = "torch"
             return calculator
         except Exception as exc:
