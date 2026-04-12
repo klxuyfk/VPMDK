@@ -7,9 +7,17 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to publish (example: v0.2.2). Leave empty to use the current ref."
+        description: "Tag to publish (example: v0.3.0). Leave empty to use the current ref."
         required: false
         type: string
+      repository:
+        description: "Package index target for manual runs."
+        required: false
+        default: testpypi
+        type: choice
+        options:
+          - testpypi
+          - pypi
 
 permissions:
   contents: read
@@ -31,6 +39,18 @@ jobs:
             echo "ref=${GITHUB_REF}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Resolve repository target
+        id: repository
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.release.tag_name }}" ]; then
+            echo "target=pypi" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ inputs.repository }}" ]; then
+            echo "target=${{ inputs.repository }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "target=testpypi" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check out source
         uses: actions/checkout@v4
         with:
@@ -47,5 +67,12 @@ jobs:
           python -m pip install build
           python -m build
 
+      - name: Publish distributions to TestPyPI
+        if: steps.repository.outputs.target == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
       - name: Publish distributions to PyPI
+        if: steps.repository.outputs.target == 'pypi'
         uses: pypa/gh-action-pypi-publish@release/v1

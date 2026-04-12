@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vpmdk"
-version = "0.2.2"
+version = "0.3.0"
 description = "Run machine-learning potentials using VASP style inputs."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -35,5 +35,8 @@ vpmdk = "vpmdk:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-packages = ["vpmdk_core"]
 py-modules = ["vpmdk"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["vpmdk_core*"]
