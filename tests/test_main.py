@@ -32,8 +32,8 @@ from tests.conftest import DummyCalculator
         "NEQUIP",
         "ORB",
         "UPET",
-        "EQUFLASH",
         "TACE",
+        "EQUFLASH",
         "FAIRCHEM",
         "FAIRCHEM_V2",
         "FAIRCHEM_V1",
@@ -47,22 +47,14 @@ def test_single_point_energy_for_all_potentials(
     prepare_inputs,
 ):
     extra_bcar: dict[str, str] = {}
-    if potential in {
-        "NEQUIP",
-        "ALLEGRO",
-        "DEEPMD",
-        "FAIRCHEM_V1",
-        "UPET",
-        "EQUFLASH",
-        "TACE",
-    }:
+    if potential in {"NEQUIP", "ALLEGRO", "DEEPMD", "FAIRCHEM_V1", "UPET", "TACE", "EQUFLASH"}:
         model_name = (
             "pet-oam-xl-v1.0.0.ckpt"
             if potential == "UPET"
             else (
-                "equflash-model.ckpt"
-                if potential == "EQUFLASH"
-                else ("tace-model.pt" if potential == "TACE" else "nequip-model.pth")
+                "tace-model.pt"
+                if potential == "TACE"
+                else ("equflash-model.ckpt" if potential == "EQUFLASH" else "nequip-model.pth")
             )
         )
         model_path = tmp_path / model_name
@@ -106,8 +98,8 @@ def test_single_point_energy_for_all_potentials(
     monkeypatch.setattr(vpmdk, "ORBCalculator", lambda *a, **k: factory("ORB"))
     monkeypatch.setattr(vpmdk, "ORB_PRETRAINED_MODELS", {vpmdk.DEFAULT_ORB_MODEL: lambda **_: "orb"})
     monkeypatch.setattr(vpmdk, "UPETCalculator", lambda *a, **k: factory("UPET"))
-    monkeypatch.setattr(vpmdk, "_build_equflash_calculator", lambda *a, **k: factory("EQUFLASH"))
     monkeypatch.setattr(vpmdk, "TACEAseCalc", lambda *a, **k: factory("TACE"))
+    monkeypatch.setattr(vpmdk, "_build_equflash_calculator", lambda *a, **k: factory("EQUFLASH"))
     monkeypatch.setattr(vpmdk, "_build_grace_calculator", lambda tags: factory("GRACE"))
     monkeypatch.setattr(vpmdk, "DeePMDCalculator", lambda *a, **k: factory("DEEPMD"))
 
@@ -1591,3 +1583,46 @@ def test_main_defaults_to_nose_when_smass_positive(tmp_path: Path, prepare_input
 
     assert seen["mdalgo"] == 2
     assert seen["smass"] == 2.0
+
+
+def test_main_writes_chgcar_when_requested(tmp_path: Path, prepare_inputs):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0", "PREC": "N", "ENCUT": "400"},
+        extra_bcar={"WRITE_CHGCAR": "1"},
+    )
+
+    seen: dict[str, object] = {}
+
+    def fake_predict_charge_density(atoms, **kwargs):
+        seen["incar"] = kwargs.get("incar")
+        seen["reference"] = kwargs.get("reference")
+        return vpmdk.ChargeDensityResult(
+            atoms=atoms,
+            density=np.ones((2, 2, 2), dtype=float),
+            grid_shape=(2, 2, 2),
+            backend="CHARGE3NET",
+        )
+
+    def fake_write_chgcar(path, atoms, density, **kwargs):
+        seen["path"] = path
+        seen["shape"] = tuple(density.shape)
+        seen["n_atoms"] = len(atoms)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "predict_charge_density", fake_predict_charge_density)
+    monkeypatch.setattr(vpmdk, "write_chgcar", fake_write_chgcar)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen["path"] == "CHGCAR"
+    assert seen["shape"] == (2, 2, 2)
+    assert seen["n_atoms"] == 2
+    assert seen["incar"]["PREC"] == "N"
+    assert seen["incar"]["ENCUT"] == "400"
+    assert seen["reference"] is not None

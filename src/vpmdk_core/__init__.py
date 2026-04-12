@@ -436,6 +436,14 @@ from .backends.sevennet_family import (
     _build_sevennet_family_calculator,
     _is_sevennet_flash_available,
 )
+from .charge_density import (
+    _CHGCAR_GRID_INCAR_TAGS,
+    _charge_density_options_from_bcar,
+    charge_density,
+    determine_vasp_fft_grid,
+    predict_charge_density,
+    write_chgcar,
+)
 from .io.inputs import (
     _apply_initial_magnetization,
     _expand_magmom_to_atoms,
@@ -500,6 +508,7 @@ from .models import (
     BackendConfig,
     BackendSpec,
     CalculationResult,
+    ChargeDensityResult,
     MDConfig,
     MDResult,
     RelaxConfig,
@@ -561,6 +570,7 @@ from .settings.incar import (
     _normalize_isif,
     _parse_neb_image_count,
     _parse_optional_float,
+    _should_write_chgcar,
     _should_write_energy_csv,
     _should_write_lammps_trajectory,
     _should_write_oszicar_pseudo_scf,

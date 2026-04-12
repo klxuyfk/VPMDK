@@ -305,6 +305,17 @@ class CalculationResult:
 
 
 @dataclass
+class ChargeDensityResult:
+    """Result returned by charge-density prediction APIs."""
+
+    atoms: Any
+    density: Any
+    grid_shape: tuple[int, int, int]
+    backend: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class SinglePointResult(CalculationResult):
     """Result returned by :func:`vpmdk.single_point`."""
 

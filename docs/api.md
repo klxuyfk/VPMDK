@@ -19,6 +19,10 @@ The main public functions are:
 - `vpmdk.single_point(...)`
 - `vpmdk.relax(...)`
 - `vpmdk.md(...)`
+- `vpmdk.predict_charge_density(...)`
+- `vpmdk.charge_density(...)`
+- `vpmdk.determine_vasp_fft_grid(...)`
+- `vpmdk.write_chgcar(...)`
 - `vpmdk.list_backends()`
 - `vpmdk.get_backend_capabilities(...)`
 
@@ -33,6 +37,7 @@ Important public models are:
 - `vpmdk.SinglePointResult`
 - `vpmdk.RelaxResult`
 - `vpmdk.MDResult`
+- `vpmdk.ChargeDensityResult`
 
 ## Core Behavior
 
@@ -173,6 +178,66 @@ Supported public thermostat names:
 - `bussi`
 
 These are mapped internally onto the existing VASP-style `MDALGO` logic.
+
+## Charge-Density Prediction
+
+Use `vpmdk.predict_charge_density()` when you want a volumetric density on a specific grid.
+
+```python
+from ase.io import read
+import vpmdk
+
+atoms = read("POSCAR")
+
+result = vpmdk.predict_charge_density(
+    atoms,
+    grid_shape=(64, 64, 64),
+    backend="CHARGE3NET",
+    source_dir="/path/to/charge3net",
+    python_executable="/path/to/charge3net-env/bin/python",
+    model_path="/path/to/charge3net/models/charge3net_mp.pt",
+)
+
+print(result.grid_shape)
+print(result.density.shape)
+```
+
+If you want a VASP-like grid derived from `INCAR`, use `vpmdk.determine_vasp_fft_grid(...)` or pass `incar=` directly:
+
+```python
+from pymatgen.io.vasp import Incar
+
+incar = Incar.from_file("INCAR")
+result = vpmdk.predict_charge_density(
+    atoms,
+    incar=incar,
+    reference=atoms,
+    backend="CHARGE3NET",
+    source_dir="/path/to/charge3net",
+    python_executable="/path/to/charge3net-env/bin/python",
+)
+```
+
+Returned object:
+
+- `result.atoms`: `Atoms` used for prediction
+- `result.density`: 3D NumPy array
+- `result.grid_shape`: `(NGXF, NGYF, NGZF)`
+- `result.backend`: normalized backend name
+- `result.metadata`: backend-specific execution details
+
+To write a VASP-like `CHGCAR` after prediction:
+
+```python
+vpmdk.write_chgcar("CHGCAR", atoms, result.density)
+```
+
+Notes:
+
+- `vpmdk.charge_density(...)` is an alias of `vpmdk.predict_charge_density(...)`
+- the current ChargE3Net backend runs in a separate Python process, so `source_dir`, `python_executable`, and usually `model_path` must point to a working ChargE3Net environment
+- the current writer produces the volumetric density block in `CHGCAR` format, but does not reconstruct PAW augmentation occupancies
+- a runnable end-to-end example is available in [examples/chgcar_charge3net](/home/nei/temp/vpmdk_private/examples/chgcar_charge3net/README.md)
 
 ## Backend Discovery And Capabilities
 
