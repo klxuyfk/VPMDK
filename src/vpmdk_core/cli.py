@@ -83,7 +83,6 @@ def main():
         structure = root.read_structure(poscar_path, potcar_for_structure)
         atoms = root.AseAtomsAdaptor.get_atoms(structure)
         atoms.wrap()
-        grid_reference_atoms = atoms.copy()
         root._apply_initial_magnetization(atoms, incar)
         with root._working_directory(workdir_abs):
             calculator = root.get_calculator(bcar, structure=structure)
@@ -130,12 +129,13 @@ def main():
                     oszicar_pseudo_scf=write_pseudo_scf,
                 )
         if write_chgcar:
-            charge_result = root.predict_charge_density(
-                atoms,
-                incar=incar,
-                reference=grid_reference_atoms,
-                **root._charge_density_options_from_bcar(bcar),
-            )
-            root.write_chgcar("CHGCAR", atoms, charge_result.density)
+            with root._working_directory(workdir_abs):
+                charge_result = root.predict_charge_density(
+                    atoms,
+                    incar=incar,
+                    reference=atoms,
+                    **root._charge_density_options_from_bcar(bcar),
+                )
+                root.write_chgcar("CHGCAR", atoms, charge_result.density)
 
     print("Calculation completed.")

@@ -1626,3 +1626,67 @@ def test_main_writes_chgcar_when_requested(tmp_path: Path, prepare_inputs):
     assert seen["incar"]["PREC"] == "N"
     assert seen["incar"]["ENCUT"] == "400"
     assert seen["reference"] is not None
+
+
+def test_main_writes_chgcar_in_requested_directory_using_final_cell(
+    tmp_path: Path,
+    prepare_inputs,
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "2", "IBRION": "2", "PREC": "N", "ENCUT": "400"},
+        extra_bcar={"WRITE_CHGCAR": "1", "CHARGE_SOURCE_DIR": "relative-source"},
+    )
+
+    initial_structure = vpmdk.read_structure(str(tmp_path / "POSCAR"))
+    initial_atoms = vpmdk.AseAtomsAdaptor.get_atoms(initial_structure)
+    initial_atoms.wrap()
+    final_cell = initial_atoms.get_cell().copy()
+    final_cell[0, 0] *= 1.2
+    final_cell[1, 1] *= 0.9
+    final_cell[2, 2] *= 1.1
+
+    caller_dir = tmp_path / "caller"
+    caller_dir.mkdir()
+    seen: dict[str, object] = {}
+
+    def fake_run_relaxation(atoms, calculator, *args, **kwargs):
+        atoms.set_cell(final_cell, scale_atoms=False)
+        atoms.wrap()
+        return 0.0
+
+    def fake_predict_charge_density(atoms, **kwargs):
+        seen["predict_cwd"] = Path.cwd()
+        seen["reference_cell"] = np.array(kwargs["reference"].get_cell())
+        seen["atoms_cell"] = np.array(atoms.get_cell())
+        seen["source_dir"] = kwargs.get("source_dir")
+        return vpmdk.ChargeDensityResult(
+            atoms=atoms,
+            density=np.ones((2, 2, 2), dtype=float),
+            grid_shape=(2, 2, 2),
+            backend="CHARGE3NET",
+        )
+
+    def fake_write_chgcar(path, atoms, density, **kwargs):
+        seen["write_cwd"] = Path.cwd()
+        seen["path"] = path
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(caller_dir)
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "run_relaxation", fake_run_relaxation)
+    monkeypatch.setattr(vpmdk, "predict_charge_density", fake_predict_charge_density)
+    monkeypatch.setattr(vpmdk, "write_chgcar", fake_write_chgcar)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen["predict_cwd"] == tmp_path
+    assert seen["write_cwd"] == tmp_path
+    assert seen["path"] == "CHGCAR"
+    assert seen["source_dir"] == "relative-source"
+    assert np.allclose(seen["reference_cell"], seen["atoms_cell"])
+    assert not np.allclose(seen["reference_cell"], np.array(initial_atoms.get_cell()))

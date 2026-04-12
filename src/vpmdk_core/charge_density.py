@@ -132,7 +132,7 @@ def _largest_prime_factor(value: int) -> int:
 
 
 def _next_even_smooth_number(minimum: float) -> int:
-    candidate = max(2, int(np.rint(float(minimum))))
+    candidate = max(2, int(np.ceil(float(minimum))))
     if candidate % 2:
         candidate += 1
     while _largest_prime_factor(candidate) > 7:

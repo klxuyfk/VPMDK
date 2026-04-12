@@ -43,7 +43,7 @@ def test_determine_vasp_fft_grid_matches_accurate_reference():
 
     grid_shape = vpmdk.determine_vasp_fft_grid(atoms, {"PREC": "A", "ENCUT": "350"})
 
-    assert grid_shape == (56, 56, 36)
+    assert grid_shape == (60, 60, 40)
 
 
 def test_determine_vasp_fft_grid_respects_explicit_fine_grid(load_atoms):
@@ -55,6 +55,14 @@ def test_determine_vasp_fft_grid_respects_explicit_fine_grid(load_atoms):
     )
 
     assert grid_shape == (20, 24, 28)
+
+
+def test_next_even_smooth_number_never_rounds_down():
+    result = charge_density_module._next_even_smooth_number(10.1)
+
+    assert result >= 10.1
+    assert result % 2 == 0
+    assert charge_density_module._largest_prime_factor(result) <= 7
 
 
 def test_write_chgcar_roundtrips_density(tmp_path: Path, load_atoms):
