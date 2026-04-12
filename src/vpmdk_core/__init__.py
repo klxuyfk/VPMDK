@@ -356,6 +356,13 @@ from .backend_common import (
     _parse_optional_bool_tag,
     _resolve_device,
 )
+from .api import (
+    get_backend_capabilities,
+    list_backends,
+    md,
+    relax,
+    single_point,
+)
 from .backends.alphanet import (
     _build_alphanet_calculator,
     _ensure_alphanet_named_model_files,
@@ -488,6 +495,32 @@ from .io.vasp_compat import (
     _voigt_to_full_stress,
     _write_vasprun_xml,
 )
+from .models import (
+    BackendCapabilities,
+    BackendConfig,
+    BackendSpec,
+    CalculationResult,
+    MDConfig,
+    MDResult,
+    RelaxConfig,
+    RelaxResult,
+    RunContext,
+    RunStep,
+    SinglePointConfig,
+    SinglePointResult,
+    VaspCompatConfig,
+    coerce_backend_config,
+    normalize_thermostat_name,
+    run_steps_to_energy_rows,
+    thermostat_to_mdalgo,
+)
+from .observers import (
+    CompositeObserver,
+    PrintProgressObserver,
+    RunObserver,
+    VaspCompatObserver,
+    coerce_observer,
+)
 from .runtime.common import _extract_numeric_attribute, _resolve_calculator, _working_directory
 from .runtime.md import _estimate_tdamp, _rescale_velocities, _select_md_dynamics, run_md
 from .runtime.neb import (
@@ -503,7 +536,9 @@ from .runtime.registry import (
     _CALCULATOR_BUILDERS,
     _SIMPLE_CALCULATORS,
     _attach_fallback_calculator,
+    _build_calculator_from_tags,
     _build_calculator_from_init_factory,
+    build_calculator,
     get_calculator,
 )
 from .runtime.relax import (

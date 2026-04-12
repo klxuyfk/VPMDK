@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import os
 import sys
 from typing import Dict, List
@@ -98,10 +99,44 @@ def _build_nequix_calculator(bcar_tags: Dict[str, str], *, structure=None):
     else:
         kwargs["model_name"] = _resolve_nequix_model_name(model_value)
 
-    calculator = root.NequixCalculator(**kwargs)
-
     requested_device = bcar_tags.get("DEVICE")
-    if backend == "torch" and requested_device:
+    if backend != "torch":
+        return root.NequixCalculator(**kwargs)
+
+    try:
+        calculator_module = importlib.import_module("nequix.calculator")
+        from_pretrained = getattr(calculator_module, "from_pretrained")
+    except Exception as exc:
+        raise RuntimeError(
+            "Nequix torch backend requires nequix.calculator.from_pretrained."
+        ) from exc
+
+    model, metadata = from_pretrained(
+        model_name=kwargs.get("model_name"),
+        model_path=kwargs.get("model_path"),
+        backend=backend,
+        use_kernel=use_kernel,
+    )
+    metadata = metadata or {}
+
+    calculator = root.NequixCalculator.__new__(root.NequixCalculator)
+    root.Calculator.__init__(calculator)
+    calculator.model = model
+    calculator.backend = backend
+    calculator.cutoff = metadata.get("cutoff")
+    calculator._capacity_multiplier = capacity_multiplier
+    calculator.use_kernel = use_kernel
+    calculator.use_compile = use_compile
+    atomic_numbers = metadata.get("atomic_numbers")
+    if atomic_numbers is not None:
+        try:
+            data_module = importlib.import_module("nequix.data")
+            to_indices = getattr(data_module, "atomic_numbers_to_indices")
+            calculator.atomic_number_to_index = to_indices(atomic_numbers)
+        except Exception:
+            calculator.atomic_number_to_index = None
+
+    if requested_device:
         try:
             import torch
 
@@ -113,5 +148,7 @@ def _build_nequix_calculator(bcar_tags: Dict[str, str], *, structure=None):
             raise RuntimeError(
                 f"Unable to move Nequix torch backend to DEVICE={requested_device!r}."
             ) from exc
+    else:
+        calculator.device = None
 
     return calculator

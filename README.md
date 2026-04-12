@@ -1,12 +1,51 @@
 # VPMDK
 
-VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is a lightweight engine that reads and writes VASP-style inputs and outputs while running molecular dynamics, relaxations, and single-point calculations with ASE-compatible machine-learning interatomic potentials.
+VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is an ASE-oriented wrapper library for machine-learning interatomic potentials, with a VASP-compatible CLI layered on top.
 
-It keeps familiar VASP artifacts such as `POSCAR`, `INCAR`, `OUTCAR`, `OSZICAR`, and `vasprun.xml`, while the actual calculator is an ML potential.
+The core value is backend normalization: VPMDK provides one stable Python API for building calculators and running single-point, relaxation, and MD workflows across multiple ASE-compatible backends. It also keeps familiar VASP artifacts such as `POSCAR`, `INCAR`, `OUTCAR`, `OSZICAR`, and `vasprun.xml` when you use the compatibility CLI.
 
 Supported calculators currently include **CHGNet**, **SevenNet**, **FlashTP** (via SevenNet), **EquFlash** (with a local checkpoint), **MatterSim**, **MACE**, **Matlantis**, **Eqnorm**, **MatRIS**, **AlphaNet**, **HIENet**, **Nequix**, **NequIP**, **Allegro**, **ORB**, **UPET**, **TACE**, **MatGL** (via M3GNet), **FAIRChem**, **GRACE**, and **DeePMD-kit**. Availability depends on which Python packages are installed.
 
 *Not affiliated with, endorsed by, or a replacement for VASP; “VASP” is a trademark of its respective owner. VPMDK only mimics VASP I/O conventions for compatibility.*
+
+## Library API
+
+The stable public API now centers on Python usage:
+
+```python
+from ase.io import read
+
+import vpmdk
+
+atoms = read("POSCAR")
+
+sp = vpmdk.single_point(atoms, mlp="CHGNET", device="cpu")
+calc = vpmdk.get_calculator(mlp="MACE", model="medium", device="cuda")
+relaxed = vpmdk.relax(atoms, mlp="CHGNET", fmax=0.02, relax_cell=True)
+trajectory = vpmdk.md(
+    atoms,
+    mlp="MACE",
+    temperature=300,
+    steps=100,
+    thermostat="langevin",
+)
+```
+
+Useful public helpers include:
+
+- `vpmdk.get_calculator(...)`
+- `vpmdk.single_point(...)`
+- `vpmdk.relax(...)`
+- `vpmdk.md(...)`
+- `vpmdk.list_backends()`
+- `vpmdk.get_backend_capabilities(...)`
+
+These APIs do not write `OUTCAR`/`OSZICAR`/`vasprun.xml` by default. Those filesystem side effects are reserved for the VASP-compatible CLI and its internal compatibility observers.
+
+More detail:
+
+- API guide: [docs/api.md](/home/nei/temp/vpmdk_private/docs/api.md)
+- Runnable API examples: [examples/api_chgnet/README.md](/home/nei/temp/vpmdk_private/examples/api_chgnet/README.md)
 
 ## Quick Start
 

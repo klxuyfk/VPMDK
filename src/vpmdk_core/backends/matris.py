@@ -107,6 +107,18 @@ def _build_matris_calculator(bcar_tags: Dict[str, str]):
         return root._instantiate_matris_calculator(model=model, task=task, device=device)
 
     kwargs: Dict[str, object] = {}
-    if graph_converter_algorithm is not None:
+    if graph_converter_algorithm is not None and root._callable_supports_parameter(
+        root.MatRISCalculator,
+        "graph_converter_algorithm",
+    ):
         kwargs["graph_converter_algorithm"] = graph_converter_algorithm
-    return root.MatRISCalculator(model=model_value, task=task, device=device, **kwargs)
+        return root.MatRISCalculator(model=model_value, task=task, device=device, **kwargs)
+
+    calculator = root.MatRISCalculator(model=model_value, task=task, device=device, **kwargs)
+    if graph_converter_algorithm is not None:
+        calculator.model = root._override_model_graph_converter_algorithm(
+            calculator.model,
+            algorithm=graph_converter_algorithm,
+            backend_name="MatRIS",
+        )
+    return calculator
