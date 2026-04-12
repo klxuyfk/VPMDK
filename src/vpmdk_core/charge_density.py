@@ -279,7 +279,6 @@ def _run_charge3net_backend(
 
     runner_path = Path(__file__).with_name("charge3net_runner.py")
     python_path = _resolve_charge_python(python_executable)
-    resolved_device = _root()._resolve_device(device)
 
     with tempfile.TemporaryDirectory(prefix="vpmdk_charge3net_") as tmp_dir:
         input_path = Path(tmp_dir) / "input.npz"
@@ -301,8 +300,6 @@ def _run_charge3net_backend(
             str(output_path),
             "--model-path",
             str(model_path),
-            "--device",
-            str(resolved_device),
             "--cutoff",
             str(float(cutoff)),
             "--max-probes-per-batch",
@@ -310,6 +307,8 @@ def _run_charge3net_backend(
             "--source-dir",
             str(source_dir),
         ]
+        if device is not None:
+            command.extend(["--device", str(_root()._resolve_device(device))])
         completed = subprocess.run(
             command,
             capture_output=True,
@@ -368,7 +367,7 @@ def predict_charge_density(
         backend=backend_name,
         metadata={
             "model_path": model_path,
-            "device": _root()._resolve_device(device),
+            "device": "auto" if device is None else _root()._resolve_device(device),
             "source_dir": _resolve_charge_source_dir(source_dir),
         },
     )

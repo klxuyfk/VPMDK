@@ -15,7 +15,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True, help="Output NPY path.")
     parser.add_argument("--source-dir", required=True, help="charge3net source checkout.")
     parser.add_argument("--model-path", required=True, help="ChargE3Net checkpoint path.")
-    parser.add_argument("--device", default="cpu", help="Torch device string.")
+    parser.add_argument("--device", default=None, help="Torch device string.")
     parser.add_argument("--cutoff", type=float, default=4.0, help="Probe/atom cutoff in Angstrom.")
     parser.add_argument(
         "--max-probes-per-batch",
@@ -46,6 +46,12 @@ def _grid_positions_for_slice(
     return fractional @ cell
 
 
+def _resolve_device_argument(requested_device: str | None, torch_module) -> str:
+    if requested_device:
+        return requested_device
+    return "cuda" if torch_module.cuda.is_available() else "cpu"
+
+
 def main() -> int:
     args = _parse_args()
 
@@ -71,7 +77,7 @@ def main() -> int:
     grid_shape = tuple(int(value) for value in np.asarray(payload["grid_shape"], dtype=np.int64))
 
     atoms = Atoms(numbers=numbers, positions=positions, cell=cell, pbc=pbc)
-    device = torch.device(args.device)
+    device = torch.device(_resolve_device_argument(args.device, torch))
 
     model = E3DensityModel(
         num_interactions=3,

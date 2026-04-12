@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import importlib
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -110,3 +111,57 @@ def test_public_predict_charge_density_uses_backend_runner(
     assert result.density.shape == (108, 108, 84)
     assert seen["grid_shape"] == (108, 108, 84)
     assert seen["n_atoms"] == len(atoms)
+
+
+def test_charge3net_backend_omits_device_flag_when_unspecified(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    atoms = Atoms(
+        "H2",
+        positions=[[0.0, 0.0, 0.0], [0.0, 0.75, 0.0]],
+        cell=np.eye(3),
+        pbc=True,
+    )
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_charge_source_dir",
+        lambda source_dir: "/tmp/charge3net",
+    )
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_charge_model_path",
+        lambda model_path, source_dir: "/tmp/charge3net/models/model.pt",
+    )
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_charge_python",
+        lambda python_executable: "/tmp/charge-env/bin/python",
+    )
+    monkeypatch.setattr(charge_density_module.np, "load", lambda path: np.ones((2, 2, 2), dtype=np.float32))
+    monkeypatch.setattr(
+        charge_density_module,
+        "_root",
+        lambda: SimpleNamespace(_resolve_device=lambda value: (_ for _ in ()).throw(AssertionError())),
+    )
+
+    def fake_run(command, **kwargs):
+        seen["command"] = list(command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(charge_density_module.subprocess, "run", fake_run)
+
+    density = charge_density_module._run_charge3net_backend(atoms, grid_shape=(2, 2, 2))
+
+    assert density.shape == (2, 2, 2)
+    assert "--device" not in seen["command"]
+
+
+def test_charge3net_runner_auto_device_prefers_cuda_when_available():
+    fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: True))
+
+    from vpmdk_core.charge3net_runner import _resolve_device_argument
+
+    assert _resolve_device_argument(None, fake_torch) == "cuda"
+    assert _resolve_device_argument("cpu", fake_torch) == "cpu"
