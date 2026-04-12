@@ -5,11 +5,13 @@ from __future__ import annotations
 import sys
 from typing import Any
 
+from .charge_density import predict_charge_density
 from .execution import execute_md, execute_relaxation, execute_single_point
 from .models import (
     BackendCapabilities,
     BackendConfig,
     BackendSpec,
+    ChargeDensityResult,
     MDConfig,
     MDResult,
     RelaxConfig,
@@ -93,7 +95,7 @@ def _backend_available(name: str) -> bool:
         "HIENET": lambda: root.HIENetCalculator is not None,
         "NEQUIX": lambda: root.NequixCalculator is not None,
         "SEVENNET": lambda: root.SevenNetCalculator is not None,
-        "FLASHTP": lambda: root.SevenNetCalculator is not None,
+        "FLASHTP": lambda: root._is_sevennet_flash_available(),
         "ALLEGRO": lambda: root.NequIPCalculator is not None,
         "NEQUIP": lambda: root.NequIPCalculator is not None,
         "ORB": lambda: root.ORBCalculator is not None and root.ORB_PRETRAINED_MODELS is not None,

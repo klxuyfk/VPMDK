@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from ase.calculators.calculator import all_changes
 
 import vpmdk
 from tests.conftest import DummyCalculator
@@ -72,6 +73,50 @@ def test_list_backends_exposes_known_entries():
     assert "CHGNET" in names
     assert "MACE" in names
     assert "FAIRCHEM" in names
+
+
+def test_list_backends_marks_flashtp_unavailable_without_flash_support(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(vpmdk, "SevenNetCalculator", object())
+    monkeypatch.setattr(vpmdk, "_is_sevennet_flash_available", lambda: False)
+
+    specs = {spec.name: spec for spec in vpmdk.list_backends()}
+
+    assert specs["SEVENNET"].available is True
+    assert specs["FLASHTP"].available is False
+
+
+def test_public_relax_reports_non_convergence_and_avoids_outcar_side_effects(
+    tmp_path: Path,
+    load_atoms,
+):
+    atoms = load_atoms()
+
+    class ForceDummyCalculator(DummyCalculator):
+        def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+            super().calculate(atoms, properties, system_changes)
+            self.results["forces"] = self.results["forces"] + 0.1
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    try:
+        result = vpmdk.relax(
+            atoms,
+            calculator=ForceDummyCalculator(),
+            steps=0,
+            fmax=0.02,
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert isinstance(result, vpmdk.RelaxResult)
+    assert result.converged is False
+    assert len(result.steps) == 1
+    assert not (tmp_path / "OUTCAR").exists()
+    assert not (tmp_path / "OSZICAR").exists()
+    assert not (tmp_path / "vasprun.xml").exists()
+    assert not (tmp_path / "CONTCAR").exists()
 
 
 def test_public_md_maps_thermostat_name(monkeypatch: pytest.MonkeyPatch, load_atoms):

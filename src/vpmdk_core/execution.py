@@ -120,9 +120,10 @@ def execute_relaxation(
     previous_energy: float | None = None
     relax_object = None
     dyn = None
+    converged: bool | None = None
     with root._temporarily_freeze_atoms(atoms, freeze_required):
         relax_object = builder(atoms)
-        dyn = root.BFGS(relax_object, logfile="OUTCAR")
+        dyn = root.BFGS(relax_object, logfile=None)
 
         def _record_step() -> None:
             nonlocal previous_energy
@@ -140,13 +141,15 @@ def execute_relaxation(
 
         dyn.attach(_record_step)
         if config.energy_tolerance is None:
-            dyn.run(fmax=config.fmax, steps=config.steps)
+            converged = bool(dyn.run(fmax=config.fmax, steps=config.steps))
         else:
             monitor = root._EnergyConvergenceMonitor(atoms, config.energy_tolerance)
             dyn.fmax = config.fmax
+            converged = False
             for force_converged in dyn.irun(steps=config.steps):
                 energy_converged = monitor.update()
                 if energy_converged or force_converged:
+                    converged = True
                     break
 
     target_atoms = getattr(relax_object, "atoms", atoms)
@@ -159,7 +162,6 @@ def execute_relaxation(
             observer.on_step(target_atoms, fallback_step, context)
 
     common = _build_result(target_atoms, calculator, recorded_steps[-1].potential_energy)
-    converged = getattr(dyn, "converged", None)
     result = RelaxResult(
         atoms=common.atoms,
         calculator=common.calculator,
@@ -167,7 +169,7 @@ def execute_relaxation(
         forces=common.forces,
         stress=common.stress,
         steps=recorded_steps,
-        converged=bool(converged) if converged is not None else None,
+        converged=converged,
     )
     if observer is not None:
         observer.on_finish(target_atoms, result, context)
