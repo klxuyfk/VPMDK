@@ -262,20 +262,54 @@ def test_charge3net_runner_resolves_model_config_from_checkpoint_and_overrides(
     }
 
 
-def test_charge3net_runner_uses_default_model_config_without_inference(
+def test_charge3net_runner_uses_inferred_config_for_metadata_free_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
 ):
     checkpoint = {
         "model": {"dummy": np.zeros((1,))},
     }
 
-    def _unexpected_infer(*_args, **_kwargs):
-        raise AssertionError("state_dict inference should not run for metadata-free default path")
+    monkeypatch.setattr(
+        charge3net_runner_module,
+        "_infer_model_config_from_state_dict",
+        lambda state_dict, model_cls: {
+            "num_interactions": 2,
+            "mul": 192,
+            "lmax": 3,
+            "num_basis": 12,
+            "spin": False,
+        },
+    )
+
+    config = charge3net_runner_module._resolve_model_config(
+        checkpoint,
+        explicit_config={"cutoff": 5.5},
+        model_cls=object,
+    )
+
+    assert config == {
+        "num_interactions": 2,
+        "num_neighbors": 20.0,
+        "mul": 192,
+        "lmax": 3,
+        "cutoff": 5.5,
+        "basis": "gaussian",
+        "num_basis": 12,
+        "spin": False,
+    }
+
+
+def test_charge3net_runner_falls_back_to_defaults_when_inference_finds_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    checkpoint = {
+        "model": {"dummy": np.zeros((1,))},
+    }
 
     monkeypatch.setattr(
         charge3net_runner_module,
         "_infer_model_config_from_state_dict",
-        _unexpected_infer,
+        lambda state_dict, model_cls: {},
     )
 
     config = charge3net_runner_module._resolve_model_config(

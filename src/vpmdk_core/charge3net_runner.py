@@ -194,6 +194,16 @@ def _infer_spin(state_dict: Mapping[str, object]) -> bool | None:
     return None
 
 
+def _extract_state_dict_shape_signature(
+    state_dict: Mapping[str, object],
+) -> tuple[tuple[str, tuple[int, ...]], ...]:
+    return tuple(
+        (key, tuple(state_dict[key].shape))
+        for key in _MODEL_SHAPE_KEYS
+        if key in state_dict and hasattr(state_dict[key], "shape")
+    )
+
+
 @lru_cache(maxsize=256)
 def _candidate_shape_signature(
     model_cls,
@@ -232,11 +242,7 @@ def _infer_mul_lmax_from_state_dict(
     num_basis: int,
     spin: bool,
 ) -> dict[str, int]:
-    target_signature = tuple(
-        (key, tuple(state_dict[key].shape))
-        for key in _MODEL_SHAPE_KEYS
-        if key in state_dict and hasattr(state_dict[key], "shape")
-    )
+    target_signature = _extract_state_dict_shape_signature(state_dict)
     if not target_signature:
         return {}
 
@@ -301,15 +307,28 @@ def _infer_model_config_from_state_dict(
     if spin is not None:
         config["spin"] = spin
     if num_interactions is not None and num_basis is not None and spin is not None:
-        config.update(
-            _infer_mul_lmax_from_state_dict(
-                state_dict,
-                model_cls,
-                num_interactions=num_interactions,
-                num_basis=num_basis,
-                spin=spin,
-            )
+        target_signature = _extract_state_dict_shape_signature(state_dict)
+        default_signature = _candidate_shape_signature(
+            model_cls,
+            num_interactions=num_interactions,
+            num_basis=num_basis,
+            spin=spin,
+            lmax=int(_DEFAULT_MODEL_CONFIG["lmax"]),
+            mul=int(_DEFAULT_MODEL_CONFIG["mul"]),
         )
+        if target_signature and target_signature == default_signature:
+            config["mul"] = int(_DEFAULT_MODEL_CONFIG["mul"])
+            config["lmax"] = int(_DEFAULT_MODEL_CONFIG["lmax"])
+        else:
+            config.update(
+                _infer_mul_lmax_from_state_dict(
+                    state_dict,
+                    model_cls,
+                    num_interactions=num_interactions,
+                    num_basis=num_basis,
+                    spin=spin,
+                )
+            )
     return config
 
 
@@ -321,16 +340,14 @@ def _resolve_model_config(
 ) -> dict[str, object]:
     state_dict = _normalize_state_dict(checkpoint)
     config = _extract_model_config_from_checkpoint(checkpoint)
-    if not config:
-        config = dict(_DEFAULT_MODEL_CONFIG)
+    inferred = _infer_model_config_from_state_dict(state_dict, model_cls)
+    for key, value in inferred.items():
+        config.setdefault(key, value)
     for key, value in explicit_config.items():
         if value is not None:
             config[key] = value
-    required_fields = ("num_interactions", "num_neighbors", "mul", "lmax", "basis", "num_basis", "spin")
-    if any(field not in config for field in required_fields):
-        inferred = _infer_model_config_from_state_dict(state_dict, model_cls)
-        for key, value in inferred.items():
-            config.setdefault(key, value)
+    for key, value in _DEFAULT_MODEL_CONFIG.items():
+        config.setdefault(key, value)
     return config
 
 
