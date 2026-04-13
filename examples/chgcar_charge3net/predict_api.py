@@ -30,7 +30,7 @@ def main() -> None:
     )
 
     output_path = HERE / "api_CHGCAR"
-    vpmdk.write_chgcar(output_path, atoms, result.density)
+    vpmdk.write_chgcar(output_path, atoms, result.density, spin_density=result.spin_density)
 
     print(f"backend={result.backend}")
     print(f"grid_shape={result.grid_shape}")

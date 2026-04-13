@@ -200,6 +200,7 @@ result = vpmdk.predict_charge_density(
 
 print(result.grid_shape)
 print(result.density.shape)
+print(result.spin_density is None)
 ```
 
 If you want a VASP-like grid derived from `INCAR`, use `vpmdk.determine_vasp_fft_grid(...)` or pass `incar=` directly:
@@ -222,6 +223,7 @@ Returned object:
 
 - `result.atoms`: `Atoms` used for prediction
 - `result.density`: 3D NumPy array
+- `result.spin_density`: optional 3D NumPy array for spin-enabled checkpoints
 - `result.grid_shape`: `(NGXF, NGYF, NGZF)`
 - `result.backend`: normalized backend name
 - `result.metadata`: backend-specific execution details
@@ -229,7 +231,7 @@ Returned object:
 To write a VASP-like `CHGCAR` after prediction:
 
 ```python
-vpmdk.write_chgcar("CHGCAR", atoms, result.density)
+vpmdk.write_chgcar("CHGCAR", atoms, result.density, spin_density=result.spin_density)
 ```
 
 Notes:

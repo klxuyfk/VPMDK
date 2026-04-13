@@ -290,7 +290,7 @@ def _run_charge3net_backend(
     basis: str | None = None,
     num_basis: int | None = None,
     spin: bool | None = None,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray | None]:
     source_dir = _resolve_charge_source_dir(source_dir)
     model_path = _resolve_charge_model_path(model_path, source_dir)
     if not model_path:
@@ -305,7 +305,7 @@ def _run_charge3net_backend(
 
     with tempfile.TemporaryDirectory(prefix="vpmdk_charge3net_") as tmp_dir:
         input_path = Path(tmp_dir) / "input.npz"
-        output_path = Path(tmp_dir) / "density.npy"
+        output_path = Path(tmp_dir) / "density.npz"
         np.savez(
             input_path,
             numbers=np.asarray(atoms.get_atomic_numbers(), dtype=np.int64),
@@ -357,7 +357,12 @@ def _run_charge3net_backend(
             stdout = completed.stdout.strip()
             details = stderr or stdout or "no output"
             raise RuntimeError(f"ChargE3Net prediction failed: {details}")
-        return np.load(output_path)
+        with np.load(output_path) as payload:
+            density = np.asarray(payload["density"])
+            spin_density = (
+                None if "spin_density" not in payload.files else np.asarray(payload["spin_density"])
+            )
+        return density, spin_density
 
 
 def predict_charge_density(
@@ -391,7 +396,7 @@ def predict_charge_density(
 
     backend_name = _normalize_charge_backend_name(backend)
     if backend_name == "CHARGE3NET":
-        density = _run_charge3net_backend(
+        density, spin_density = _run_charge3net_backend(
             atoms,
             grid_shape=grid_shape,
             model_path=model_path,
@@ -416,6 +421,7 @@ def predict_charge_density(
         density=density,
         grid_shape=grid_shape,
         backend=backend_name,
+        spin_density=spin_density,
         metadata={
             "model_path": model_path,
             "device": "auto" if device is None else _root()._resolve_device(device),
@@ -430,6 +436,7 @@ def predict_charge_density(
                     "basis": basis,
                     "num_basis": num_basis,
                     "spin": spin,
+                    "spin_output": spin_density is not None,
                 }.items()
                 if value is not None
             },

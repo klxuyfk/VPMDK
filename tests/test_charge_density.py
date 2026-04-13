@@ -21,6 +21,23 @@ charge3net_runner_module = importlib.util.module_from_spec(charge3net_runner_spe
 charge3net_runner_spec.loader.exec_module(charge3net_runner_module)
 
 
+class _FakeLoadedDensity:
+    def __init__(self, density, spin_density=None):
+        self.files = ["density"] if spin_density is None else ["density", "spin_density"]
+        self._payload = {"density": density}
+        if spin_density is not None:
+            self._payload["spin_density"] = spin_density
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def __getitem__(self, key):
+        return self._payload[key]
+
+
 def test_determine_vasp_fft_grid_matches_normal_reference():
     atoms = Atoms(
         "H2",
@@ -103,7 +120,7 @@ def test_public_predict_charge_density_uses_backend_runner(
     def fake_runner(atoms_arg, **kwargs):
         seen["n_atoms"] = len(atoms_arg)
         seen.update(kwargs)
-        return np.ones(kwargs["grid_shape"], dtype=np.float32)
+        return np.ones(kwargs["grid_shape"], dtype=np.float32), None
 
     monkeypatch.setattr(charge_density_module, "_run_charge3net_backend", fake_runner)
 
@@ -147,7 +164,11 @@ def test_charge3net_backend_allows_missing_source_dir_and_omits_device_flag_when
         "_resolve_charge_python",
         lambda python_executable: "/tmp/charge-env/bin/python",
     )
-    monkeypatch.setattr(charge_density_module.np, "load", lambda path: np.ones((2, 2, 2), dtype=np.float32))
+    monkeypatch.setattr(
+        charge_density_module.np,
+        "load",
+        lambda path: _FakeLoadedDensity(np.ones((2, 2, 2), dtype=np.float32)),
+    )
     monkeypatch.setattr(
         charge_density_module,
         "_root",
@@ -160,9 +181,10 @@ def test_charge3net_backend_allows_missing_source_dir_and_omits_device_flag_when
 
     monkeypatch.setattr(charge_density_module.subprocess, "run", fake_run)
 
-    density = charge_density_module._run_charge3net_backend(atoms, grid_shape=(2, 2, 2))
+    density, spin_density = charge_density_module._run_charge3net_backend(atoms, grid_shape=(2, 2, 2))
 
     assert density.shape == (2, 2, 2)
+    assert spin_density is None
     assert "--device" not in seen["command"]
     assert "--source-dir" not in seen["command"]
 
@@ -195,7 +217,11 @@ def test_charge3net_backend_passes_explicit_model_config_flags(
         "_resolve_charge_python",
         lambda python_executable: "/tmp/charge-env/bin/python",
     )
-    monkeypatch.setattr(charge_density_module.np, "load", lambda path: np.ones((2, 2, 2), dtype=np.float32))
+    monkeypatch.setattr(
+        charge_density_module.np,
+        "load",
+        lambda path: _FakeLoadedDensity(np.ones((2, 2, 2), dtype=np.float32)),
+    )
 
     def fake_run(command, **kwargs):
         seen["command"] = list(command)
@@ -223,6 +249,48 @@ def test_charge3net_backend_passes_explicit_model_config_flags(
     assert "--basis" in command
     assert "--num-basis" in command
     assert "--spin" in command
+
+
+def test_charge3net_runner_split_probe_output_handles_spin_channels():
+    predictions = [
+        SimpleNamespace(
+            detach=lambda: SimpleNamespace(
+                cpu=lambda: SimpleNamespace(
+                    numpy=lambda: np.array(
+                        [
+                            [1.0, 0.25],
+                            [0.5, -0.5],
+                        ],
+                        dtype=np.float32,
+                    )
+                )
+            )
+        )
+    ]
+
+    density, spin_density = charge3net_runner_module._split_probe_output(predictions, spin=True)
+
+    assert np.allclose(density, np.array([1.25, 0.0], dtype=np.float32))
+    assert np.allclose(spin_density, np.array([0.75, 1.0], dtype=np.float32))
+
+
+def test_public_predict_charge_density_preserves_spin_density(monkeypatch: pytest.MonkeyPatch):
+    atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3), pbc=True)
+
+    monkeypatch.setattr(
+        charge_density_module,
+        "_run_charge3net_backend",
+        lambda atoms_arg, **kwargs: (
+            np.ones((2, 2, 2), dtype=np.float32),
+            np.full((2, 2, 2), 0.5, dtype=np.float32),
+        ),
+    )
+
+    result = vpmdk.predict_charge_density(atoms, grid_shape=(2, 2, 2), spin=True)
+
+    assert result.spin_density is not None
+    assert result.spin_density.shape == (2, 2, 2)
+    assert result.metadata["model_config"]["spin_output"] is True
 
 
 def test_charge3net_runner_resolves_model_config_from_checkpoint_and_overrides(

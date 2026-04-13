@@ -312,6 +312,7 @@ class ChargeDensityResult:
     density: Any
     grid_shape: tuple[int, int, int]
     backend: str
+    spin_density: Any | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

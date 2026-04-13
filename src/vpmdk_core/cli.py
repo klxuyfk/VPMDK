@@ -136,6 +136,11 @@ def main():
                     reference=atoms,
                     **root._charge_density_options_from_bcar(bcar),
                 )
-                root.write_chgcar("CHGCAR", atoms, charge_result.density)
+                root.write_chgcar(
+                    "CHGCAR",
+                    atoms,
+                    charge_result.density,
+                    spin_density=charge_result.spin_density,
+                )
 
     print("Calculation completed.")

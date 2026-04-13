@@ -82,6 +82,22 @@ def _move_batch_to_device(batch: dict[str, object], device):
     }
 
 
+def _split_probe_output(predictions, *, spin: bool) -> tuple[np.ndarray, np.ndarray | None]:
+    prediction_array = predictions[0].detach().cpu().numpy()
+    if not spin:
+        return np.asarray(prediction_array, dtype=np.float32), None
+    if prediction_array.ndim != 2 or prediction_array.shape[1] != 2:
+        raise RuntimeError(
+            "Spin-enabled ChargE3Net probe head must return shape (n_probe, 2), "
+            f"got {prediction_array.shape!r}."
+        )
+    spin_up = prediction_array[:, 0]
+    spin_down = prediction_array[:, 1]
+    charge_density = spin_up + spin_down
+    spin_density = spin_up - spin_down
+    return np.asarray(charge_density, dtype=np.float32), np.asarray(spin_density, dtype=np.float32)
+
+
 def _grid_positions_for_slice(
     grid_shape: tuple[int, int, int],
     cell: np.ndarray,
@@ -455,6 +471,7 @@ def main() -> int:
         atom_representation = model.atom_model(atom_batch)
         total_probes = int(np.prod(grid_shape))
         density_parts: list[np.ndarray] = []
+        spin_density_parts: list[np.ndarray] = []
         for start in range(0, total_probes, int(args.max_probes_per_batch)):
             stop = min(start + int(args.max_probes_per_batch), total_probes)
             probe_positions = _grid_positions_for_slice(grid_shape, cell, start, stop)
@@ -489,10 +506,21 @@ def main() -> int:
                 ),
             }
             predictions = model.probe_model(probe_batch, atom_representation)
-            density_parts.append(predictions[0].detach().cpu().numpy())
+            density_chunk, spin_density_chunk = _split_probe_output(
+                predictions,
+                spin=bool(model_config.get("spin", False)),
+            )
+            density_parts.append(density_chunk)
+            if spin_density_chunk is not None:
+                spin_density_parts.append(spin_density_chunk)
 
     density = np.concatenate(density_parts, axis=0).reshape(grid_shape)
-    np.save(args.output, density.astype(np.float32))
+    output_payload = {"density": density.astype(np.float32)}
+    if spin_density_parts:
+        output_payload["spin_density"] = (
+            np.concatenate(spin_density_parts, axis=0).reshape(grid_shape).astype(np.float32)
+        )
+    np.savez(args.output, **output_payload)
     return 0
 
 

@@ -1603,12 +1603,14 @@ def test_main_writes_chgcar_when_requested(tmp_path: Path, prepare_inputs):
             density=np.ones((2, 2, 2), dtype=float),
             grid_shape=(2, 2, 2),
             backend="CHARGE3NET",
+            spin_density=np.full((2, 2, 2), 0.5, dtype=float),
         )
 
     def fake_write_chgcar(path, atoms, density, **kwargs):
         seen["path"] = path
         seen["shape"] = tuple(density.shape)
         seen["n_atoms"] = len(atoms)
+        seen["spin_shape"] = None if kwargs.get("spin_density") is None else tuple(kwargs["spin_density"].shape)
 
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
@@ -1622,6 +1624,7 @@ def test_main_writes_chgcar_when_requested(tmp_path: Path, prepare_inputs):
 
     assert seen["path"] == "CHGCAR"
     assert seen["shape"] == (2, 2, 2)
+    assert seen["spin_shape"] == (2, 2, 2)
     assert seen["n_atoms"] == 2
     assert seen["incar"]["PREC"] == "N"
     assert seen["incar"]["ENCUT"] == "400"
@@ -1666,11 +1669,13 @@ def test_main_writes_chgcar_in_requested_directory_using_final_cell(
             density=np.ones((2, 2, 2), dtype=float),
             grid_shape=(2, 2, 2),
             backend="CHARGE3NET",
+            spin_density=np.full((2, 2, 2), 0.25, dtype=float),
         )
 
     def fake_write_chgcar(path, atoms, density, **kwargs):
         seen["write_cwd"] = Path.cwd()
         seen["path"] = path
+        seen["spin_shape"] = None if kwargs.get("spin_density") is None else tuple(kwargs["spin_density"].shape)
 
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.chdir(caller_dir)
@@ -1687,6 +1692,7 @@ def test_main_writes_chgcar_in_requested_directory_using_final_cell(
     assert seen["predict_cwd"] == tmp_path
     assert seen["write_cwd"] == tmp_path
     assert seen["path"] == "CHGCAR"
+    assert seen["spin_shape"] == (2, 2, 2)
     assert seen["source_dir"] == "relative-source"
     assert np.allclose(seen["reference_cell"], seen["atoms_cell"])
     assert not np.allclose(seen["reference_cell"], np.array(initial_atoms.get_cell()))
