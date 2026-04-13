@@ -281,7 +281,7 @@ def _run_charge3net_backend(
     device: str | None = None,
     source_dir: str | None = None,
     python_executable: str | None = None,
-    cutoff: float = _DEFAULT_CHARGE_CUTOFF,
+    cutoff: float | None = None,
     max_probes_per_batch: int = _DEFAULT_MAX_PROBES_PER_BATCH,
     num_interactions: int | None = None,
     num_neighbors: float | None = None,
@@ -323,11 +323,11 @@ def _run_charge3net_backend(
             str(output_path),
             "--model-path",
             str(model_path),
-            "--cutoff",
-            str(float(cutoff)),
             "--max-probes-per-batch",
             str(int(max_probes_per_batch)),
         ]
+        if cutoff is not None:
+            command.extend(["--cutoff", str(float(cutoff))])
         if source_dir:
             command.extend(["--source-dir", str(source_dir)])
         if device is not None:
@@ -376,7 +376,7 @@ def predict_charge_density(
     device: str | None = None,
     source_dir: str | None = None,
     python_executable: str | None = None,
-    cutoff: float = _DEFAULT_CHARGE_CUTOFF,
+    cutoff: float | None = None,
     max_probes_per_batch: int = _DEFAULT_MAX_PROBES_PER_BATCH,
     num_interactions: int | None = None,
     num_neighbors: float | None = None,
@@ -436,6 +436,7 @@ def predict_charge_density(
                     "basis": basis,
                     "num_basis": num_basis,
                     "spin": spin,
+                    "cutoff": cutoff,
                     "spin_output": spin_density is not None,
                 }.items()
                 if value is not None

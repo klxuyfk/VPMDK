@@ -187,6 +187,7 @@ def test_charge3net_backend_allows_missing_source_dir_and_omits_device_flag_when
     assert spin_density is None
     assert "--device" not in seen["command"]
     assert "--source-dir" not in seen["command"]
+    assert "--cutoff" not in seen["command"]
 
 
 def test_charge3net_runner_auto_device_prefers_cuda_when_available():
@@ -242,6 +243,7 @@ def test_charge3net_backend_passes_explicit_model_config_flags(
     )
 
     command = seen["command"]
+    assert "--cutoff" not in command
     assert "--num-interactions" in command
     assert "--num-neighbors" in command
     assert "--mul" in command
@@ -291,6 +293,63 @@ def test_public_predict_charge_density_preserves_spin_density(monkeypatch: pytes
     assert result.spin_density is not None
     assert result.spin_density.shape == (2, 2, 2)
     assert result.metadata["model_config"]["spin_output"] is True
+
+
+def test_charge3net_backend_passes_explicit_cutoff_override(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3), pbc=True)
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(charge_density_module, "_resolve_charge_source_dir", lambda source_dir: None)
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_charge_model_path",
+        lambda model_path, source_dir: "/tmp/charge3net/models/model.pt",
+    )
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_charge_python",
+        lambda python_executable: "/tmp/charge-env/bin/python",
+    )
+    monkeypatch.setattr(
+        charge_density_module.np,
+        "load",
+        lambda path: _FakeLoadedDensity(np.ones((2, 2, 2), dtype=np.float32)),
+    )
+
+    def fake_run(command, **kwargs):
+        seen["command"] = list(command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(charge_density_module.subprocess, "run", fake_run)
+
+    charge_density_module._run_charge3net_backend(atoms, grid_shape=(2, 2, 2), cutoff=5.5)
+
+    command = seen["command"]
+    cutoff_index = command.index("--cutoff")
+    assert command[cutoff_index + 1] == "5.5"
+
+
+def test_charge3net_runner_safe_globals_is_compatible_with_older_torch():
+    fake_torch = SimpleNamespace()
+
+    charge3net_runner_module._ensure_torch_safe_globals(fake_torch)
+
+    fake_serialization = SimpleNamespace()
+    fake_torch_with_serialization = SimpleNamespace(serialization=fake_serialization)
+    charge3net_runner_module._ensure_torch_safe_globals(fake_torch_with_serialization)
+
+    seen: dict[str, object] = {}
+    fake_torch_modern = SimpleNamespace(
+        serialization=SimpleNamespace(
+            add_safe_globals=lambda values: seen.setdefault("values", list(values))
+        )
+    )
+
+    charge3net_runner_module._ensure_torch_safe_globals(fake_torch_modern)
+
+    assert seen["values"] == [slice]
 
 
 def test_charge3net_runner_resolves_model_config_from_checkpoint_and_overrides(

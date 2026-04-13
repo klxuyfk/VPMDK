@@ -58,7 +58,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--source-dir", default=None, help="charge3net source checkout.")
     parser.add_argument("--model-path", required=True, help="ChargE3Net checkpoint path.")
     parser.add_argument("--device", default=None, help="Torch device string.")
-    parser.add_argument("--cutoff", type=float, default=4.0, help="Probe/atom cutoff in Angstrom.")
+    parser.add_argument(
+        "--cutoff",
+        type=float,
+        default=None,
+        help="Probe/atom cutoff in Angstrom. Overrides checkpoint/default cutoff when set.",
+    )
     parser.add_argument(
         "--max-probes-per-batch",
         type=int,
@@ -115,6 +120,13 @@ def _resolve_device_argument(requested_device: str | None, torch_module) -> str:
     if requested_device:
         return requested_device
     return "cuda" if torch_module.cuda.is_available() else "cpu"
+
+
+def _ensure_torch_safe_globals(torch_module) -> None:
+    serialization = getattr(torch_module, "serialization", None)
+    add_safe_globals = getattr(serialization, "add_safe_globals", None)
+    if callable(add_safe_globals):
+        add_safe_globals([slice])
 
 
 def _coerce_mapping(value: object) -> Mapping[str, object] | None:
@@ -399,10 +411,9 @@ def main() -> int:
     args = _parse_args()
 
     import torch
-    from torch.serialization import add_safe_globals
     from ase import Atoms
 
-    add_safe_globals([slice])
+    _ensure_torch_safe_globals(torch)
 
     E3DensityModel, KdTreeGraphConstructor, collate_list_of_dicts = _load_charge3net_modules(
         args.source_dir
@@ -432,7 +443,7 @@ def main() -> int:
         },
         model_cls=E3DensityModel,
     )
-    resolved_cutoff = float(model_config.get("cutoff", args.cutoff))
+    resolved_cutoff = float(model_config.get("cutoff", _DEFAULT_MODEL_CONFIG["cutoff"]))
 
     model = E3DensityModel(
         num_interactions=int(model_config.get("num_interactions", 3)),
