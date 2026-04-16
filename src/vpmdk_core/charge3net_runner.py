@@ -187,6 +187,13 @@ def _load_checkout_modules(prefix: str, package_root: Path):
     )
 
 
+def _find_installed_package_root(prefix: str) -> Path:
+    package_spec = importlib.util.find_spec(prefix)
+    if package_spec is None or not package_spec.submodule_search_locations:
+        raise ModuleNotFoundError(f"Installed package {prefix!r} not found.")
+    return Path(next(iter(package_spec.submodule_search_locations))).resolve()
+
+
 def _coerce_mapping(value: object) -> Mapping[str, object] | None:
     if isinstance(value, Mapping):
         return value
@@ -458,14 +465,7 @@ def _load_charge3net_modules(source_dir: str | None):
     last_error: Exception | None = None
     for prefix in ("src.charge3net", "charge3net"):
         try:
-            e3_module = importlib.import_module(f"{prefix}.models.e3")
-            graph_module = importlib.import_module(f"{prefix}.data.graph_construction")
-            collate_module = importlib.import_module(f"{prefix}.data.collate")
-            return (
-                e3_module.E3DensityModel,
-                graph_module.KdTreeGraphConstructor,
-                collate_module.collate_list_of_dicts,
-            )
+            return _load_checkout_modules(prefix, _find_installed_package_root(prefix))
         except Exception as exc:  # pragma: no cover - exercised indirectly in subprocess
             last_error = exc
 
@@ -474,6 +474,31 @@ def _load_charge3net_modules(source_dir: str | None):
         "Unable to import ChargE3Net modules. Install ChargE3Net in CHARGE_PYTHON "
         "or set CHARGE_SOURCE_DIR to a checkout path"
         f"{details}"
+    )
+
+
+def _coalesce_edge_groups(
+    edge_groups,
+    displacement_groups,
+    *,
+    float_dtype=float,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    valid_edges = [np.asarray(edges, dtype=np.int64) for edges in edge_groups if len(edges) > 0]
+    valid_displacements = [
+        np.asarray(displacements, dtype=float)
+        for displacements in displacement_groups
+        if len(displacements) > 0
+    ]
+    if not valid_edges:
+        return (
+            np.zeros((0, 2), dtype=np.int64),
+            np.zeros((0, 3), dtype=float_dtype),
+            0,
+        )
+    return (
+        np.concatenate(valid_edges, axis=0),
+        np.concatenate(valid_displacements, axis=0).astype(float_dtype, copy=False),
+        int(sum(len(edges) for edges in valid_edges)),
     )
 
 
@@ -533,15 +558,17 @@ def main() -> int:
     constructor = KdTreeGraphConstructor(cutoff=resolved_cutoff, num_probes=None)
     atom_edges, atom_edges_displacement, _, _ = constructor.atoms_to_graph(atoms)
     default_type = torch.get_default_dtype()
+    atom_edge_array, atom_edge_displacement_array, num_atom_edges = _coalesce_edge_groups(
+        atom_edges,
+        atom_edges_displacement,
+        float_dtype=float,
+    )
     atom_graph = {
         "nodes": torch.tensor(atoms.get_atomic_numbers()),
-        "atom_edges": torch.tensor(np.concatenate(atom_edges, axis=0)),
-        "atom_edges_displacement": torch.tensor(
-            np.concatenate(atom_edges_displacement, axis=0),
-            dtype=default_type,
-        ),
+        "atom_edges": torch.tensor(atom_edge_array),
+        "atom_edges_displacement": torch.tensor(atom_edge_displacement_array, dtype=default_type),
         "num_nodes": torch.tensor(len(atoms)),
-        "num_atom_edges": torch.tensor(sum(len(edges) for edges in atom_edges)),
+        "num_atom_edges": torch.tensor(num_atom_edges),
         "atom_xyz": torch.tensor(atoms.get_positions(), dtype=default_type),
         "cell": torch.tensor(np.array(atoms.get_cell()), dtype=default_type),
     }

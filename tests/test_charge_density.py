@@ -401,6 +401,73 @@ def test_charge3net_runner_loads_checkout_modules_without_importing_data_init(
     assert callable(collate_list_of_dicts)
 
 
+def test_charge3net_runner_loads_installed_modules_without_importing_data_init(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    package_root = tmp_path / "site-packages" / "charge3net"
+    models_dir = package_root / "models"
+    data_dir = package_root / "data"
+    models_dir.mkdir(parents=True)
+    data_dir.mkdir(parents=True)
+
+    (package_root / "__init__.py").write_text("")
+    (models_dir / "__init__.py").write_text("")
+    (data_dir / "__init__.py").write_text("raise RuntimeError('training-only dependency import')")
+    (models_dir / "e3.py").write_text("class E3DensityModel:\n    pass\n")
+    (data_dir / "graph_construction.py").write_text("class KdTreeGraphConstructor:\n    pass\n")
+    (data_dir / "collate.py").write_text(
+        "def collate_list_of_dicts(*args, **kwargs):\n    return args, kwargs\n"
+    )
+
+    monkeypatch.setattr(
+        charge3net_runner_module.importlib.util,
+        "find_spec",
+        lambda name: (
+            SimpleNamespace(submodule_search_locations=[str(package_root)])
+            if name == "charge3net"
+            else None
+        ),
+    )
+
+    original_modules = {
+        name: sys.modules.get(name)
+        for name in (
+            "charge3net",
+            "charge3net.models",
+            "charge3net.models.e3",
+            "charge3net.data",
+            "charge3net.data.graph_construction",
+            "charge3net.data.collate",
+        )
+    }
+    try:
+        E3DensityModel, KdTreeGraphConstructor, collate_list_of_dicts = (
+            charge3net_runner_module._load_charge3net_modules(None)
+        )
+    finally:
+        for name, module in original_modules.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+
+    assert E3DensityModel.__name__ == "E3DensityModel"
+    assert KdTreeGraphConstructor.__name__ == "KdTreeGraphConstructor"
+    assert callable(collate_list_of_dicts)
+
+
+def test_charge3net_runner_coalesces_empty_atom_edges():
+    edges, displacements, count = charge3net_runner_module._coalesce_edge_groups(
+        [],
+        [],
+    )
+
+    assert edges.shape == (0, 2)
+    assert displacements.shape == (0, 3)
+    assert count == 0
+
+
 def test_charge3net_runner_resolves_model_config_from_checkpoint_and_overrides(
     monkeypatch: pytest.MonkeyPatch,
 ):
