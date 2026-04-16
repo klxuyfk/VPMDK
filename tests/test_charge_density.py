@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 import importlib
 import importlib.util
@@ -350,6 +351,54 @@ def test_charge3net_runner_safe_globals_is_compatible_with_older_torch():
     charge3net_runner_module._ensure_torch_safe_globals(fake_torch_modern)
 
     assert seen["values"] == [slice]
+
+
+def test_charge3net_runner_loads_checkout_modules_without_importing_data_init(
+    tmp_path: Path,
+):
+    checkout = tmp_path / "charge3net_checkout"
+    package_root = checkout / "src" / "charge3net"
+    models_dir = package_root / "models"
+    data_dir = package_root / "data"
+    models_dir.mkdir(parents=True)
+    data_dir.mkdir(parents=True)
+
+    (checkout / "src" / "__init__.py").write_text("")
+    (package_root / "__init__.py").write_text("")
+    (models_dir / "__init__.py").write_text("")
+    (data_dir / "__init__.py").write_text("raise RuntimeError('training-only dependency import')")
+    (models_dir / "e3.py").write_text("class E3DensityModel:\n    pass\n")
+    (data_dir / "graph_construction.py").write_text("class KdTreeGraphConstructor:\n    pass\n")
+    (data_dir / "collate.py").write_text(
+        "def collate_list_of_dicts(*args, **kwargs):\n    return args, kwargs\n"
+    )
+
+    original_modules = {
+        name: sys.modules.get(name)
+        for name in (
+            "src",
+            "src.charge3net",
+            "src.charge3net.models",
+            "src.charge3net.models.e3",
+            "src.charge3net.data",
+            "src.charge3net.data.graph_construction",
+            "src.charge3net.data.collate",
+        )
+    }
+    try:
+        E3DensityModel, KdTreeGraphConstructor, collate_list_of_dicts = (
+            charge3net_runner_module._load_charge3net_modules(str(checkout))
+        )
+    finally:
+        for name, module in original_modules.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+
+    assert E3DensityModel.__name__ == "E3DensityModel"
+    assert KdTreeGraphConstructor.__name__ == "KdTreeGraphConstructor"
+    assert callable(collate_list_of_dicts)
 
 
 def test_charge3net_runner_resolves_model_config_from_checkpoint_and_overrides(

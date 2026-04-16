@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
 import sys
 import warnings
 from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
+from types import ModuleType
 
 import numpy as np
 
@@ -127,6 +129,62 @@ def _ensure_torch_safe_globals(torch_module) -> None:
     add_safe_globals = getattr(serialization, "add_safe_globals", None)
     if callable(add_safe_globals):
         add_safe_globals([slice])
+
+
+def _ensure_package_module(name: str, path: Path) -> ModuleType:
+    module = sys.modules.get(name)
+    if module is None:
+        module = ModuleType(name)
+        module.__path__ = [str(path)]  # type: ignore[attr-defined]
+        sys.modules[name] = module
+        return module
+
+    package_path = getattr(module, "__path__", None)
+    if package_path is None:
+        module.__path__ = [str(path)]  # type: ignore[attr-defined]
+    elif str(path) not in package_path:
+        package_path.append(str(path))
+    return module
+
+
+def _load_module_from_path(module_name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to build import spec for {module_name} from {path}.")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_checkout_modules(prefix: str, package_root: Path):
+    models_dir = package_root / "models"
+    data_dir = package_root / "data"
+    e3_path = models_dir / "e3.py"
+    graph_path = data_dir / "graph_construction.py"
+    collate_path = data_dir / "collate.py"
+    if not all(path.exists() for path in (e3_path, graph_path, collate_path)):
+        raise FileNotFoundError(f"Missing ChargE3Net modules under {package_root}.")
+
+    package_parts = prefix.split(".")
+    current_path = package_root.parents[len(package_parts) - 1]
+    current_name_parts: list[str] = []
+    for part in package_parts:
+        current_path = current_path / part
+        current_name_parts.append(part)
+        current_name = ".".join(current_name_parts)
+        _ensure_package_module(current_name, current_path)
+    _ensure_package_module(f"{prefix}.models", models_dir)
+    _ensure_package_module(f"{prefix}.data", data_dir)
+
+    e3_module = _load_module_from_path(f"{prefix}.models.e3", e3_path)
+    graph_module = _load_module_from_path(f"{prefix}.data.graph_construction", graph_path)
+    collate_module = _load_module_from_path(f"{prefix}.data.collate", collate_path)
+    return (
+        e3_module.E3DensityModel,
+        graph_module.KdTreeGraphConstructor,
+        collate_module.collate_list_of_dicts,
+    )
 
 
 def _coerce_mapping(value: object) -> Mapping[str, object] | None:
@@ -382,8 +440,20 @@ def _resolve_model_config(
 def _load_charge3net_modules(source_dir: str | None):
     if source_dir:
         resolved_source_dir = Path(source_dir).resolve()
-        if str(resolved_source_dir) not in sys.path:
-            sys.path.insert(0, str(resolved_source_dir))
+        last_error: Exception | None = None
+        for prefix, package_root in (
+            ("src.charge3net", resolved_source_dir / "src" / "charge3net"),
+            ("charge3net", resolved_source_dir / "charge3net"),
+        ):
+            try:
+                return _load_checkout_modules(prefix, package_root)
+            except Exception as exc:  # pragma: no cover - exercised indirectly in subprocess
+                last_error = exc
+        details = f": {last_error}" if last_error is not None else ""
+        raise RuntimeError(
+            "Unable to load ChargE3Net modules from CHARGE_SOURCE_DIR"
+            f"{details}"
+        )
 
     last_error: Exception | None = None
     for prefix in ("src.charge3net", "charge3net"):
