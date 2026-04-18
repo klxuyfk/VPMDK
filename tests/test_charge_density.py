@@ -84,6 +84,26 @@ def test_determine_vasp_fft_grid_respects_explicit_fine_grid(load_atoms):
     assert grid_shape == (20, 24, 28)
 
 
+def test_determine_vasp_fft_grid_preserves_partial_explicit_coarse_override():
+    atoms = Atoms(
+        "H2",
+        positions=[[0.0, 0.0, 0.0], [0.0, 0.75, 0.0]],
+        cell=[
+            [10.5475997925, 0.0, 0.0],
+            [-5.2737998962, 9.1344893692, 0.0],
+            [0.0, 0.0, 8.4589996338],
+        ],
+        pbc=True,
+    )
+
+    grid_shape = vpmdk.determine_vasp_fft_grid(
+        atoms,
+        {"PREC": "N", "ENCUT": "400", "NGX": "80", "NGZ": "60"},
+    )
+
+    assert grid_shape == (160, 108, 120)
+
+
 def test_next_even_smooth_number_never_rounds_down():
     result = charge_density_module._next_even_smooth_number(10.1)
 

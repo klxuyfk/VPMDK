@@ -87,6 +87,20 @@ def test_list_backends_marks_flashtp_unavailable_without_flash_support(
     assert specs["FLASHTP"].available is False
 
 
+def test_relax_config_relax_cell_updates_default_isif_values():
+    config = vpmdk.RelaxConfig(relax_cell=True)
+
+    assert config.isif == 3
+    assert config.stress_isif == 3
+
+
+def test_relax_config_preserves_explicit_isif_when_relax_cell_enabled():
+    config = vpmdk.RelaxConfig(relax_cell=True, isif=4, stress_isif=6)
+
+    assert config.isif == 4
+    assert config.stress_isif == 6
+
+
 def test_public_relax_reports_non_convergence_and_avoids_outcar_side_effects(
     tmp_path: Path,
     load_atoms,

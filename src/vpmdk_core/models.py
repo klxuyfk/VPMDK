@@ -227,6 +227,16 @@ class RelaxConfig:
     stress_isif: int | None = None
     ibrion: int = 2
 
+    def __post_init__(self) -> None:
+        isif = int(self.isif)
+        stress_isif = self.stress_isif
+        if self.relax_cell and isif == 2:
+            isif = 3
+        if self.relax_cell and stress_isif is None:
+            stress_isif = isif
+        object.__setattr__(self, "isif", isif)
+        object.__setattr__(self, "stress_isif", stress_isif)
+
 
 @dataclass(frozen=True)
 class MDConfig:

@@ -187,8 +187,22 @@ def determine_vasp_fft_grid(reference, incar: Mapping[str, Any]) -> tuple[int, i
         _coerce_optional_float(_coerce_mapping_value(incar, tag), key=tag)
         for tag in ("NGX", "NGY", "NGZ")
     ]
-    if all(value is not None for value in explicit_coarse):
-        coarse_shape = tuple(int(value) for value in explicit_coarse)
+    if any(value is not None for value in explicit_coarse):
+        encut = _coerce_optional_float(_coerce_mapping_value(incar, "ENCUT"), key="ENCUT")
+        if encut is None:
+            if not all(value is not None for value in explicit_coarse):
+                raise ValueError(
+                    "Unable to determine CHGCAR grid from INCAR without ENCUT or explicit "
+                    "NGX/NGY/NGZ or NGXF/NGYF/NGZF."
+                )
+            coarse_shape = tuple(int(value) for value in explicit_coarse)
+        else:
+            prec = _normalize_prec(_coerce_mapping_value(incar, "PREC"))
+            coarse_shape_list = list(_coarse_fft_shape_from_cell(cell, encut=encut, prec=prec))
+            for index, explicit in enumerate(explicit_coarse):
+                if explicit is not None:
+                    coarse_shape_list[index] = int(explicit)
+            coarse_shape = tuple(coarse_shape_list)
     else:
         encut = _coerce_optional_float(_coerce_mapping_value(incar, "ENCUT"), key="ENCUT")
         if encut is None:
