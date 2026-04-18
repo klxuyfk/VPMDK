@@ -357,6 +357,7 @@ from .backend_common import (
     _resolve_device,
 )
 from .api import (
+    build_calculator,
     get_backend_capabilities,
     list_backends,
     md,
@@ -548,7 +549,6 @@ from .runtime.registry import (
     _attach_fallback_calculator,
     _build_calculator_from_tags,
     _build_calculator_from_init_factory,
-    build_calculator,
     get_calculator,
 )
 from .runtime.relax import (

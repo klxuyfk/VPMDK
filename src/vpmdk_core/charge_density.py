@@ -281,7 +281,7 @@ def _resolve_charge_env_path(path_value: str | None) -> str | None:
 
 def _resolve_charge_source_dir(source_dir: str | None) -> str | None:
     if source_dir:
-        return source_dir
+        return str(Path(source_dir).expanduser())
     env_source_dir = (
         os.environ.get("VPMDK_CHARGE_SOURCE_DIR")
         or os.environ.get("VPMDK_CHARGE3NET_SOURCE_DIR")
@@ -291,7 +291,7 @@ def _resolve_charge_source_dir(source_dir: str | None) -> str | None:
 
 def _resolve_charge_model_path(model_path: str | None, source_dir: str | None) -> str | None:
     if model_path:
-        return model_path
+        return str(Path(model_path).expanduser())
     env_model = os.environ.get("VPMDK_CHARGE_MODEL") or os.environ.get("VPMDK_CHARGE3NET_MODEL")
     if env_model:
         return _resolve_charge_env_path(env_model)

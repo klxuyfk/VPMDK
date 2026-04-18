@@ -134,6 +134,19 @@ def test_charge_env_paths_resolve_relative_to_preserved_caller_dir(
     assert charge_density_module._resolve_charge_model_path(None, None) == str(model_path.resolve())
 
 
+def test_explicit_charge_model_path_expands_user_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    monkeypatch.setenv("HOME", str(home_dir))
+
+    resolved = charge_density_module._resolve_charge_model_path("~/models/charge3net_mp.pt", None)
+
+    assert resolved == str((home_dir / "models" / "charge3net_mp.pt").resolve())
+
+
 def test_explicit_charge_paths_remain_relative_to_current_context(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv(charge_density_module._CHARGE_ENV_BASE_DIR_VAR, "/tmp/caller")
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,8 @@ from ase.calculators.calculator import all_changes
 
 import vpmdk
 from tests.conftest import DummyCalculator
+
+api_module = importlib.import_module("vpmdk_core.api")
 
 
 def test_public_single_point_returns_result_without_vasp_side_effects(
@@ -54,6 +57,64 @@ def test_public_get_calculator_accepts_backend_kwargs(monkeypatch: pytest.Monkey
         "DEVICE": "cuda:0",
         "SEVENNET_ENABLE_FLASH": "1",
     }
+
+
+@pytest.mark.parametrize(
+    ("call_name", "execute_name"),
+    [
+        ("single_point", "execute_single_point"),
+        ("relax", "execute_relaxation"),
+        ("md", "execute_md"),
+    ],
+)
+def test_public_wrappers_do_not_override_backend_mlp_with_default(
+    monkeypatch: pytest.MonkeyPatch,
+    load_atoms,
+    call_name: str,
+    execute_name: str,
+):
+    atoms = load_atoms()
+    captured: dict[str, object] = {}
+    sentinel = object()
+
+    def fake_build_calculator(
+        config_or_tags=None,
+        *,
+        structure=None,
+        mlp=None,
+        model=None,
+        device=None,
+        options=None,
+        **backend_kwargs,
+    ):
+        captured["backend"] = config_or_tags
+        captured["mlp"] = mlp
+        return DummyCalculator()
+
+    monkeypatch.setattr(api_module, "build_calculator", fake_build_calculator)
+    monkeypatch.setattr(api_module, execute_name, lambda *args, **kwargs: sentinel)
+
+    result = getattr(vpmdk, call_name)(atoms, backend={"MLP": "MACE"})
+
+    assert result is sentinel
+    assert captured["backend"] == {"MLP": "MACE"}
+    assert captured["mlp"] is None
+
+
+def test_public_build_calculator_accepts_bcar_like_mapping(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    def fake_builder(tags, *, structure=None):
+        captured["tags"] = tags
+        captured["structure"] = structure
+        return "calc"
+
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", fake_builder)
+
+    calculator = vpmdk.build_calculator({"MLP": "MACE", "MODEL": "small"})
+
+    assert calculator == "calc"
+    assert captured["tags"] == {"MLP": "MACE", "MODEL": "small"}
 
 
 def test_get_backend_capabilities_reflects_matris_task():
