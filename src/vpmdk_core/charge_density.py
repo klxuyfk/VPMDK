@@ -238,16 +238,13 @@ def _charge_density_options_from_bcar(bcar_tags: Mapping[str, Any]) -> dict[str,
         options["cutoff"] = _coerce_float(cutoff, key="CHARGE_CUTOFF")
     max_batch = bcar_tags.get("CHARGE_MAX_PROBES_PER_BATCH")
     if max_batch is not None:
-        parsed_max_batch = root._coerce_int_tag(
-            str(max_batch),
-            "CHARGE_MAX_PROBES_PER_BATCH",
+        options["max_probes_per_batch"] = _validate_max_probes_per_batch(
+            root._coerce_int_tag(
+                str(max_batch),
+                "CHARGE_MAX_PROBES_PER_BATCH",
+            ),
+            raw_value=max_batch,
         )
-        if parsed_max_batch <= 0:
-            raise ValueError(
-                "Invalid CHARGE_MAX_PROBES_PER_BATCH value: "
-                f"{max_batch!r}. Expected a positive integer."
-            )
-        options["max_probes_per_batch"] = parsed_max_batch
     for tag_name, (option_name, value_type) in _CHARGE_MODEL_CONFIG_TAGS.items():
         raw_value = bcar_tags.get(tag_name)
         if raw_value is None:
@@ -261,6 +258,20 @@ def _charge_density_options_from_bcar(bcar_tags: Mapping[str, Any]) -> dict[str,
         else:
             options[option_name] = str(raw_value)
     return options
+
+
+def _validate_max_probes_per_batch(
+    value: int,
+    *,
+    raw_value: object | None = None,
+) -> int:
+    if value <= 0:
+        invalid_value = value if raw_value is None else raw_value
+        raise ValueError(
+            "Invalid CHARGE_MAX_PROBES_PER_BATCH value: "
+            f"{invalid_value!r}. Expected a positive integer."
+        )
+    return int(value)
 
 
 def _resolve_charge_python(python_executable: str | None) -> str:
@@ -332,6 +343,7 @@ def _run_charge3net_backend(
 ) -> tuple[np.ndarray, np.ndarray | None]:
     source_dir = _resolve_charge_source_dir(source_dir)
     model_path = _resolve_charge_model_path(model_path, source_dir)
+    max_probes_per_batch = _validate_max_probes_per_batch(max_probes_per_batch)
     if not model_path:
         raise RuntimeError(
             "ChargE3Net model checkpoint not found. Set CHARGE_MODEL (or "

@@ -368,6 +368,18 @@ def test_charge_density_options_reject_non_positive_max_probes_per_batch(raw_val
         )
 
 
+@pytest.mark.parametrize("raw_value", [0, -2])
+def test_public_predict_charge_density_rejects_non_positive_max_probes_per_batch(raw_value: int):
+    atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3), pbc=True)
+
+    with pytest.raises(ValueError, match="CHARGE_MAX_PROBES_PER_BATCH"):
+        vpmdk.predict_charge_density(
+            atoms,
+            grid_shape=(2, 2, 2),
+            max_probes_per_batch=raw_value,
+        )
+
+
 def test_charge3net_runner_split_probe_output_handles_spin_channels():
     predictions = [
         SimpleNamespace(
@@ -389,6 +401,38 @@ def test_charge3net_runner_split_probe_output_handles_spin_channels():
 
     assert np.allclose(density, np.array([1.25, 0.0], dtype=np.float32))
     assert np.allclose(spin_density, np.array([0.75, 1.0], dtype=np.float32))
+
+
+def test_charge3net_runner_load_checkpoint_falls_back_without_weights_only():
+    calls: list[dict[str, object]] = []
+
+    class FakeTorch:
+        @staticmethod
+        def load(path, map_location=None, **kwargs):
+            calls.append({"path": path, "map_location": map_location, "kwargs": dict(kwargs)})
+            if "weights_only" in kwargs:
+                raise TypeError("unexpected keyword argument 'weights_only'")
+            return {"model": {}}
+
+    checkpoint = charge3net_runner_module._torch_load_checkpoint(
+        FakeTorch,
+        "/tmp/model.pt",
+        map_location="cpu",
+    )
+
+    assert checkpoint == {"model": {}}
+    assert calls == [
+        {
+            "path": "/tmp/model.pt",
+            "map_location": "cpu",
+            "kwargs": {"weights_only": False},
+        },
+        {
+            "path": "/tmp/model.pt",
+            "map_location": "cpu",
+            "kwargs": {},
+        },
+    ]
 
 
 def test_public_predict_charge_density_preserves_spin_density(monkeypatch: pytest.MonkeyPatch):

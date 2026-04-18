@@ -145,6 +145,13 @@ def _ensure_torch_safe_globals(torch_module) -> None:
         add_safe_globals([slice])
 
 
+def _torch_load_checkpoint(torch_module, path: str, *, map_location):
+    try:
+        return torch_module.load(path, map_location=map_location, weights_only=False)
+    except TypeError:
+        return torch_module.load(path, map_location=map_location)
+
+
 def _ensure_package_module(name: str, path: Path) -> ModuleType:
     module = sys.modules.get(name)
     if module is None:
@@ -549,7 +556,7 @@ def main() -> int:
 
     atoms = Atoms(numbers=numbers, positions=positions, cell=cell, pbc=pbc)
     device = torch.device(_resolve_device_argument(args.device, torch))
-    checkpoint = torch.load(args.model_path, map_location=device, weights_only=False)
+    checkpoint = _torch_load_checkpoint(torch, args.model_path, map_location=device)
     model_config = _resolve_model_config(
         checkpoint,
         explicit_config={
