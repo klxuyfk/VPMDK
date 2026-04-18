@@ -127,9 +127,14 @@ def test_charge_env_paths_resolve_relative_to_preserved_caller_dir(
 
     monkeypatch.chdir(run_dir)
     monkeypatch.setenv(charge_density_module._CHARGE_ENV_BASE_DIR_VAR, str(caller_dir))
+    monkeypatch.setenv("VPMDK_CHARGE_PYTHON", "charge_env/bin/python")
     monkeypatch.setenv("VPMDK_CHARGE_SOURCE_DIR", "charge_src")
     monkeypatch.setenv("VPMDK_CHARGE_MODEL", "charge_model.pt")
 
+    assert (
+        charge_density_module._resolve_charge_python(None)
+        == str((caller_dir / "charge_env" / "bin" / "python").resolve())
+    )
     assert charge_density_module._resolve_charge_source_dir(None) == str(source_dir.resolve())
     assert charge_density_module._resolve_charge_model_path(None, None) == str(model_path.resolve())
 
@@ -147,14 +152,50 @@ def test_explicit_charge_model_path_expands_user_home(
     assert resolved == str((home_dir / "models" / "charge3net_mp.pt").resolve())
 
 
+def test_explicit_charge_python_path_expands_user_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    monkeypatch.setenv("HOME", str(home_dir))
+
+    resolved = charge_density_module._resolve_charge_python("~/charge-env/bin/python")
+
+    assert resolved == str((home_dir / "charge-env" / "bin" / "python").resolve())
+
+
 def test_explicit_charge_paths_remain_relative_to_current_context(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv(charge_density_module._CHARGE_ENV_BASE_DIR_VAR, "/tmp/caller")
 
+    assert charge_density_module._resolve_charge_python("relative-python") == "relative-python"
     assert charge_density_module._resolve_charge_source_dir("relative-source") == "relative-source"
     assert (
         charge_density_module._resolve_charge_model_path("relative-model.pt", "relative-source")
         == "relative-model.pt"
     )
+
+
+def test_charge3net_runner_adjusts_singleton_tail_slice():
+    batch_start, batch_stop, keep_slice = charge3net_runner_module._adjust_singleton_probe_slice(
+        2500,
+        2501,
+        2501,
+    )
+
+    assert (batch_start, batch_stop) == (2499, 2501)
+    assert keep_slice.indices(2) == (1, 2, 1)
+
+
+def test_charge3net_runner_preserves_only_probe_when_total_is_one():
+    batch_start, batch_stop, keep_slice = charge3net_runner_module._adjust_singleton_probe_slice(
+        0,
+        1,
+        1,
+    )
+
+    assert (batch_start, batch_stop) == (0, 1)
+    assert keep_slice.indices(1) == (0, 1, 1)
 
 
 def test_write_chgcar_roundtrips_density(tmp_path: Path, load_atoms):

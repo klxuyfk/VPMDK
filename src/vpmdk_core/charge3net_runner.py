@@ -118,6 +118,20 @@ def _grid_positions_for_slice(
     return fractional @ cell
 
 
+def _adjust_singleton_probe_slice(
+    start: int,
+    stop: int,
+    total_probes: int,
+) -> tuple[int, int, slice]:
+    if stop - start != 1:
+        return start, stop, slice(None)
+    if start > 0:
+        return start - 1, stop, slice(1, None)
+    if stop < total_probes:
+        return start, stop + 1, slice(0, 1)
+    return start, stop, slice(0, 1)
+
+
 def _resolve_device_argument(requested_device: str | None, torch_module) -> str:
     if requested_device:
         return requested_device
@@ -594,7 +608,14 @@ def main() -> int:
         spin_density_parts: list[np.ndarray] = []
         for start in range(0, total_probes, int(args.max_probes_per_batch)):
             stop = min(start + int(args.max_probes_per_batch), total_probes)
-            probe_positions = _grid_positions_for_slice(grid_shape, cell, start, stop)
+            batch_start, batch_stop, keep_slice = _adjust_singleton_probe_slice(
+                start,
+                stop,
+                total_probes,
+            )
+            probe_positions = _grid_positions_for_slice(grid_shape, cell, batch_start, batch_stop)
+            if len(probe_positions) == 1:
+                probe_positions = np.concatenate([probe_positions, probe_positions], axis=0)
             try:
                 probe_edges, probe_edges_displacement = constructor.probes_to_graph(
                     atoms,
@@ -630,6 +651,9 @@ def main() -> int:
                 predictions,
                 spin=bool(model_config.get("spin", False)),
             )
+            density_chunk = density_chunk[keep_slice]
+            if spin_density_chunk is not None:
+                spin_density_chunk = spin_density_chunk[keep_slice]
             density_parts.append(density_chunk)
             if spin_density_chunk is not None:
                 spin_density_parts.append(spin_density_chunk)

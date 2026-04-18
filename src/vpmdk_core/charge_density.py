@@ -259,12 +259,16 @@ def _charge_density_options_from_bcar(bcar_tags: Mapping[str, Any]) -> dict[str,
 
 def _resolve_charge_python(python_executable: str | None) -> str:
     if python_executable:
-        return python_executable
-    return (
+        return str(Path(python_executable).expanduser())
+    env_python = (
         os.environ.get("VPMDK_CHARGE_PYTHON")
         or os.environ.get("VPMDK_CHARGE3NET_PYTHON")
-        or sys.executable
     )
+    if env_python:
+        resolved = _resolve_charge_env_path(env_python)
+        if resolved is not None:
+            return resolved
+    return sys.executable
 
 
 def _resolve_charge_env_path(path_value: str | None) -> str | None:
