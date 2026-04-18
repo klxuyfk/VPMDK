@@ -360,6 +360,14 @@ def test_charge3net_backend_passes_explicit_model_config_flags(
     assert "--spin" in command
 
 
+@pytest.mark.parametrize("raw_value", ["0", "-2", "0.5"])
+def test_charge_density_options_reject_non_positive_max_probes_per_batch(raw_value: str):
+    with pytest.raises(ValueError, match="CHARGE_MAX_PROBES_PER_BATCH"):
+        charge_density_module._charge_density_options_from_bcar(
+            {"CHARGE_MAX_PROBES_PER_BATCH": raw_value}
+        )
+
+
 def test_charge3net_runner_split_probe_output_handles_spin_channels():
     predictions = [
         SimpleNamespace(

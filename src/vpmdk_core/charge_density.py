@@ -238,10 +238,16 @@ def _charge_density_options_from_bcar(bcar_tags: Mapping[str, Any]) -> dict[str,
         options["cutoff"] = _coerce_float(cutoff, key="CHARGE_CUTOFF")
     max_batch = bcar_tags.get("CHARGE_MAX_PROBES_PER_BATCH")
     if max_batch is not None:
-        options["max_probes_per_batch"] = root._coerce_int_tag(
+        parsed_max_batch = root._coerce_int_tag(
             str(max_batch),
             "CHARGE_MAX_PROBES_PER_BATCH",
         )
+        if parsed_max_batch <= 0:
+            raise ValueError(
+                "Invalid CHARGE_MAX_PROBES_PER_BATCH value: "
+                f"{max_batch!r}. Expected a positive integer."
+            )
+        options["max_probes_per_batch"] = parsed_max_batch
     for tag_name, (option_name, value_type) in _CHARGE_MODEL_CONFIG_TAGS.items():
         raw_value = bcar_tags.get(tag_name)
         if raw_value is None:
