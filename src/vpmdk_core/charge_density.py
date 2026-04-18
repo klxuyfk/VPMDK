@@ -70,6 +70,7 @@ _RY_TO_EV = 13.605693009
 _ANGSTROM_TO_BOHR = 1.0 / 0.529177210903
 _DEFAULT_CHARGE_CUTOFF = 4.0
 _DEFAULT_MAX_PROBES_PER_BATCH = 2500
+_CHARGE_ENV_BASE_DIR_VAR = "VPMDK_CHARGE_ENV_BASE_DIR"
 _CHARGE_MODEL_CONFIG_TAGS = {
     "CHARGE_NUM_INTERACTIONS": ("num_interactions", int),
     "CHARGE_NUM_NEIGHBORS": ("num_neighbors", float),
@@ -266,12 +267,26 @@ def _resolve_charge_python(python_executable: str | None) -> str:
     )
 
 
+def _resolve_charge_env_path(path_value: str | None) -> str | None:
+    if path_value is None:
+        return None
+    expanded = Path(path_value).expanduser()
+    if expanded.is_absolute():
+        return str(expanded)
+    base_dir = os.environ.get(_CHARGE_ENV_BASE_DIR_VAR)
+    if not base_dir:
+        return path_value
+    return str((Path(base_dir).expanduser() / expanded).resolve())
+
+
 def _resolve_charge_source_dir(source_dir: str | None) -> str | None:
-    return (
-        source_dir
-        or os.environ.get("VPMDK_CHARGE_SOURCE_DIR")
+    if source_dir:
+        return source_dir
+    env_source_dir = (
+        os.environ.get("VPMDK_CHARGE_SOURCE_DIR")
         or os.environ.get("VPMDK_CHARGE3NET_SOURCE_DIR")
     )
+    return _resolve_charge_env_path(env_source_dir)
 
 
 def _resolve_charge_model_path(model_path: str | None, source_dir: str | None) -> str | None:
@@ -279,7 +294,7 @@ def _resolve_charge_model_path(model_path: str | None, source_dir: str | None) -
         return model_path
     env_model = os.environ.get("VPMDK_CHARGE_MODEL") or os.environ.get("VPMDK_CHARGE3NET_MODEL")
     if env_model:
-        return env_model
+        return _resolve_charge_env_path(env_model)
     if source_dir:
         default_model = Path(source_dir) / "models" / "charge3net_mp.pt"
         if default_model.exists():

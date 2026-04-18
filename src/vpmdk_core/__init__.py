@@ -437,6 +437,7 @@ from .backends.sevennet_family import (
     _is_sevennet_flash_available,
 )
 from .charge_density import (
+    _CHARGE_ENV_BASE_DIR_VAR,
     _CHGCAR_GRID_INCAR_TAGS,
     _charge_density_options_from_bcar,
     charge_density,

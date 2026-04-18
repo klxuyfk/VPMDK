@@ -112,6 +112,38 @@ def test_next_even_smooth_number_never_rounds_down():
     assert charge_density_module._largest_prime_factor(result) <= 7
 
 
+def test_charge_env_paths_resolve_relative_to_preserved_caller_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    caller_dir = tmp_path / "caller"
+    caller_dir.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    source_dir = caller_dir / "charge_src"
+    source_dir.mkdir()
+    model_path = caller_dir / "charge_model.pt"
+    model_path.write_text("checkpoint")
+
+    monkeypatch.chdir(run_dir)
+    monkeypatch.setenv(charge_density_module._CHARGE_ENV_BASE_DIR_VAR, str(caller_dir))
+    monkeypatch.setenv("VPMDK_CHARGE_SOURCE_DIR", "charge_src")
+    monkeypatch.setenv("VPMDK_CHARGE_MODEL", "charge_model.pt")
+
+    assert charge_density_module._resolve_charge_source_dir(None) == str(source_dir.resolve())
+    assert charge_density_module._resolve_charge_model_path(None, None) == str(model_path.resolve())
+
+
+def test_explicit_charge_paths_remain_relative_to_current_context(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv(charge_density_module._CHARGE_ENV_BASE_DIR_VAR, "/tmp/caller")
+
+    assert charge_density_module._resolve_charge_source_dir("relative-source") == "relative-source"
+    assert (
+        charge_density_module._resolve_charge_model_path("relative-model.pt", "relative-source")
+        == "relative-model.pt"
+    )
+
+
 def test_write_chgcar_roundtrips_density(tmp_path: Path, load_atoms):
     atoms = load_atoms()
     density = np.arange(24, dtype=float).reshape(2, 3, 4) / 10.0

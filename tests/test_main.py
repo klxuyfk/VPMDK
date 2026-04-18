@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -1696,3 +1697,51 @@ def test_main_writes_chgcar_in_requested_directory_using_final_cell(
     assert seen["source_dir"] == "relative-source"
     assert np.allclose(seen["reference_cell"], seen["atoms_cell"])
     assert not np.allclose(seen["reference_cell"], np.array(initial_atoms.get_cell()))
+
+
+def test_main_preserves_caller_relative_charge_env_paths_under_dir(
+    tmp_path: Path,
+    prepare_inputs,
+):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    prepare_inputs(
+        run_dir,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0", "PREC": "N", "ENCUT": "400"},
+        extra_bcar={"WRITE_CHGCAR": "1"},
+    )
+
+    caller_dir = tmp_path / "caller"
+    caller_dir.mkdir()
+    source_dir = caller_dir / "charge_src"
+    source_dir.mkdir()
+    model_path = caller_dir / "charge_model.pt"
+    model_path.write_text("checkpoint")
+    seen: dict[str, object] = {}
+
+    def fake_predict_charge_density(atoms, **kwargs):
+        seen["predict_cwd"] = Path.cwd()
+        seen["charge_env_base_dir"] = os.environ.get(vpmdk._CHARGE_ENV_BASE_DIR_VAR)
+        return vpmdk.ChargeDensityResult(
+            atoms=atoms,
+            density=np.ones((2, 2, 2), dtype=float),
+            grid_shape=(2, 2, 2),
+            backend="CHARGE3NET",
+        )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(caller_dir)
+    monkeypatch.setenv("VPMDK_CHARGE_SOURCE_DIR", "charge_src")
+    monkeypatch.setenv("VPMDK_CHARGE_MODEL", "charge_model.pt")
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "predict_charge_density", fake_predict_charge_density)
+    monkeypatch.setattr(vpmdk, "write_chgcar", lambda *_, **__: None)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(run_dir)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen["predict_cwd"] == run_dir
+    assert seen["charge_env_base_dir"] == str(caller_dir)

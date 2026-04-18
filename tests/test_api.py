@@ -174,3 +174,45 @@ def test_public_md_maps_thermostat_name(monkeypatch: pytest.MonkeyPatch, load_at
     assert captured["timestep"] == 2.0
     assert captured["temperature"] == 300.0
     assert captured["params"] == {"LANGEVIN_GAMMA": 1.5}
+
+
+def test_public_md_vasp_compat_respects_write_xdatcar(
+    tmp_path: Path,
+    load_atoms,
+):
+    atoms = load_atoms()
+
+    class DummyDynamics:
+        def run(self, n):
+            assert n == 1
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        vpmdk,
+        "_select_md_dynamics",
+        lambda *args, **kwargs: (DummyDynamics(), lambda temp: None),
+    )
+    monkeypatch.setattr(
+        vpmdk.velocitydistribution,
+        "MaxwellBoltzmannDistribution",
+        lambda *a, **k: None,
+    )
+    try:
+        result = vpmdk.md(
+            atoms,
+            calculator=DummyCalculator(),
+            steps=1,
+            temperature=300.0,
+            observer=[vpmdk.VaspCompatObserver()],
+            vasp_compat=vpmdk.VaspCompatConfig(enabled=True, write_xdatcar=False),
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert isinstance(result, vpmdk.MDResult)
+    assert not (tmp_path / "XDATCAR").exists()
+    assert (tmp_path / "OUTCAR").exists()
+    assert (tmp_path / "OSZICAR").exists()
+    assert (tmp_path / "vasprun.xml").exists()
+    assert (tmp_path / "CONTCAR").exists()

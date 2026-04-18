@@ -124,7 +124,8 @@ class VaspCompatObserver(RunObserver):
             sc_time=step.sc_time,
         )
         if context.mode == "md":
-            _root()._write_xdatcar_step("XDATCAR", atoms, step.index - 1)
+            if config.write_xdatcar:
+                _root()._write_xdatcar_step("XDATCAR", atoms, step.index - 1)
             if config.write_lammps_traj and (step.index - 1) % config.lammps_traj_interval == 0:
                 _root()._write_lammps_trajectory_step(
                     config.lammps_traj_path,
