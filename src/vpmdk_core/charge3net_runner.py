@@ -187,6 +187,16 @@ def _load_checkout_modules(prefix: str, package_root: Path):
     )
 
 
+def _ensure_charge3net_alias_packages(prefix: str, package_root: Path) -> None:
+    if prefix != "charge3net":
+        return
+
+    _ensure_package_module("src", package_root.parent.parent)
+    _ensure_package_module("src.charge3net", package_root)
+    _ensure_package_module("src.charge3net.models", package_root / "models")
+    _ensure_package_module("src.charge3net.data", package_root / "data")
+
+
 def _find_installed_package_root(prefix: str) -> Path:
     package_spec = importlib.util.find_spec(prefix)
     if package_spec is None or not package_spec.submodule_search_locations:
@@ -465,7 +475,9 @@ def _load_charge3net_modules(source_dir: str | None):
     last_error: Exception | None = None
     for prefix in ("src.charge3net", "charge3net"):
         try:
-            return _load_checkout_modules(prefix, _find_installed_package_root(prefix))
+            package_root = _find_installed_package_root(prefix)
+            _ensure_charge3net_alias_packages(prefix, package_root)
+            return _load_checkout_modules(prefix, package_root)
         except Exception as exc:  # pragma: no cover - exercised indirectly in subprocess
             last_error = exc
 

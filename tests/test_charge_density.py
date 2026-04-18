@@ -434,7 +434,12 @@ def test_charge3net_runner_loads_installed_modules_without_importing_data_init(
     (package_root / "__init__.py").write_text("")
     (models_dir / "__init__.py").write_text("")
     (data_dir / "__init__.py").write_text("raise RuntimeError('training-only dependency import')")
-    (models_dir / "e3.py").write_text("class E3DensityModel:\n    pass\n")
+    (data_dir / "layer.py").write_text("SENTINEL = 7\n")
+    (models_dir / "e3.py").write_text(
+        "from src.charge3net.data.layer import SENTINEL\n"
+        "class E3DensityModel:\n"
+        "    sentinel = SENTINEL\n"
+    )
     (data_dir / "graph_construction.py").write_text("class KdTreeGraphConstructor:\n    pass\n")
     (data_dir / "collate.py").write_text(
         "def collate_list_of_dicts(*args, **kwargs):\n    return args, kwargs\n"
@@ -453,6 +458,11 @@ def test_charge3net_runner_loads_installed_modules_without_importing_data_init(
     original_modules = {
         name: sys.modules.get(name)
         for name in (
+            "src",
+            "src.charge3net",
+            "src.charge3net.models",
+            "src.charge3net.data",
+            "src.charge3net.data.layer",
             "charge3net",
             "charge3net.models",
             "charge3net.models.e3",
@@ -473,6 +483,7 @@ def test_charge3net_runner_loads_installed_modules_without_importing_data_init(
                 sys.modules[name] = module
 
     assert E3DensityModel.__name__ == "E3DensityModel"
+    assert E3DensityModel.sentinel == 7
     assert KdTreeGraphConstructor.__name__ == "KdTreeGraphConstructor"
     assert callable(collate_list_of_dicts)
 
