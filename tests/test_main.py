@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -32,8 +33,8 @@ from tests.conftest import DummyCalculator
         "NEQUIP",
         "ORB",
         "UPET",
-        "EQUFLASH",
         "TACE",
+        "EQUFLASH",
         "FAIRCHEM",
         "FAIRCHEM_V2",
         "FAIRCHEM_V1",
@@ -47,22 +48,14 @@ def test_single_point_energy_for_all_potentials(
     prepare_inputs,
 ):
     extra_bcar: dict[str, str] = {}
-    if potential in {
-        "NEQUIP",
-        "ALLEGRO",
-        "DEEPMD",
-        "FAIRCHEM_V1",
-        "UPET",
-        "EQUFLASH",
-        "TACE",
-    }:
+    if potential in {"NEQUIP", "ALLEGRO", "DEEPMD", "FAIRCHEM_V1", "UPET", "TACE", "EQUFLASH"}:
         model_name = (
             "pet-oam-xl-v1.0.0.ckpt"
             if potential == "UPET"
             else (
-                "equflash-model.ckpt"
-                if potential == "EQUFLASH"
-                else ("tace-model.pt" if potential == "TACE" else "nequip-model.pth")
+                "tace-model.pt"
+                if potential == "TACE"
+                else ("equflash-model.ckpt" if potential == "EQUFLASH" else "nequip-model.pth")
             )
         )
         model_path = tmp_path / model_name
@@ -106,8 +99,8 @@ def test_single_point_energy_for_all_potentials(
     monkeypatch.setattr(vpmdk, "ORBCalculator", lambda *a, **k: factory("ORB"))
     monkeypatch.setattr(vpmdk, "ORB_PRETRAINED_MODELS", {vpmdk.DEFAULT_ORB_MODEL: lambda **_: "orb"})
     monkeypatch.setattr(vpmdk, "UPETCalculator", lambda *a, **k: factory("UPET"))
-    monkeypatch.setattr(vpmdk, "_build_equflash_calculator", lambda *a, **k: factory("EQUFLASH"))
     monkeypatch.setattr(vpmdk, "TACEAseCalc", lambda *a, **k: factory("TACE"))
+    monkeypatch.setattr(vpmdk, "_build_equflash_calculator", lambda *a, **k: factory("EQUFLASH"))
     monkeypatch.setattr(vpmdk, "_build_grace_calculator", lambda tags: factory("GRACE"))
     monkeypatch.setattr(vpmdk, "DeePMDCalculator", lambda *a, **k: factory("DEEPMD"))
 
@@ -1591,3 +1584,164 @@ def test_main_defaults_to_nose_when_smass_positive(tmp_path: Path, prepare_input
 
     assert seen["mdalgo"] == 2
     assert seen["smass"] == 2.0
+
+
+def test_main_writes_chgcar_when_requested(tmp_path: Path, prepare_inputs):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0", "PREC": "N", "ENCUT": "400"},
+        extra_bcar={"WRITE_CHGCAR": "1"},
+    )
+
+    seen: dict[str, object] = {}
+
+    def fake_predict_charge_density(atoms, **kwargs):
+        seen["incar"] = kwargs.get("incar")
+        seen["reference"] = kwargs.get("reference")
+        return vpmdk.ChargeDensityResult(
+            atoms=atoms,
+            density=np.ones((2, 2, 2), dtype=float),
+            grid_shape=(2, 2, 2),
+            backend="CHARGE3NET",
+            spin_density=np.full((2, 2, 2), 0.5, dtype=float),
+        )
+
+    def fake_write_chgcar(path, atoms, density, **kwargs):
+        seen["path"] = path
+        seen["shape"] = tuple(density.shape)
+        seen["n_atoms"] = len(atoms)
+        seen["spin_shape"] = None if kwargs.get("spin_density") is None else tuple(kwargs["spin_density"].shape)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "predict_charge_density", fake_predict_charge_density)
+    monkeypatch.setattr(vpmdk, "write_chgcar", fake_write_chgcar)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen["path"] == "CHGCAR"
+    assert seen["shape"] == (2, 2, 2)
+    assert seen["spin_shape"] == (2, 2, 2)
+    assert seen["n_atoms"] == 2
+    assert seen["incar"]["PREC"] == "N"
+    assert seen["incar"]["ENCUT"] == "400"
+    assert seen["reference"] is not None
+
+
+def test_main_writes_chgcar_in_requested_directory_using_final_cell(
+    tmp_path: Path,
+    prepare_inputs,
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "2", "IBRION": "2", "PREC": "N", "ENCUT": "400"},
+        extra_bcar={"WRITE_CHGCAR": "1", "CHARGE_SOURCE_DIR": "relative-source"},
+    )
+
+    initial_structure = vpmdk.read_structure(str(tmp_path / "POSCAR"))
+    initial_atoms = vpmdk.AseAtomsAdaptor.get_atoms(initial_structure)
+    initial_atoms.wrap()
+    final_cell = initial_atoms.get_cell().copy()
+    final_cell[0, 0] *= 1.2
+    final_cell[1, 1] *= 0.9
+    final_cell[2, 2] *= 1.1
+
+    caller_dir = tmp_path / "caller"
+    caller_dir.mkdir()
+    seen: dict[str, object] = {}
+
+    def fake_run_relaxation(atoms, calculator, *args, **kwargs):
+        atoms.set_cell(final_cell, scale_atoms=False)
+        atoms.wrap()
+        return 0.0
+
+    def fake_predict_charge_density(atoms, **kwargs):
+        seen["predict_cwd"] = Path.cwd()
+        seen["reference_cell"] = np.array(kwargs["reference"].get_cell())
+        seen["atoms_cell"] = np.array(atoms.get_cell())
+        seen["source_dir"] = kwargs.get("source_dir")
+        return vpmdk.ChargeDensityResult(
+            atoms=atoms,
+            density=np.ones((2, 2, 2), dtype=float),
+            grid_shape=(2, 2, 2),
+            backend="CHARGE3NET",
+            spin_density=np.full((2, 2, 2), 0.25, dtype=float),
+        )
+
+    def fake_write_chgcar(path, atoms, density, **kwargs):
+        seen["write_cwd"] = Path.cwd()
+        seen["path"] = path
+        seen["spin_shape"] = None if kwargs.get("spin_density") is None else tuple(kwargs["spin_density"].shape)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(caller_dir)
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "run_relaxation", fake_run_relaxation)
+    monkeypatch.setattr(vpmdk, "predict_charge_density", fake_predict_charge_density)
+    monkeypatch.setattr(vpmdk, "write_chgcar", fake_write_chgcar)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen["predict_cwd"] == tmp_path
+    assert seen["write_cwd"] == tmp_path
+    assert seen["path"] == "CHGCAR"
+    assert seen["spin_shape"] == (2, 2, 2)
+    assert seen["source_dir"] == "relative-source"
+    assert np.allclose(seen["reference_cell"], seen["atoms_cell"])
+    assert not np.allclose(seen["reference_cell"], np.array(initial_atoms.get_cell()))
+
+
+def test_main_preserves_caller_relative_charge_env_paths_under_dir(
+    tmp_path: Path,
+    prepare_inputs,
+):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    prepare_inputs(
+        run_dir,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0", "PREC": "N", "ENCUT": "400"},
+        extra_bcar={"WRITE_CHGCAR": "1"},
+    )
+
+    caller_dir = tmp_path / "caller"
+    caller_dir.mkdir()
+    source_dir = caller_dir / "charge_src"
+    source_dir.mkdir()
+    model_path = caller_dir / "charge_model.pt"
+    model_path.write_text("checkpoint")
+    seen: dict[str, object] = {}
+
+    def fake_predict_charge_density(atoms, **kwargs):
+        seen["predict_cwd"] = Path.cwd()
+        seen["charge_env_base_dir"] = os.environ.get(vpmdk._CHARGE_ENV_BASE_DIR_VAR)
+        return vpmdk.ChargeDensityResult(
+            atoms=atoms,
+            density=np.ones((2, 2, 2), dtype=float),
+            grid_shape=(2, 2, 2),
+            backend="CHARGE3NET",
+        )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(caller_dir)
+    monkeypatch.setenv("VPMDK_CHARGE_SOURCE_DIR", "charge_src")
+    monkeypatch.setenv("VPMDK_CHARGE_MODEL", "charge_model.pt")
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "predict_charge_density", fake_predict_charge_density)
+    monkeypatch.setattr(vpmdk, "write_chgcar", lambda *_, **__: None)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(run_dir)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen["predict_cwd"] == run_dir
+    assert seen["charge_env_base_dir"] == str(caller_dir)

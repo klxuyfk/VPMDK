@@ -23,6 +23,21 @@ def _stringify_legacy_value(value: object) -> str:
     return str(value)
 
 
+def _coerce_non_negative_int(value: object, *, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be an integer >= 0.")
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field_name} must be an integer >= 0.") from None
+    if not numeric.is_integer():
+        raise ValueError(f"{field_name} must be an integer >= 0.")
+    integer = int(numeric)
+    if integer < 0:
+        raise ValueError(f"{field_name} must be an integer >= 0.")
+    return integer
+
+
 def _normalize_backend_options(
     values: Mapping[str, Any] | None = None,
     **extra_values: Any,
@@ -227,6 +242,18 @@ class RelaxConfig:
     stress_isif: int | None = None
     ibrion: int = 2
 
+    def __post_init__(self) -> None:
+        steps = _coerce_non_negative_int(self.steps, field_name="RelaxConfig.steps")
+        isif = int(self.isif)
+        stress_isif = self.stress_isif
+        if self.relax_cell and isif == 2:
+            isif = 3
+        if self.relax_cell and stress_isif is None:
+            stress_isif = isif
+        object.__setattr__(self, "steps", steps)
+        object.__setattr__(self, "isif", isif)
+        object.__setattr__(self, "stress_isif", stress_isif)
+
 
 @dataclass(frozen=True)
 class MDConfig:
@@ -241,6 +268,10 @@ class MDConfig:
     smass: float | None = None
     isif: int | None = 0
     mdalgo: int | None = None
+
+    def __post_init__(self) -> None:
+        steps = _coerce_non_negative_int(self.steps, field_name="MDConfig.steps")
+        object.__setattr__(self, "steps", steps)
 
     @property
     def effective_mdalgo(self) -> int:
@@ -291,6 +322,7 @@ class RunStep:
     thermostat_kinetic: float = 0.0
     temperature: float = 0.0
     sc_time: float = 0.0
+    advanced: bool = True
 
 
 @dataclass
@@ -302,6 +334,18 @@ class CalculationResult:
     potential_energy: float
     forces: Any | None = None
     stress: Any | None = None
+
+
+@dataclass
+class ChargeDensityResult:
+    """Result returned by charge-density prediction APIs."""
+
+    atoms: Any
+    density: Any
+    grid_shape: tuple[int, int, int]
+    backend: str
+    spin_density: Any | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

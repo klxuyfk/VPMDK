@@ -19,6 +19,10 @@ The main public functions are:
 - `vpmdk.single_point(...)`
 - `vpmdk.relax(...)`
 - `vpmdk.md(...)`
+- `vpmdk.predict_charge_density(...)`
+- `vpmdk.charge_density(...)`
+- `vpmdk.determine_vasp_fft_grid(...)`
+- `vpmdk.write_chgcar(...)`
 - `vpmdk.list_backends()`
 - `vpmdk.get_backend_capabilities(...)`
 
@@ -33,6 +37,7 @@ Important public models are:
 - `vpmdk.SinglePointResult`
 - `vpmdk.RelaxResult`
 - `vpmdk.MDResult`
+- `vpmdk.ChargeDensityResult`
 
 ## Core Behavior
 
@@ -138,7 +143,7 @@ print(result.converged)
 
 Key arguments:
 
-- `steps`: maximum ionic steps
+- `steps`: maximum ionic steps. `0` is allowed and behaves like a single-point evaluation of the initial structure. Negative values are invalid.
 - `fmax`: force convergence threshold in eV/Ang
 - `relax_cell`: maps to fixed-cell vs cell relaxation behavior
 - `pressure_kbar`: external pressure when supported by the selected mode
@@ -173,6 +178,70 @@ Supported public thermostat names:
 - `bussi`
 
 These are mapped internally onto the existing VASP-style `MDALGO` logic.
+
+For public MD calls, `steps=0` is allowed and behaves like a single-point evaluation of the initial structure without advancing dynamics. Negative values are invalid.
+
+## Charge-Density Prediction
+
+Use `vpmdk.predict_charge_density()` when you want a volumetric density on a specific grid.
+
+```python
+from ase.io import read
+import vpmdk
+
+atoms = read("POSCAR")
+
+result = vpmdk.predict_charge_density(
+    atoms,
+    grid_shape=(64, 64, 64),
+    backend="CHARGE3NET",
+    source_dir="/path/to/charge3net",
+    python_executable="/path/to/charge3net-env/bin/python",
+    model_path="/path/to/charge3net/models/charge3net_mp.pt",
+)
+
+print(result.grid_shape)
+print(result.density.shape)
+print(result.spin_density is None)
+```
+
+If you want a VASP-like grid derived from `INCAR`, use `vpmdk.determine_vasp_fft_grid(...)` or pass `incar=` directly:
+
+```python
+from pymatgen.io.vasp import Incar
+
+incar = Incar.from_file("INCAR")
+result = vpmdk.predict_charge_density(
+    atoms,
+    incar=incar,
+    reference=atoms,
+    backend="CHARGE3NET",
+    source_dir="/path/to/charge3net",
+    python_executable="/path/to/charge3net-env/bin/python",
+)
+```
+
+Returned object:
+
+- `result.atoms`: `Atoms` used for prediction
+- `result.density`: 3D NumPy array
+- `result.spin_density`: optional 3D NumPy array for spin-enabled checkpoints
+- `result.grid_shape`: `(NGXF, NGYF, NGZF)`
+- `result.backend`: normalized backend name
+- `result.metadata`: backend-specific execution details
+
+To write a VASP-like `CHGCAR` after prediction:
+
+```python
+vpmdk.write_chgcar("CHGCAR", atoms, result.density, spin_density=result.spin_density)
+```
+
+Notes:
+
+- `vpmdk.charge_density(...)` is an alias of `vpmdk.predict_charge_density(...)`
+- the current ChargE3Net backend runs in a separate Python process, so `source_dir`, `python_executable`, and usually `model_path` must point to a working ChargE3Net environment
+- the current writer produces the volumetric density block in `CHGCAR` format, but does not reconstruct PAW augmentation occupancies
+- a runnable end-to-end example is available in [examples/chgcar_charge3net](/home/nei/temp/vpmdk_private/examples/chgcar_charge3net/README.md)
 
 ## Backend Discovery And Capabilities
 
@@ -234,6 +303,8 @@ config = vpmdk.RelaxConfig(
 )
 ```
 
+`steps=0` is allowed and gives a single-point-style result for the initial structure. Negative values raise `ValueError`.
+
 ### `MDConfig`
 
 ```python
@@ -245,6 +316,8 @@ config = vpmdk.MDConfig(
     thermostat_kwargs={"LANGEVIN_GAMMA": 1.0},
 )
 ```
+
+`steps=0` is allowed and returns a single-point-style result without advancing MD. Negative values raise `ValueError`.
 
 ## Compatibility Observer
 

@@ -5,11 +5,13 @@ from __future__ import annotations
 import sys
 from typing import Any
 
+from .charge_density import predict_charge_density
 from .execution import execute_md, execute_relaxation, execute_single_point
 from .models import (
     BackendCapabilities,
     BackendConfig,
     BackendSpec,
+    ChargeDensityResult,
     MDConfig,
     MDResult,
     RelaxConfig,
@@ -24,6 +26,23 @@ from .models import (
 
 def _root():
     return sys.modules["vpmdk_core"]
+
+
+def _derive_structure_from_atoms(atoms, structure=None):
+    """Return an explicit structure or derive one from ASE atoms when possible."""
+
+    if structure is not None:
+        return structure
+    adaptor = getattr(_root(), "AseAtomsAdaptor", None)
+    if adaptor is None:
+        return None
+    get_structure = getattr(adaptor, "get_structure", None)
+    if callable(get_structure):
+        try:
+            return get_structure(atoms)
+        except Exception:
+            return None
+    return None
 
 
 _BASE_CAPABILITIES: dict[str, BackendCapabilities] = {
@@ -93,7 +112,7 @@ def _backend_available(name: str) -> bool:
         "HIENET": lambda: root.HIENetCalculator is not None,
         "NEQUIX": lambda: root.NequixCalculator is not None,
         "SEVENNET": lambda: root.SevenNetCalculator is not None,
-        "FLASHTP": lambda: root.SevenNetCalculator is not None,
+        "FLASHTP": lambda: root._is_sevennet_flash_available(),
         "ALLEGRO": lambda: root.NequIPCalculator is not None,
         "NEQUIP": lambda: root.NequIPCalculator is not None,
         "ORB": lambda: root.ORBCalculator is not None and root.ORB_PRETRAINED_MODELS is not None,
@@ -226,7 +245,7 @@ def single_point(
     *,
     calculator=None,
     backend: BackendConfig | dict[str, Any] | None = None,
-    mlp: str = "CHGNET",
+    mlp: str | None = None,
     model: str | None = None,
     device: str | None = None,
     structure=None,
@@ -238,6 +257,7 @@ def single_point(
     """Run a single-point evaluation using either a supplied or constructed calculator."""
 
     if calculator is None:
+        structure = _derive_structure_from_atoms(atoms, structure)
         calculator = build_calculator(
             backend,
             mlp=mlp,
@@ -267,7 +287,7 @@ def relax(
     *,
     calculator=None,
     backend: BackendConfig | dict[str, Any] | None = None,
-    mlp: str = "CHGNET",
+    mlp: str | None = None,
     model: str | None = None,
     device: str | None = None,
     structure=None,
@@ -284,6 +304,7 @@ def relax(
     """Run a relaxation using the stable library API."""
 
     if calculator is None:
+        structure = _derive_structure_from_atoms(atoms, structure)
         calculator = build_calculator(
             backend,
             mlp=mlp,
@@ -321,7 +342,7 @@ def md(
     *,
     calculator=None,
     backend: BackendConfig | dict[str, Any] | None = None,
-    mlp: str = "CHGNET",
+    mlp: str | None = None,
     model: str | None = None,
     device: str | None = None,
     structure=None,
@@ -340,6 +361,7 @@ def md(
     """Run molecular dynamics using the stable library API."""
 
     if calculator is None:
+        structure = _derive_structure_from_atoms(atoms, structure)
         calculator = build_calculator(
             backend,
             mlp=mlp,

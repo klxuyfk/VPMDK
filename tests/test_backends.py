@@ -236,54 +236,42 @@ def test_build_sevennet_flash_requires_checkpoint(monkeypatch: pytest.MonkeyPatc
 
 def test_build_sevennet_rejects_unsupported_oeq(monkeypatch: pytest.MonkeyPatch):
     class FakeSevenNetCalculator:
-        def __init__(
-            self,
-            *,
-            model,
-            device="auto",
-            file_type="checkpoint",
-            enable_cueq=None,
-            enable_flash=None,
-            **_,
-        ):
-            raise AssertionError("constructor should not be reached")
+        def __init__(self, *, model, device="auto", file_type="checkpoint", **_):
+            self.model = model
+            self.device = device
+            self.file_type = file_type
 
     monkeypatch.setattr(vpmdk, "SevenNetCalculator", FakeSevenNetCalculator)
     monkeypatch.setattr(vpmdk, "_SEVENNET_PACKAGE", "sevenn")
 
     with pytest.raises(RuntimeError, match="SEVENNET_ENABLE_OEQ"):
-        vpmdk._build_sevennet_calculator(
-            {
-                "MODEL": "7net-0",
-                "SEVENNET_ENABLE_OEQ": "1",
-            }
-        )
+        vpmdk._build_sevennet_calculator({"MODEL": "7net-0", "SEVENNET_ENABLE_OEQ": "1"})
 
 
-def test_build_equflash_uses_ucalculator(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_build_equflash_uses_ucalculator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     model_path = tmp_path / "equflash.ckpt"
     model_path.write_text("dummy")
     seen: dict[str, object] = {}
 
-    class FakeUCalculator:
-        def __init__(self, *, checkpoint_path, cpu=False, device=None):
-            seen["checkpoint_path"] = checkpoint_path
-            seen["cpu"] = cpu
-            seen["device"] = device
+    class FakeEquFlashCalculator:
+        def __init__(self, checkpoint_path, cpu=False, device=None):
+            seen.update(
+                {
+                    "checkpoint_path": checkpoint_path,
+                    "cpu": cpu,
+                    "device": device,
+                }
+            )
 
-    monkeypatch.setattr(vpmdk, "_get_equflash_calculator_cls", lambda: FakeUCalculator)
+    monkeypatch.setattr(vpmdk, "_get_equflash_calculator_cls", lambda: FakeEquFlashCalculator)
 
-    calc = vpmdk._build_equflash_calculator(
-        {"MODEL": str(model_path), "DEVICE": "cuda:0"}
-    )
+    calc = vpmdk._build_equflash_calculator({"MODEL": str(model_path), "DEVICE": "cuda"})
 
-    assert isinstance(calc, FakeUCalculator)
+    assert isinstance(calc, FakeEquFlashCalculator)
     assert seen == {
         "checkpoint_path": str(model_path),
         "cpu": False,
-        "device": "cuda:0",
+        "device": "cuda",
     }
 
 
@@ -291,7 +279,7 @@ def test_build_equflash_requires_local_checkpoint(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(vpmdk, "_get_equflash_calculator_cls", lambda: object)
 
     with pytest.raises(ValueError, match="local checkpoint"):
-        vpmdk._build_equflash_calculator({"MODEL": "equflash-29M-oam"})
+        vpmdk._build_equflash_calculator({"MODEL": "equflash-unreleased"})
 
 
 def test_eqnorm_uses_checkpoint_path_and_bcar_tags(
@@ -551,32 +539,15 @@ def test_nequix_uses_checkpoint_path_and_torch_device(
 
     class FakeNequixCalculator(vpmdk.Calculator):
         def __init__(self, **kwargs):
-            raise AssertionError("torch path should not call NequixCalculator.__init__")
-
-    def fake_from_pretrained(*, model_name=None, model_path=None, backend="jax", use_kernel=True):
-        seen["from_pretrained"] = {
-            "model_name": model_name,
-            "model_path": model_path,
-            "backend": backend,
-            "use_kernel": use_kernel,
-        }
-        return FakeModel(), {"atomic_numbers": [8, 14], "cutoff": 6.0}
-
-    def fake_atomic_numbers_to_indices(atomic_numbers):
-        seen["atomic_numbers"] = list(atomic_numbers)
-        return {number: index for index, number in enumerate(atomic_numbers)}
-
-    original_import_module = vpmdk.importlib.import_module
-
-    def fake_import_module(name: str):
-        if name == "nequix.calculator":
-            return SimpleNamespace(from_pretrained=fake_from_pretrained)
-        if name == "nequix.data":
-            return SimpleNamespace(atomic_numbers_to_indices=fake_atomic_numbers_to_indices)
-        return original_import_module(name)
+            super().__init__()
+            seen["init_kwargs"] = dict(kwargs)
+            self.model = FakeModel()
+            self.device = None
+            self.backend = kwargs["backend"]
+            self.cutoff = 6.0
+            self._capacity_multiplier = kwargs["capacity_multiplier"]
 
     monkeypatch.setattr(vpmdk, "NequixCalculator", FakeNequixCalculator)
-    monkeypatch.setattr(vpmdk.importlib, "import_module", fake_import_module)
 
     calc = vpmdk._build_nequix_calculator(
         {
@@ -590,19 +561,86 @@ def test_nequix_uses_checkpoint_path_and_torch_device(
     )
 
     assert isinstance(calc, FakeNequixCalculator)
-    assert seen["from_pretrained"] == {
+    assert seen["init_kwargs"] == {
         "model_path": str(model_path),
         "model_name": "nequix-oam-1",
         "backend": "torch",
         "use_kernel": True,
+        "use_compile": True,
+        "capacity_multiplier": 1.25,
     }
-    assert seen["atomic_numbers"] == [8, 14]
     assert seen["moved_to"] == "cpu"
     assert seen["eval_called"] is True
     assert str(calc.device) == "cpu"
     assert calc.backend == "torch"
     assert calc.cutoff == 6.0
     assert calc._capacity_multiplier == 1.25
+
+
+def test_nequix_torch_backend_preserves_constructor_default_device(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "nequix-oam-1.nqx"
+    model_path.write_text("dummy")
+
+    class FakeModel:
+        def to(self, device):
+            raise AssertionError("model should not move without DEVICE")
+
+        def eval(self):
+            raise AssertionError("model should not eval without DEVICE")
+
+    class FakeNequixCalculator(vpmdk.Calculator):
+        def __init__(self, **kwargs):
+            super().__init__()
+            self.model = FakeModel()
+            self.device = "cpu"
+            self.backend = kwargs["backend"]
+
+    monkeypatch.setattr(vpmdk, "NequixCalculator", FakeNequixCalculator)
+
+    calc = vpmdk._build_nequix_calculator(
+        {
+            "MODEL": str(model_path),
+            "NEQUIX_BACKEND": "torch",
+        }
+    )
+
+    assert calc.device == "cpu"
+
+
+def test_nequix_jax_backend_ignores_device_override_for_torch_transfer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "nequix-oam-1.nqx"
+    model_path.write_text("dummy")
+
+    class FakeModel:
+        def to(self, device):
+            raise AssertionError("jax backend should not move torch model")
+
+        def eval(self):
+            raise AssertionError("jax backend should not eval torch model")
+
+    class FakeNequixCalculator(vpmdk.Calculator):
+        def __init__(self, **kwargs):
+            super().__init__()
+            self.model = FakeModel()
+            self.device = "jax-default"
+            self.backend = kwargs["backend"]
+
+    monkeypatch.setattr(vpmdk, "NequixCalculator", FakeNequixCalculator)
+
+    calc = vpmdk._build_nequix_calculator(
+        {
+            "MODEL": str(model_path),
+            "NEQUIX_BACKEND": "jax",
+            "DEVICE": "cpu",
+        }
+    )
+
+    assert calc.backend == "jax"
+    assert calc.device == "jax-default"
 
 
 def test_nequix_missing_checkpoint_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -796,7 +834,9 @@ def test_override_model_graph_converter_algorithm_rebuilds_converter():
         def set_isolated_atom_response(self, value: str):
             self.on_isolated_atoms = value
 
-    model = SimpleNamespace(graph_converter=DummyConverter(atom_graph_cutoff=6, bond_graph_cutoff=3))
+    model = SimpleNamespace(
+        graph_converter=DummyConverter(atom_graph_cutoff=6, bond_graph_cutoff=3)
+    )
     model.graph_converter.set_isolated_atom_response("error")
 
     updated_model = vpmdk._override_model_graph_converter_algorithm(
@@ -912,7 +952,9 @@ def test_matris_checkpoint_path_applies_graph_converter_algorithm(
         def set_isolated_atom_response(self, value: str):
             self.on_isolated_atoms = value
 
-    model = SimpleNamespace(graph_converter=DummyConverter(atom_graph_cutoff=6, bond_graph_cutoff=3))
+    model = SimpleNamespace(
+        graph_converter=DummyConverter(atom_graph_cutoff=6, bond_graph_cutoff=3)
+    )
     seen: dict[str, object] = {}
 
     def fake_load(path: str, *, device: str | None):

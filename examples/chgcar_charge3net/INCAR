@@ -1,0 +1,7 @@
+IBRION = -1
+NSW = 0
+PREC = N
+ENCUT = 400
+NGXF = 24
+NGYF = 24
+NGZF = 24

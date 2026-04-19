@@ -29,9 +29,10 @@ def _build_result(atoms, calculator, potential_energy: float) -> CalculationResu
     root = _root()
     forces = root._safe_get_forces(atoms)
     stress = root._safe_get_stress_matrix(atoms, mode="full")
+    resolved_calculator = getattr(atoms, "calc", None)
     return CalculationResult(
         atoms=atoms,
-        calculator=calculator,
+        calculator=resolved_calculator if resolved_calculator is not None else calculator,
         potential_energy=float(potential_energy),
         forces=forces,
         stress=stress,
@@ -104,6 +105,25 @@ def execute_relaxation(
     if observer is not None:
         observer.on_start(atoms, context)
 
+    if config.steps == 0:
+        energy = float(atoms.get_potential_energy())
+        fallback_step = RunStep(index=1, potential_energy=energy, total_energy=energy)
+        if observer is not None:
+            observer.on_step(atoms, fallback_step, context)
+        common = _build_result(atoms, calculator, energy)
+        result = RelaxResult(
+            atoms=common.atoms,
+            calculator=common.calculator,
+            potential_energy=common.potential_energy,
+            forces=common.forces,
+            stress=common.stress,
+            steps=[fallback_step],
+            converged=False,
+        )
+        if observer is not None:
+            observer.on_finish(atoms, result, context)
+        return result
+
     recorded_steps: list[RunStep] = []
     scalar_pressure = (
         config.pressure_kbar * root.KBAR_TO_EV_PER_A3
@@ -120,9 +140,10 @@ def execute_relaxation(
     previous_energy: float | None = None
     relax_object = None
     dyn = None
+    converged: bool | None = None
     with root._temporarily_freeze_atoms(atoms, freeze_required):
         relax_object = builder(atoms)
-        dyn = root.BFGS(relax_object, logfile="OUTCAR")
+        dyn = root.BFGS(relax_object, logfile=None)
 
         def _record_step() -> None:
             nonlocal previous_energy
@@ -140,13 +161,15 @@ def execute_relaxation(
 
         dyn.attach(_record_step)
         if config.energy_tolerance is None:
-            dyn.run(fmax=config.fmax, steps=config.steps)
+            converged = bool(dyn.run(fmax=config.fmax, steps=config.steps))
         else:
             monitor = root._EnergyConvergenceMonitor(atoms, config.energy_tolerance)
             dyn.fmax = config.fmax
+            converged = False
             for force_converged in dyn.irun(steps=config.steps):
                 energy_converged = monitor.update()
                 if energy_converged or force_converged:
+                    converged = True
                     break
 
     target_atoms = getattr(relax_object, "atoms", atoms)
@@ -159,7 +182,6 @@ def execute_relaxation(
             observer.on_step(target_atoms, fallback_step, context)
 
     common = _build_result(target_atoms, calculator, recorded_steps[-1].potential_energy)
-    converged = getattr(dyn, "converged", None)
     result = RelaxResult(
         atoms=common.atoms,
         calculator=common.calculator,
@@ -167,7 +189,7 @@ def execute_relaxation(
         forces=common.forces,
         stress=common.stress,
         steps=recorded_steps,
-        converged=bool(converged) if converged is not None else None,
+        converged=converged,
     )
     if observer is not None:
         observer.on_finish(target_atoms, result, context)
@@ -197,6 +219,32 @@ def execute_md(
     atoms.calc = root._resolve_calculator(calculator)
     if observer is not None:
         observer.on_start(atoms, context)
+
+    if config.steps == 0:
+        potential_energy = float(atoms.get_potential_energy())
+        fallback_step = RunStep(
+            index=1,
+            potential_energy=potential_energy,
+            total_energy=potential_energy,
+            kinetic_energy=0.0,
+            temperature=0.0,
+            advanced=False,
+        )
+        if observer is not None:
+            observer.on_step(atoms, fallback_step, context)
+        atoms.wrap()
+        common = _build_result(atoms, calculator, potential_energy)
+        result = MDResult(
+            atoms=common.atoms,
+            calculator=common.calculator,
+            potential_energy=common.potential_energy,
+            forces=common.forces,
+            stress=common.stress,
+            steps=[fallback_step],
+        )
+        if observer is not None:
+            observer.on_finish(atoms, result, context)
+        return result
 
     if config.temperature <= 0:
         velocities = atoms.get_velocities()
