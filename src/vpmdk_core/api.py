@@ -28,6 +28,23 @@ def _root():
     return sys.modules["vpmdk_core"]
 
 
+def _derive_structure_from_atoms(atoms, structure=None):
+    """Return an explicit structure or derive one from ASE atoms when possible."""
+
+    if structure is not None:
+        return structure
+    adaptor = getattr(_root(), "AseAtomsAdaptor", None)
+    if adaptor is None:
+        return None
+    get_structure = getattr(adaptor, "get_structure", None)
+    if callable(get_structure):
+        try:
+            return get_structure(atoms)
+        except Exception:
+            return None
+    return None
+
+
 _BASE_CAPABILITIES: dict[str, BackendCapabilities] = {
     "CHGNET": BackendCapabilities(spin=True),
     "MATGL": BackendCapabilities(spin=False),
@@ -240,6 +257,7 @@ def single_point(
     """Run a single-point evaluation using either a supplied or constructed calculator."""
 
     if calculator is None:
+        structure = _derive_structure_from_atoms(atoms, structure)
         calculator = build_calculator(
             backend,
             mlp=mlp,
@@ -286,6 +304,7 @@ def relax(
     """Run a relaxation using the stable library API."""
 
     if calculator is None:
+        structure = _derive_structure_from_atoms(atoms, structure)
         calculator = build_calculator(
             backend,
             mlp=mlp,
@@ -342,6 +361,7 @@ def md(
     """Run molecular dynamics using the stable library API."""
 
     if calculator is None:
+        structure = _derive_structure_from_atoms(atoms, structure)
         calculator = build_calculator(
             backend,
             mlp=mlp,

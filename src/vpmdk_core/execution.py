@@ -29,9 +29,10 @@ def _build_result(atoms, calculator, potential_energy: float) -> CalculationResu
     root = _root()
     forces = root._safe_get_forces(atoms)
     stress = root._safe_get_stress_matrix(atoms, mode="full")
+    resolved_calculator = getattr(atoms, "calc", None)
     return CalculationResult(
         atoms=atoms,
-        calculator=calculator,
+        calculator=resolved_calculator if resolved_calculator is not None else calculator,
         potential_energy=float(potential_energy),
         forces=forces,
         stress=stress,

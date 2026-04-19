@@ -35,6 +35,19 @@ def test_public_single_point_returns_result_without_vasp_side_effects(
     assert not (tmp_path / "CONTCAR").exists()
 
 
+def test_public_single_point_returns_resolved_ase_calculator(load_atoms):
+    atoms = load_atoms()
+    inner = DummyCalculator()
+
+    class Wrapper:
+        def __init__(self, calculator):
+            self.calculator = calculator
+
+    result = vpmdk.single_point(atoms, calculator=Wrapper(inner))
+
+    assert result.calculator is inner
+
+
 def test_public_get_calculator_accepts_backend_kwargs(monkeypatch: pytest.MonkeyPatch):
     captured: dict[str, object] = {}
 
@@ -100,6 +113,57 @@ def test_public_wrappers_do_not_override_backend_mlp_with_default(
     assert result is sentinel
     assert captured["backend"] == {"MLP": "MACE"}
     assert captured["mlp"] is None
+
+
+@pytest.mark.parametrize(
+    ("call_name", "execute_name"),
+    [
+        ("single_point", "execute_single_point"),
+        ("relax", "execute_relaxation"),
+        ("md", "execute_md"),
+    ],
+)
+def test_public_wrappers_derive_structure_from_atoms_for_structure_backends(
+    monkeypatch: pytest.MonkeyPatch,
+    load_atoms,
+    call_name: str,
+    execute_name: str,
+):
+    atoms = load_atoms()
+    captured: dict[str, object] = {}
+    sentinel = object()
+    derived_structure = object()
+
+    class FakeAdaptor:
+        @staticmethod
+        def get_structure(atoms_arg):
+            captured["atoms"] = atoms_arg
+            return derived_structure
+
+    def fake_build_calculator(
+        config_or_tags=None,
+        *,
+        structure=None,
+        mlp=None,
+        model=None,
+        device=None,
+        options=None,
+        **backend_kwargs,
+    ):
+        captured["structure"] = structure
+        captured["mlp"] = mlp
+        return DummyCalculator()
+
+    monkeypatch.setattr(vpmdk, "AseAtomsAdaptor", FakeAdaptor)
+    monkeypatch.setattr(api_module, "build_calculator", fake_build_calculator)
+    monkeypatch.setattr(api_module, execute_name, lambda *args, **kwargs: sentinel)
+
+    result = getattr(vpmdk, call_name)(atoms, mlp="ALPHANET")
+
+    assert result is sentinel
+    assert captured["atoms"] is atoms
+    assert captured["structure"] is derived_structure
+    assert captured["mlp"] == "ALPHANET"
 
 
 def test_public_build_calculator_accepts_bcar_like_mapping(monkeypatch: pytest.MonkeyPatch):
@@ -335,6 +399,28 @@ def test_print_progress_observer_resets_state_between_runs(capsys: pytest.Captur
     assert len(lines) == 2
     assert "d E =+.00000000E+00" in lines[0]
     assert "d E =+.00000000E+00" in lines[1]
+
+
+def test_print_progress_observer_skips_non_advanced_md_frames(
+    capsys: pytest.CaptureFixture[str],
+):
+    observer = vpmdk.PrintProgressObserver()
+    context = vpmdk.RunContext(mode="md", ibrion=0, isif=0, potim=1.0, mdalgo=0)
+
+    observer.on_start(None, context)
+    observer.on_step(
+        None,
+        vpmdk.RunStep(
+            index=1,
+            potential_energy=1.0,
+            total_energy=1.0,
+            temperature=300.0,
+            advanced=False,
+        ),
+        context,
+    )
+
+    assert capsys.readouterr().out == ""
 
 
 def test_public_md_vasp_compat_respects_write_xdatcar(

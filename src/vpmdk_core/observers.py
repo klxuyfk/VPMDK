@@ -68,6 +68,8 @@ class PrintProgressObserver(RunObserver):
     def on_step(self, atoms, step: RunStep, context: RunContext) -> None:
         root = _root()
         if context.mode == "md":
+            if not step.advanced:
+                return
             print(
                 f"{step.index:7d} T={step.temperature:7.1f} "
                 f"E= {root._format_energy_value(step.total_energy)} "
