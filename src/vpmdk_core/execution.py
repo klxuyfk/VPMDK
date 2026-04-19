@@ -104,6 +104,25 @@ def execute_relaxation(
     if observer is not None:
         observer.on_start(atoms, context)
 
+    if config.steps == 0:
+        energy = float(atoms.get_potential_energy())
+        fallback_step = RunStep(index=1, potential_energy=energy, total_energy=energy)
+        if observer is not None:
+            observer.on_step(atoms, fallback_step, context)
+        common = _build_result(atoms, calculator, energy)
+        result = RelaxResult(
+            atoms=common.atoms,
+            calculator=common.calculator,
+            potential_energy=common.potential_energy,
+            forces=common.forces,
+            stress=common.stress,
+            steps=[fallback_step],
+            converged=False,
+        )
+        if observer is not None:
+            observer.on_finish(atoms, result, context)
+        return result
+
     recorded_steps: list[RunStep] = []
     scalar_pressure = (
         config.pressure_kbar * root.KBAR_TO_EV_PER_A3
@@ -199,6 +218,32 @@ def execute_md(
     atoms.calc = root._resolve_calculator(calculator)
     if observer is not None:
         observer.on_start(atoms, context)
+
+    if config.steps == 0:
+        potential_energy = float(atoms.get_potential_energy())
+        kinetic_energy = root._extract_numeric_attribute(atoms, ("get_kinetic_energy",))
+        fallback_step = RunStep(
+            index=1,
+            potential_energy=potential_energy,
+            total_energy=potential_energy + kinetic_energy,
+            kinetic_energy=kinetic_energy,
+            temperature=root._extract_numeric_attribute(atoms, ("get_temperature",)),
+        )
+        if observer is not None:
+            observer.on_step(atoms, fallback_step, context)
+        atoms.wrap()
+        common = _build_result(atoms, calculator, potential_energy)
+        result = MDResult(
+            atoms=common.atoms,
+            calculator=common.calculator,
+            potential_energy=common.potential_energy,
+            forces=common.forces,
+            stress=common.stress,
+            steps=[fallback_step],
+        )
+        if observer is not None:
+            observer.on_finish(atoms, result, context)
+        return result
 
     if config.temperature <= 0:
         velocities = atoms.get_velocities()

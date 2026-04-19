@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
+import numpy as np
 import pytest
 from ase.calculators.calculator import all_changes
 
@@ -162,6 +163,18 @@ def test_relax_config_preserves_explicit_isif_when_relax_cell_enabled():
     assert config.stress_isif == 6
 
 
+@pytest.mark.parametrize(
+    ("config_cls", "kwargs", "message"),
+    [
+        (vpmdk.RelaxConfig, {"steps": -1}, "RelaxConfig.steps"),
+        (vpmdk.MDConfig, {"steps": -1}, "MDConfig.steps"),
+    ],
+)
+def test_config_objects_reject_negative_steps(config_cls, kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        config_cls(**kwargs)
+
+
 def test_public_relax_reports_non_convergence_and_avoids_outcar_side_effects(
     tmp_path: Path,
     load_atoms,
@@ -235,6 +248,33 @@ def test_public_md_maps_thermostat_name(monkeypatch: pytest.MonkeyPatch, load_at
     assert captured["timestep"] == 2.0
     assert captured["temperature"] == 300.0
     assert captured["params"] == {"LANGEVIN_GAMMA": 1.5}
+
+
+def test_public_md_steps_zero_behaves_like_single_point(monkeypatch: pytest.MonkeyPatch, load_atoms):
+    atoms = load_atoms()
+    atoms.set_velocities([[1.0, 2.0, 3.0] for _ in range(len(atoms))])
+
+    monkeypatch.setattr(
+        vpmdk.velocitydistribution,
+        "MaxwellBoltzmannDistribution",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not resample velocities")),
+    )
+    monkeypatch.setattr(
+        vpmdk,
+        "_select_md_dynamics",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not build dynamics")),
+    )
+
+    result = vpmdk.md(
+        atoms,
+        calculator=DummyCalculator(),
+        steps=0,
+        temperature=300.0,
+    )
+
+    assert isinstance(result, vpmdk.MDResult)
+    assert len(result.steps) == 1
+    assert np.allclose(atoms.get_velocities(), [[1.0, 2.0, 3.0] for _ in range(len(atoms))])
 
 
 def test_public_md_vasp_compat_respects_write_xdatcar(

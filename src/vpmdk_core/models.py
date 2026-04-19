@@ -228,12 +228,16 @@ class RelaxConfig:
     ibrion: int = 2
 
     def __post_init__(self) -> None:
+        steps = int(self.steps)
+        if steps < 0:
+            raise ValueError("RelaxConfig.steps must be >= 0.")
         isif = int(self.isif)
         stress_isif = self.stress_isif
         if self.relax_cell and isif == 2:
             isif = 3
         if self.relax_cell and stress_isif is None:
             stress_isif = isif
+        object.__setattr__(self, "steps", steps)
         object.__setattr__(self, "isif", isif)
         object.__setattr__(self, "stress_isif", stress_isif)
 
@@ -251,6 +255,12 @@ class MDConfig:
     smass: float | None = None
     isif: int | None = 0
     mdalgo: int | None = None
+
+    def __post_init__(self) -> None:
+        steps = int(self.steps)
+        if steps < 0:
+            raise ValueError("MDConfig.steps must be >= 0.")
+        object.__setattr__(self, "steps", steps)
 
     @property
     def effective_mdalgo(self) -> int:

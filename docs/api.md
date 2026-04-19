@@ -143,7 +143,7 @@ print(result.converged)
 
 Key arguments:
 
-- `steps`: maximum ionic steps
+- `steps`: maximum ionic steps. `0` is allowed and behaves like a single-point evaluation of the initial structure. Negative values are invalid.
 - `fmax`: force convergence threshold in eV/Ang
 - `relax_cell`: maps to fixed-cell vs cell relaxation behavior
 - `pressure_kbar`: external pressure when supported by the selected mode
@@ -178,6 +178,8 @@ Supported public thermostat names:
 - `bussi`
 
 These are mapped internally onto the existing VASP-style `MDALGO` logic.
+
+For public MD calls, `steps=0` is allowed and behaves like a single-point evaluation of the initial structure without advancing dynamics. Negative values are invalid.
 
 ## Charge-Density Prediction
 
@@ -301,6 +303,8 @@ config = vpmdk.RelaxConfig(
 )
 ```
 
+`steps=0` is allowed and gives a single-point-style result for the initial structure. Negative values raise `ValueError`.
+
 ### `MDConfig`
 
 ```python
@@ -312,6 +316,8 @@ config = vpmdk.MDConfig(
     thermostat_kwargs={"LANGEVIN_GAMMA": 1.0},
 )
 ```
+
+`steps=0` is allowed and returns a single-point-style result without advancing MD. Negative values raise `ValueError`.
 
 ## Compatibility Observer
 

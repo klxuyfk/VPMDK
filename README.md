@@ -48,6 +48,8 @@ Useful public helpers include:
 
 These APIs do not write `OUTCAR`/`OSZICAR`/`vasprun.xml` by default. Those filesystem side effects are reserved for the VASP-compatible CLI and its internal compatibility observers.
 
+For the public execution API, `steps=0` is allowed and behaves like a single-point evaluation of the initial structure. Negative `steps` values are rejected.
+
 More detail:
 
 - API guide: [docs/api.md](/home/nei/temp/vpmdk_private/docs/api.md)
