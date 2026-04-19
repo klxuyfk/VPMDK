@@ -425,6 +425,23 @@ def test_charge_density_options_parse_model_config_overrides():
     assert options["spin"] is True
 
 
+@pytest.mark.parametrize(
+    ("tag_name", "raw_value"),
+    [
+        ("CHARGE_NUM_INTERACTIONS", "3.9"),
+        ("CHARGE_MUL", "384.2"),
+        ("CHARGE_LMAX", "4.7"),
+        ("CHARGE_NUM_BASIS", "16.5"),
+    ],
+)
+def test_charge_density_options_reject_fractional_integer_model_config_values(
+    tag_name: str,
+    raw_value: str,
+):
+    with pytest.raises(ValueError, match=tag_name):
+        charge_density_module._charge_density_options_from_bcar({tag_name: raw_value})
+
+
 @pytest.mark.parametrize("raw_value", [0, -2, 0.5, 1.5])
 def test_public_predict_charge_density_rejects_invalid_max_probes_per_batch(raw_value: object):
     atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3), pbc=True)
@@ -464,6 +481,29 @@ def test_public_predict_charge_density_metadata_uses_resolved_model_path(
 
     assert result.metadata["model_path"] == str(model_path)
     assert result.metadata["source_dir"] == str(source_dir)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"num_interactions": 3.9}, "num_interactions"),
+        ({"mul": 384.2}, "mul"),
+        ({"lmax": 4.7}, "lmax"),
+        ({"num_basis": 16.5}, "num_basis"),
+    ],
+)
+def test_public_predict_charge_density_rejects_fractional_integer_model_config_values(
+    kwargs: dict[str, object],
+    message: str,
+):
+    atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3), pbc=True)
+
+    with pytest.raises(ValueError, match=message):
+        vpmdk.predict_charge_density(
+            atoms,
+            grid_shape=(2, 2, 2),
+            **kwargs,
+        )
 
 
 def test_charge3net_runner_split_probe_output_handles_spin_channels():

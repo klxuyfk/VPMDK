@@ -113,6 +113,18 @@ def _coerce_positive_int(value: Any, *, key: str) -> int:
     return int(numeric)
 
 
+def _coerce_int_option(value: Any, *, key: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"Invalid {key} value: {value!r}")
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"Invalid {key} value: {value!r}") from None
+    if not numeric.is_integer():
+        raise ValueError(f"Invalid {key} value: {value!r}")
+    return int(numeric)
+
+
 def _coerce_grid_shape(grid_shape: Any) -> tuple[int, int, int]:
     try:
         values = tuple(
@@ -273,7 +285,7 @@ def _charge_density_options_from_bcar(bcar_tags: Mapping[str, Any]) -> dict[str,
         if value_type is bool:
             options[option_name] = root._parse_optional_bool_tag(dict(bcar_tags), tag_name)
         elif value_type is int:
-            options[option_name] = root._coerce_int_tag(str(raw_value), tag_name)
+            options[option_name] = _coerce_int_option(raw_value, key=tag_name)
         elif value_type is float:
             options[option_name] = _coerce_float(raw_value, key=tag_name)
         else:
@@ -374,6 +386,14 @@ def _run_charge3net_backend(
     source_dir = _resolve_charge_source_dir(source_dir)
     model_path = _resolve_charge_model_path(model_path, source_dir)
     max_probes_per_batch = _validate_max_probes_per_batch(max_probes_per_batch)
+    if num_interactions is not None:
+        num_interactions = _coerce_int_option(num_interactions, key="num_interactions")
+    if mul is not None:
+        mul = _coerce_int_option(mul, key="mul")
+    if lmax is not None:
+        lmax = _coerce_int_option(lmax, key="lmax")
+    if num_basis is not None:
+        num_basis = _coerce_int_option(num_basis, key="num_basis")
     if not model_path:
         raise RuntimeError(
             "ChargE3Net model checkpoint not found. Set CHARGE_MODEL (or "
@@ -414,17 +434,17 @@ def _run_charge3net_backend(
         if device is not None:
             command.extend(["--device", str(_root()._resolve_device(device))])
         if num_interactions is not None:
-            command.extend(["--num-interactions", str(int(num_interactions))])
+            command.extend(["--num-interactions", str(num_interactions)])
         if num_neighbors is not None:
             command.extend(["--num-neighbors", str(float(num_neighbors))])
         if mul is not None:
-            command.extend(["--mul", str(int(mul))])
+            command.extend(["--mul", str(mul)])
         if lmax is not None:
-            command.extend(["--lmax", str(int(lmax))])
+            command.extend(["--lmax", str(lmax)])
         if basis is not None:
             command.extend(["--basis", str(basis)])
         if num_basis is not None:
-            command.extend(["--num-basis", str(int(num_basis))])
+            command.extend(["--num-basis", str(num_basis)])
         if spin is not None:
             command.extend(["--spin", "1" if spin else "0"])
         completed = subprocess.run(

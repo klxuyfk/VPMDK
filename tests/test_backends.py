@@ -577,6 +577,38 @@ def test_nequix_uses_checkpoint_path_and_torch_device(
     assert calc._capacity_multiplier == 1.25
 
 
+def test_nequix_torch_backend_preserves_constructor_default_device(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "nequix-oam-1.nqx"
+    model_path.write_text("dummy")
+
+    class FakeModel:
+        def to(self, device):
+            raise AssertionError("model should not move without DEVICE")
+
+        def eval(self):
+            raise AssertionError("model should not eval without DEVICE")
+
+    class FakeNequixCalculator(vpmdk.Calculator):
+        def __init__(self, **kwargs):
+            super().__init__()
+            self.model = FakeModel()
+            self.device = "cpu"
+            self.backend = kwargs["backend"]
+
+    monkeypatch.setattr(vpmdk, "NequixCalculator", FakeNequixCalculator)
+
+    calc = vpmdk._build_nequix_calculator(
+        {
+            "MODEL": str(model_path),
+            "NEQUIX_BACKEND": "torch",
+        }
+    )
+
+    assert calc.device == "cpu"
+
+
 def test_nequix_missing_checkpoint_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(vpmdk, "NequixCalculator", object)
 

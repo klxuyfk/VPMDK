@@ -113,7 +113,5 @@ def _build_nequix_calculator(bcar_tags: Dict[str, str], *, structure=None):
             raise RuntimeError(
                 f"Unable to move Nequix torch backend to DEVICE={requested_device!r}."
             ) from exc
-    else:
-        calculator.device = None
 
     return calculator
