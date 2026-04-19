@@ -403,6 +403,28 @@ def test_charge_density_options_reject_non_positive_max_probes_per_batch(raw_val
         )
 
 
+def test_charge_density_options_parse_model_config_overrides():
+    options = charge_density_module._charge_density_options_from_bcar(
+        {
+            "CHARGE_NUM_INTERACTIONS": "4",
+            "CHARGE_NUM_NEIGHBORS": "12.5",
+            "CHARGE_MUL": "384",
+            "CHARGE_LMAX": "5",
+            "CHARGE_BASIS": "bessel",
+            "CHARGE_NUM_BASIS": "16",
+            "CHARGE_SPIN": "1",
+        }
+    )
+
+    assert options["num_interactions"] == 4
+    assert options["num_neighbors"] == 12.5
+    assert options["mul"] == 384
+    assert options["lmax"] == 5
+    assert options["basis"] == "bessel"
+    assert options["num_basis"] == 16
+    assert options["spin"] is True
+
+
 @pytest.mark.parametrize("raw_value", [0, -2, 0.5, 1.5])
 def test_public_predict_charge_density_rejects_invalid_max_probes_per_batch(raw_value: object):
     atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3), pbc=True)

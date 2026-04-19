@@ -251,6 +251,7 @@ def determine_vasp_fft_grid(reference, incar: Mapping[str, Any]) -> tuple[int, i
 
 
 def _charge_density_options_from_bcar(bcar_tags: Mapping[str, Any]) -> dict[str, Any]:
+    root = _root()
     options: dict[str, Any] = {
         "backend": bcar_tags.get("CHARGE_BACKEND", "CHARGE3NET"),
         "model_path": bcar_tags.get("CHARGE_MODEL"),
