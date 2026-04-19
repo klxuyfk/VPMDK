@@ -224,7 +224,6 @@ def determine_vasp_fft_grid(reference, incar: Mapping[str, Any]) -> tuple[int, i
 
 
 def _charge_density_options_from_bcar(bcar_tags: Mapping[str, Any]) -> dict[str, Any]:
-    root = _root()
     options: dict[str, Any] = {
         "backend": bcar_tags.get("CHARGE_BACKEND", "CHARGE3NET"),
         "model_path": bcar_tags.get("CHARGE_MODEL"),
@@ -238,13 +237,7 @@ def _charge_density_options_from_bcar(bcar_tags: Mapping[str, Any]) -> dict[str,
         options["cutoff"] = _coerce_float(cutoff, key="CHARGE_CUTOFF")
     max_batch = bcar_tags.get("CHARGE_MAX_PROBES_PER_BATCH")
     if max_batch is not None:
-        options["max_probes_per_batch"] = _validate_max_probes_per_batch(
-            root._coerce_int_tag(
-                str(max_batch),
-                "CHARGE_MAX_PROBES_PER_BATCH",
-            ),
-            raw_value=max_batch,
-        )
+        options["max_probes_per_batch"] = _validate_max_probes_per_batch(max_batch)
     for tag_name, (option_name, value_type) in _CHARGE_MODEL_CONFIG_TAGS.items():
         raw_value = bcar_tags.get(tag_name)
         if raw_value is None:
@@ -261,17 +254,26 @@ def _charge_density_options_from_bcar(bcar_tags: Mapping[str, Any]) -> dict[str,
 
 
 def _validate_max_probes_per_batch(
-    value: int,
-    *,
-    raw_value: object | None = None,
+    value: object,
 ) -> int:
-    if value <= 0:
-        invalid_value = value if raw_value is None else raw_value
+    if isinstance(value, bool):
         raise ValueError(
             "Invalid CHARGE_MAX_PROBES_PER_BATCH value: "
-            f"{invalid_value!r}. Expected a positive integer."
+            f"{value!r}. Expected a positive integer."
         )
-    return int(value)
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(
+            "Invalid CHARGE_MAX_PROBES_PER_BATCH value: "
+            f"{value!r}. Expected a positive integer."
+        ) from None
+    if not numeric.is_integer() or numeric <= 0:
+        raise ValueError(
+            "Invalid CHARGE_MAX_PROBES_PER_BATCH value: "
+            f"{value!r}. Expected a positive integer."
+        )
+    return int(numeric)
 
 
 def _resolve_charge_python(python_executable: str | None) -> str:
@@ -446,13 +448,16 @@ def predict_charge_density(
     grid_shape = _coerce_grid_shape(grid_shape)
 
     backend_name = _normalize_charge_backend_name(backend)
+    resolved_source_dir = _resolve_charge_source_dir(source_dir)
+    resolved_model_path = _resolve_charge_model_path(model_path, resolved_source_dir)
+    max_probes_per_batch = _validate_max_probes_per_batch(max_probes_per_batch)
     if backend_name == "CHARGE3NET":
         density, spin_density = _run_charge3net_backend(
             atoms,
             grid_shape=grid_shape,
-            model_path=model_path,
+            model_path=resolved_model_path,
             device=device,
-            source_dir=source_dir,
+            source_dir=resolved_source_dir,
             python_executable=python_executable,
             cutoff=cutoff,
             max_probes_per_batch=max_probes_per_batch,
@@ -474,9 +479,9 @@ def predict_charge_density(
         backend=backend_name,
         spin_density=spin_density,
         metadata={
-            "model_path": model_path,
+            "model_path": resolved_model_path,
             "device": "auto" if device is None else _root()._resolve_device(device),
-            "source_dir": _resolve_charge_source_dir(source_dir),
+            "source_dir": resolved_source_dir,
             "model_config": {
                 key: value
                 for key, value in {

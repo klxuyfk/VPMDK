@@ -360,7 +360,7 @@ def test_charge3net_backend_passes_explicit_model_config_flags(
     assert "--spin" in command
 
 
-@pytest.mark.parametrize("raw_value", ["0", "-2", "0.5"])
+@pytest.mark.parametrize("raw_value", ["0", "-2", "0.5", "1.5"])
 def test_charge_density_options_reject_non_positive_max_probes_per_batch(raw_value: str):
     with pytest.raises(ValueError, match="CHARGE_MAX_PROBES_PER_BATCH"):
         charge_density_module._charge_density_options_from_bcar(
@@ -368,8 +368,8 @@ def test_charge_density_options_reject_non_positive_max_probes_per_batch(raw_val
         )
 
 
-@pytest.mark.parametrize("raw_value", [0, -2])
-def test_public_predict_charge_density_rejects_non_positive_max_probes_per_batch(raw_value: int):
+@pytest.mark.parametrize("raw_value", [0, -2, 0.5, 1.5])
+def test_public_predict_charge_density_rejects_invalid_max_probes_per_batch(raw_value: object):
     atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3), pbc=True)
 
     with pytest.raises(ValueError, match="CHARGE_MAX_PROBES_PER_BATCH"):
@@ -378,6 +378,35 @@ def test_public_predict_charge_density_rejects_non_positive_max_probes_per_batch
             grid_shape=(2, 2, 2),
             max_probes_per_batch=raw_value,
         )
+
+
+def test_public_predict_charge_density_metadata_uses_resolved_model_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3), pbc=True)
+    source_dir = tmp_path / "charge_src"
+    model_path = source_dir / "models" / "charge3net_mp.pt"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_text("checkpoint")
+
+    monkeypatch.setattr(
+        charge_density_module,
+        "_run_charge3net_backend",
+        lambda atoms_arg, **kwargs: (
+            np.ones((2, 2, 2), dtype=np.float32),
+            None,
+        ),
+    )
+
+    result = vpmdk.predict_charge_density(
+        atoms,
+        grid_shape=(2, 2, 2),
+        source_dir=str(source_dir),
+    )
+
+    assert result.metadata["model_path"] == str(model_path)
+    assert result.metadata["source_dir"] == str(source_dir)
 
 
 def test_charge3net_runner_split_probe_output_handles_spin_channels():
