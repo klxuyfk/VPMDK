@@ -62,6 +62,9 @@ class PrintProgressObserver(RunObserver):
     def __init__(self):
         self._previous_energy: float | None = None
 
+    def on_start(self, atoms, context: RunContext) -> None:
+        self._previous_energy = None
+
     def on_step(self, atoms, step: RunStep, context: RunContext) -> None:
         root = _root()
         if context.mode == "md":
@@ -124,9 +127,13 @@ class VaspCompatObserver(RunObserver):
             sc_time=step.sc_time,
         )
         if context.mode == "md":
-            if config.write_xdatcar:
+            if config.write_xdatcar and step.advanced:
                 _root()._write_xdatcar_step("XDATCAR", atoms, step.index - 1)
-            if config.write_lammps_traj and (step.index - 1) % config.lammps_traj_interval == 0:
+            if (
+                config.write_lammps_traj
+                and step.advanced
+                and (step.index - 1) % config.lammps_traj_interval == 0
+            ):
                 _root()._write_lammps_trajectory_step(
                     config.lammps_traj_path,
                     atoms,

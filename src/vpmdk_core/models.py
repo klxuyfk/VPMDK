@@ -322,6 +322,7 @@ class RunStep:
     thermostat_kinetic: float = 0.0
     temperature: float = 0.0
     sc_time: float = 0.0
+    advanced: bool = True
 
 
 @dataclass

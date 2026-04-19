@@ -221,13 +221,13 @@ def execute_md(
 
     if config.steps == 0:
         potential_energy = float(atoms.get_potential_energy())
-        kinetic_energy = root._extract_numeric_attribute(atoms, ("get_kinetic_energy",))
         fallback_step = RunStep(
             index=1,
             potential_energy=potential_energy,
-            total_energy=potential_energy + kinetic_energy,
-            kinetic_energy=kinetic_energy,
-            temperature=root._extract_numeric_attribute(atoms, ("get_temperature",)),
+            total_energy=potential_energy,
+            kinetic_energy=0.0,
+            temperature=0.0,
+            advanced=False,
         )
         if observer is not None:
             observer.on_step(atoms, fallback_step, context)

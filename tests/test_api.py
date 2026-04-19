@@ -276,7 +276,65 @@ def test_public_md_steps_zero_behaves_like_single_point(monkeypatch: pytest.Monk
 
     assert isinstance(result, vpmdk.MDResult)
     assert len(result.steps) == 1
+    assert result.steps[0].kinetic_energy == 0.0
+    assert result.steps[0].total_energy == result.potential_energy
+    assert result.steps[0].advanced is False
     assert np.allclose(atoms.get_velocities(), [[1.0, 2.0, 3.0] for _ in range(len(atoms))])
+
+
+def test_public_md_steps_zero_vasp_compat_does_not_write_xdatcar(
+    tmp_path: Path,
+    load_atoms,
+):
+    atoms = load_atoms()
+    atoms.set_velocities([[1.0, 2.0, 3.0] for _ in range(len(atoms))])
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        vpmdk.velocitydistribution,
+        "MaxwellBoltzmannDistribution",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not resample velocities")),
+    )
+    monkeypatch.setattr(
+        vpmdk,
+        "_select_md_dynamics",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not build dynamics")),
+    )
+    try:
+        result = vpmdk.md(
+            atoms,
+            calculator=DummyCalculator(),
+            steps=0,
+            temperature=300.0,
+            observer=[vpmdk.VaspCompatObserver()],
+            vasp_compat=vpmdk.VaspCompatConfig(enabled=True, write_xdatcar=True),
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert isinstance(result, vpmdk.MDResult)
+    assert result.steps[0].advanced is False
+    assert not (tmp_path / "XDATCAR").exists()
+    assert (tmp_path / "OUTCAR").exists()
+    assert (tmp_path / "OSZICAR").exists()
+    assert (tmp_path / "vasprun.xml").exists()
+    assert (tmp_path / "CONTCAR").exists()
+
+
+def test_print_progress_observer_resets_state_between_runs(capsys: pytest.CaptureFixture[str]):
+    observer = vpmdk.PrintProgressObserver()
+    context = vpmdk.RunContext(mode="relax", ibrion=2, isif=2)
+
+    observer.on_start(None, context)
+    observer.on_step(None, vpmdk.RunStep(index=1, potential_energy=1.0, total_energy=1.0), context)
+    observer.on_start(None, context)
+    observer.on_step(None, vpmdk.RunStep(index=1, potential_energy=2.0, total_energy=2.0), context)
+
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.strip()]
+    assert len(lines) == 2
+    assert "d E =+.00000000E+00" in lines[0]
+    assert "d E =+.00000000E+00" in lines[1]
 
 
 def test_public_md_vasp_compat_respects_write_xdatcar(
