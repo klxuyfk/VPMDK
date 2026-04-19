@@ -609,6 +609,40 @@ def test_nequix_torch_backend_preserves_constructor_default_device(
     assert calc.device == "cpu"
 
 
+def test_nequix_jax_backend_ignores_device_override_for_torch_transfer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "nequix-oam-1.nqx"
+    model_path.write_text("dummy")
+
+    class FakeModel:
+        def to(self, device):
+            raise AssertionError("jax backend should not move torch model")
+
+        def eval(self):
+            raise AssertionError("jax backend should not eval torch model")
+
+    class FakeNequixCalculator(vpmdk.Calculator):
+        def __init__(self, **kwargs):
+            super().__init__()
+            self.model = FakeModel()
+            self.device = "jax-default"
+            self.backend = kwargs["backend"]
+
+    monkeypatch.setattr(vpmdk, "NequixCalculator", FakeNequixCalculator)
+
+    calc = vpmdk._build_nequix_calculator(
+        {
+            "MODEL": str(model_path),
+            "NEQUIX_BACKEND": "jax",
+            "DEVICE": "cpu",
+        }
+    )
+
+    assert calc.backend == "jax"
+    assert calc.device == "jax-default"
+
+
 def test_nequix_missing_checkpoint_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(vpmdk, "NequixCalculator", object)
 

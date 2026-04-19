@@ -101,7 +101,7 @@ def _build_nequix_calculator(bcar_tags: Dict[str, str], *, structure=None):
     requested_device = bcar_tags.get("DEVICE")
     calculator = root.NequixCalculator(**kwargs)
 
-    if requested_device:
+    if backend == "torch" and requested_device:
         try:
             import torch
 
