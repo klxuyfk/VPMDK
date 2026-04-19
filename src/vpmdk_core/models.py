@@ -23,6 +23,21 @@ def _stringify_legacy_value(value: object) -> str:
     return str(value)
 
 
+def _coerce_non_negative_int(value: object, *, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be an integer >= 0.")
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field_name} must be an integer >= 0.") from None
+    if not numeric.is_integer():
+        raise ValueError(f"{field_name} must be an integer >= 0.")
+    integer = int(numeric)
+    if integer < 0:
+        raise ValueError(f"{field_name} must be an integer >= 0.")
+    return integer
+
+
 def _normalize_backend_options(
     values: Mapping[str, Any] | None = None,
     **extra_values: Any,
@@ -228,9 +243,7 @@ class RelaxConfig:
     ibrion: int = 2
 
     def __post_init__(self) -> None:
-        steps = int(self.steps)
-        if steps < 0:
-            raise ValueError("RelaxConfig.steps must be >= 0.")
+        steps = _coerce_non_negative_int(self.steps, field_name="RelaxConfig.steps")
         isif = int(self.isif)
         stress_isif = self.stress_isif
         if self.relax_cell and isif == 2:
@@ -257,9 +270,7 @@ class MDConfig:
     mdalgo: int | None = None
 
     def __post_init__(self) -> None:
-        steps = int(self.steps)
-        if steps < 0:
-            raise ValueError("MDConfig.steps must be >= 0.")
+        steps = _coerce_non_negative_int(self.steps, field_name="MDConfig.steps")
         object.__setattr__(self, "steps", steps)
 
     @property

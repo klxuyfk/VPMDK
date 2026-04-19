@@ -101,12 +101,27 @@ def _coerce_optional_float(value: Any, *, key: str) -> float | None:
     return _coerce_float(value, key=key)
 
 
+def _coerce_positive_int(value: Any, *, key: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"Invalid {key} value: {value!r}")
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"Invalid {key} value: {value!r}") from None
+    if not numeric.is_integer() or numeric <= 0:
+        raise ValueError(f"Invalid {key} value: {value!r}")
+    return int(numeric)
+
+
 def _coerce_grid_shape(grid_shape: Any) -> tuple[int, int, int]:
     try:
-        values = tuple(int(v) for v in grid_shape)
+        values = tuple(
+            _coerce_positive_int(value, key="grid_shape")
+            for value in grid_shape
+        )
     except Exception:
         raise ValueError(f"Invalid grid shape: {grid_shape!r}") from None
-    if len(values) != 3 or any(v <= 0 for v in values):
+    if len(values) != 3:
         raise ValueError(f"Invalid grid shape: {grid_shape!r}")
     return values
 
@@ -182,7 +197,10 @@ def determine_vasp_fft_grid(reference, incar: Mapping[str, Any]) -> tuple[int, i
         for tag in ("NGXF", "NGYF", "NGZF")
     ]
     if all(value is not None for value in explicit_fine):
-        return tuple(int(value) for value in explicit_fine)  # type: ignore[return-value]
+        return tuple(
+            _coerce_positive_int(value, key=tag)
+            for tag, value in zip(("NGXF", "NGYF", "NGZF"), explicit_fine, strict=False)
+        )  # type: ignore[return-value]
 
     explicit_coarse = [
         _coerce_optional_float(_coerce_mapping_value(incar, tag), key=tag)
@@ -196,13 +214,19 @@ def determine_vasp_fft_grid(reference, incar: Mapping[str, Any]) -> tuple[int, i
                     "Unable to determine CHGCAR grid from INCAR without ENCUT or explicit "
                     "NGX/NGY/NGZ or NGXF/NGYF/NGZF."
                 )
-            coarse_shape = tuple(int(value) for value in explicit_coarse)
+            coarse_shape = tuple(
+                _coerce_positive_int(value, key=tag)
+                for tag, value in zip(("NGX", "NGY", "NGZ"), explicit_coarse, strict=False)
+            )
         else:
             prec = _normalize_prec(_coerce_mapping_value(incar, "PREC"))
             coarse_shape_list = list(_coarse_fft_shape_from_cell(cell, encut=encut, prec=prec))
             for index, explicit in enumerate(explicit_coarse):
                 if explicit is not None:
-                    coarse_shape_list[index] = int(explicit)
+                    coarse_shape_list[index] = _coerce_positive_int(
+                        explicit,
+                        key=("NGX", "NGY", "NGZ")[index],
+                    )
             coarse_shape = tuple(coarse_shape_list)
     else:
         encut = _coerce_optional_float(_coerce_mapping_value(incar, "ENCUT"), key="ENCUT")
@@ -219,7 +243,10 @@ def determine_vasp_fft_grid(reference, incar: Mapping[str, Any]) -> tuple[int, i
     fine_shape = [int(round(value * fine_multiplier)) for value in coarse_shape]
     for index, explicit in enumerate(explicit_fine):
         if explicit is not None:
-            fine_shape[index] = int(explicit)
+            fine_shape[index] = _coerce_positive_int(
+                explicit,
+                key=("NGXF", "NGYF", "NGZF")[index],
+            )
     return int(fine_shape[0]), int(fine_shape[1]), int(fine_shape[2])
 
 

@@ -167,10 +167,12 @@ def test_relax_config_preserves_explicit_isif_when_relax_cell_enabled():
     ("config_cls", "kwargs", "message"),
     [
         (vpmdk.RelaxConfig, {"steps": -1}, "RelaxConfig.steps"),
+        (vpmdk.RelaxConfig, {"steps": 0.5}, "RelaxConfig.steps"),
         (vpmdk.MDConfig, {"steps": -1}, "MDConfig.steps"),
+        (vpmdk.MDConfig, {"steps": 1.9}, "MDConfig.steps"),
     ],
 )
-def test_config_objects_reject_negative_steps(config_cls, kwargs, message):
+def test_config_objects_reject_invalid_step_counts(config_cls, kwargs, message):
     with pytest.raises(ValueError, match=message):
         config_cls(**kwargs)
 

@@ -104,6 +104,41 @@ def test_determine_vasp_fft_grid_preserves_partial_explicit_coarse_override():
     assert grid_shape == (160, 108, 120)
 
 
+@pytest.mark.parametrize(
+    ("grid_shape", "message"),
+    [
+        ((63.9, 64, 64), "Invalid grid shape"),
+        ((64, 0.5, 64), "Invalid grid shape"),
+    ],
+)
+def test_coerce_grid_shape_rejects_non_integral_values(grid_shape, message):
+    with pytest.raises(ValueError, match=message):
+        charge_density_module._coerce_grid_shape(grid_shape)
+
+
+@pytest.mark.parametrize(
+    "incar",
+    [
+        {"NGXF": "63.9", "NGYF": "64", "NGZF": "64"},
+        {"ENCUT": "400", "PREC": "N", "NGX": "63.9"},
+    ],
+)
+def test_determine_vasp_fft_grid_rejects_non_integral_explicit_values(incar):
+    atoms = Atoms(
+        "H2",
+        positions=[[0.0, 0.0, 0.0], [0.0, 0.75, 0.0]],
+        cell=[
+            [10.5475997925, 0.0, 0.0],
+            [-5.2737998962, 9.1344893692, 0.0],
+            [0.0, 0.0, 8.4589996338],
+        ],
+        pbc=True,
+    )
+
+    with pytest.raises(ValueError):
+        vpmdk.determine_vasp_fft_grid(atoms, incar)
+
+
 def test_next_even_smooth_number_never_rounds_down():
     result = charge_density_module._next_even_smooth_number(10.1)
 
