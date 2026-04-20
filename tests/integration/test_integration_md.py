@@ -179,6 +179,7 @@ def test_md_equflash_optional(tmp_path: Path, data_dir: Path) -> None:
     _assert_outputs(tmp_path)
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("algorithm", ["legacy", "fast"])
 def test_chgnet_graph_converter_algorithms_available(
     data_dir: Path, algorithm: str
