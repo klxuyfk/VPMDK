@@ -1,12 +1,59 @@
 # VPMDK
 
-VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is a lightweight engine that reads and writes VASP-style inputs and outputs while running molecular dynamics, relaxations, and single-point calculations with ASE-compatible machine-learning interatomic potentials.
+VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is an ASE-oriented wrapper library for machine-learning interatomic potentials, with a VASP-compatible CLI layered on top.
 
-It keeps familiar VASP artifacts such as `POSCAR`, `INCAR`, `OUTCAR`, `OSZICAR`, and `vasprun.xml`, while the actual calculator is an ML potential.
+The core value is backend normalization: VPMDK provides one stable Python API for building calculators and running single-point, relaxation, and MD workflows across multiple ASE-compatible backends. It also keeps familiar VASP artifacts such as `POSCAR`, `INCAR`, `OUTCAR`, `OSZICAR`, and `vasprun.xml` when you use the compatibility CLI.
 
 Supported calculators currently include **CHGNet**, **SevenNet**, **FlashTP** (via SevenNet), **EquFlash** (with a local checkpoint), **MatterSim**, **MACE**, **Matlantis**, **Eqnorm**, **MatRIS**, **AlphaNet**, **HIENet**, **Nequix**, **NequIP**, **Allegro**, **ORB**, **UPET**, **TACE**, **MatGL** (via M3GNet), **FAIRChem**, **GRACE**, and **DeePMD-kit**. Availability depends on which Python packages are installed.
 
+Charge-density prediction is exposed separately from force-field calculators. `vpmdk` can use **ChargE3Net**, **DeepDFT**, or **DeepCDP** to write a VASP-like `CHGCAR`.
+
 *Not affiliated with, endorsed by, or a replacement for VASP; “VASP” is a trademark of its respective owner. VPMDK only mimics VASP I/O conventions for compatibility.*
+
+## Library API
+
+The stable public API now centers on Python usage:
+
+```python
+from ase.io import read
+
+import vpmdk
+
+atoms = read("POSCAR")
+
+sp = vpmdk.single_point(atoms, mlp="CHGNET", device="cpu")
+calc = vpmdk.get_calculator(mlp="MACE", model="medium", device="cuda")
+relaxed = vpmdk.relax(atoms, mlp="CHGNET", fmax=0.02, relax_cell=True)
+trajectory = vpmdk.md(
+    atoms,
+    mlp="MACE",
+    temperature=300,
+    steps=100,
+    thermostat="langevin",
+)
+```
+
+Useful public helpers include:
+
+- `vpmdk.get_calculator(...)`
+- `vpmdk.single_point(...)`
+- `vpmdk.relax(...)`
+- `vpmdk.md(...)`
+- `vpmdk.predict_charge_density(...)`
+- `vpmdk.charge_density(...)`
+- `vpmdk.determine_vasp_fft_grid(...)`
+- `vpmdk.write_chgcar(...)`
+- `vpmdk.list_backends()`
+- `vpmdk.get_backend_capabilities(...)`
+
+These APIs do not write `OUTCAR`/`OSZICAR`/`vasprun.xml` by default. Those filesystem side effects are reserved for the VASP-compatible CLI and its internal compatibility observers.
+
+For the public execution API, `steps=0` is allowed and behaves like a single-point evaluation of the initial structure. Negative `steps` values are rejected.
+
+More detail:
+
+- API guide: [docs/api.md](/home/nei/temp/vpmdk_private/docs/api.md)
+- Runnable API examples: [examples/api_chgnet/README.md](/home/nei/temp/vpmdk_private/examples/api_chgnet/README.md)
 
 ## Quick Start
 
@@ -75,6 +122,71 @@ Typical outputs are:
 - `OSZICAR`
 - `vasprun.xml`
 - `XDATCAR` for MD runs
+- `CHGCAR` when `WRITE_CHGCAR=1` is set in `BCAR`
+
+## CHGCAR Output
+
+`vpmdk` can optionally predict a charge-density grid from the final atomic structure and write `CHGCAR`.
+
+Minimal `BCAR`:
+
+```text
+MLP=CHGNET
+DEVICE=cpu
+WRITE_CHGCAR=1
+```
+
+The `CHGCAR` grid is derived from `INCAR` the same way VASP users expect:
+
+- explicit `NGXF/NGYF/NGZF` win
+- otherwise explicit `NGX/NGY/NGZ` are promoted to the fine grid using `PREC`
+- otherwise `PREC` and `ENCUT` determine the grid
+
+Charge-density backends run in a separate Python environment or source checkout. For ChargE3Net, the simplest setup is via environment variables:
+
+```bash
+export VPMDK_CHARGE_SOURCE_DIR=/path/to/charge3net
+export VPMDK_CHARGE_PYTHON=/path/to/charge3net-env/bin/python
+export VPMDK_CHARGE_MODEL=/path/to/charge3net/models/charge3net_mp.pt
+```
+
+You can also place the same values in `BCAR` with `CHARGE_SOURCE_DIR=...`, `CHARGE_PYTHON=...`, and `CHARGE_MODEL=...`.
+
+To switch the CHGCAR backend inside `BCAR`, use `CHARGE_MLP=` (or the legacy alias `CHARGE_BACKEND=`):
+
+```text
+CHARGE_MLP=CHARGE3NET
+```
+
+For DeepDFT, set `CHARGE_MLP=DEEPDFT` and point `CHARGE_MODEL` at a DeepDFT model directory containing `arguments.json` and `best_model.pth`. `CHARGE_SOURCE_DIR` should point to a DeepDFT checkout that provides `densitymodel.py` unless the same modules are already importable in `CHARGE_PYTHON`.
+
+For DeepCDP, set `CHARGE_MLP=DEEPCDP` and point `CHARGE_MODEL` at a `.pt` checkpoint. DeepCDP also needs SOAP metadata, either in a JSON file next to the checkpoint (`deepcdp_config.json`, `metadata.json`, or `config.json`) or via BCAR tags such as:
+
+```text
+CHARGE_DEEPCDP_SPECIES=O,H
+CHARGE_DEEPCDP_RCUT=5.0
+CHARGE_DEEPCDP_NMAX=4
+CHARGE_DEEPCDP_LMAX=4
+CHARGE_DEEPCDP_SIGMA=0.5
+CHARGE_DEEPCDP_ACTIVATION=relu
+```
+
+GPU inference uses the same switching logic. Set `CHARGE_DEVICE=cuda` (or `cuda:0`) and make sure `CHARGE_PYTHON` points to an environment with a CUDA-enabled `torch` build for the selected backend:
+
+```text
+WRITE_CHGCAR=1
+CHARGE_MLP=DEEPCDP
+CHARGE_DEVICE=cuda
+CHARGE_PYTHON=/path/to/cuda-env/bin/python
+```
+
+Notes:
+
+- the current implementation writes the volumetric charge-density block in VASP-like `CHGCAR` format
+- PAW augmentation occupancies are not predicted by the ML model, so this file is suitable for visualization and post-processing, not as a full-fidelity DFT restart file
+- the CLI writes `CHGCAR` for the final structure after single-point, relaxation, or MD execution
+- `CHARGE_DEVICE` is independent from the force-field `DEVICE` setting, so the calculator and charge-density backend can use different devices or environments
+- a runnable example is available under [examples/chgcar_charge3net](/home/nei/temp/vpmdk_private/examples/chgcar_charge3net/README.md)
 
 ## Input Overview
 
@@ -115,6 +227,13 @@ These are the tags most users need to understand immediately:
 | `DEVICE` | Device hint | `cpu`, `cuda`, `cuda:0` |
 | `MATRIS_TASK` | MatRIS task | `e`, `ef`, `efs`, `efsm` |
 | `GRAPH_CONVERTER` / `GRAPH_CONVERTER_ALGORITHM` | CHGNet / MatRIS graph converter | `fast`, `legacy` |
+| `WRITE_CHGCAR` | Predict and write `CHGCAR` after the run | `0`, `1` |
+| `CHARGE_MLP` / `CHARGE_BACKEND` | Charge-density backend | `CHARGE3NET`, `DEEPDFT`, `DEEPCDP` |
+| `CHARGE_MODEL` | Charge-density checkpoint path or model directory | `/path/to/charge3net_mp.pt`, `/path/to/deepdft_model_dir`, `/path/to/deepcdp.pt` |
+| `CHARGE_DEVICE` | Device used for charge-density inference | `cpu`, `cuda`, `cuda:0` |
+| `CHARGE_SOURCE_DIR` | Local charge-backend source checkout | `/path/to/charge3net` |
+| `CHARGE_PYTHON` | Python executable for charge-density backend | `/path/to/env/bin/python` |
+| `CHARGE_MAX_PROBES_PER_BATCH` | Slice size for charge-density inference | `2500`, `10000`, ... |
 | `WRITE_PSEUDO_SCF` | Emit pseudo-SCF compatibility blocks | `0`, `1` |
 | `WRITE_LAMMPS_TRAJ` | Write `lammps.lammpstrj` during MD | `0`, `1` |
 | `LAMMPS_TRAJ_INTERVAL` | Trajectory write interval | `1`, `10`, ... |

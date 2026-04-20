@@ -356,6 +356,14 @@ from .backend_common import (
     _parse_optional_bool_tag,
     _resolve_device,
 )
+from .api import (
+    build_calculator,
+    get_backend_capabilities,
+    list_backends,
+    md,
+    relax,
+    single_point,
+)
 from .backends.alphanet import (
     _build_alphanet_calculator,
     _ensure_alphanet_named_model_files,
@@ -429,6 +437,15 @@ from .backends.sevennet_family import (
     _build_sevennet_family_calculator,
     _is_sevennet_flash_available,
 )
+from .charge_density import (
+    _CHARGE_ENV_BASE_DIR_VAR,
+    _CHGCAR_GRID_INCAR_TAGS,
+    _charge_density_options_from_bcar,
+    charge_density,
+    determine_vasp_fft_grid,
+    predict_charge_density,
+    write_chgcar,
+)
 from .io.inputs import (
     _apply_initial_magnetization,
     _expand_magmom_to_atoms,
@@ -488,6 +505,33 @@ from .io.vasp_compat import (
     _voigt_to_full_stress,
     _write_vasprun_xml,
 )
+from .models import (
+    BackendCapabilities,
+    BackendConfig,
+    BackendSpec,
+    CalculationResult,
+    ChargeDensityResult,
+    MDConfig,
+    MDResult,
+    RelaxConfig,
+    RelaxResult,
+    RunContext,
+    RunStep,
+    SinglePointConfig,
+    SinglePointResult,
+    VaspCompatConfig,
+    coerce_backend_config,
+    normalize_thermostat_name,
+    run_steps_to_energy_rows,
+    thermostat_to_mdalgo,
+)
+from .observers import (
+    CompositeObserver,
+    PrintProgressObserver,
+    RunObserver,
+    VaspCompatObserver,
+    coerce_observer,
+)
 from .runtime.common import _extract_numeric_attribute, _resolve_calculator, _working_directory
 from .runtime.md import _estimate_tdamp, _rescale_velocities, _select_md_dynamics, run_md
 from .runtime.neb import (
@@ -503,6 +547,7 @@ from .runtime.registry import (
     _CALCULATOR_BUILDERS,
     _SIMPLE_CALCULATORS,
     _attach_fallback_calculator,
+    _build_calculator_from_tags,
     _build_calculator_from_init_factory,
     get_calculator,
 )
@@ -526,6 +571,7 @@ from .settings.incar import (
     _normalize_isif,
     _parse_neb_image_count,
     _parse_optional_float,
+    _should_write_chgcar,
     _should_write_energy_csv,
     _should_write_lammps_trajectory,
     _should_write_oszicar_pseudo_scf,

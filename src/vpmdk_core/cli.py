@@ -17,6 +17,7 @@ def main():
     args = parser.parse_args()
     workdir = args.dir
     workdir_abs = os.path.abspath(workdir)
+    caller_cwd = os.getcwd()
 
     poscar_path = os.path.join(workdir, "POSCAR")
     incar_path = os.path.join(workdir, "INCAR")
@@ -35,8 +36,13 @@ def main():
     write_energy_csv = root._should_write_energy_csv(bcar)
     write_lammps_traj = root._should_write_lammps_trajectory(bcar)
     write_pseudo_scf = root._should_write_pseudo_scf(bcar)
+    write_chgcar = root._should_write_chgcar(bcar)
     pseudo_scf_settings = root._pseudo_scf_settings_from_incar(incar, enabled=write_pseudo_scf)
-    root._warn_for_unsupported_incar_tags(incar, pseudo_scf_enabled=write_pseudo_scf)
+    root._warn_for_unsupported_incar_tags(
+        incar,
+        pseudo_scf_enabled=write_pseudo_scf,
+        chgcar_enabled=write_chgcar,
+    )
     settings = root._load_incar_settings(incar)
     neb_mode = root._is_neb_like_incar(incar)
     lammps_traj_interval = root._get_lammps_trajectory_interval(bcar) if write_lammps_traj else 1
@@ -47,81 +53,103 @@ def main():
         kpoints_path=os.path.abspath(kpoints_path),
     )
 
-    with root._active_pseudo_scf_settings(pseudo_scf_settings), root._active_vasp_input_paths(input_paths):
-        if neb_mode:
-            neb_image_dirs = root._discover_neb_image_directories(workdir)
-            if neb_image_dirs:
-                root.run_neb_images(
-                    workdir=workdir,
-                    incar=incar,
-                    settings=settings,
-                    bcar=bcar,
-                    potcar_path=potcar_for_structure,
-                    write_energy_csv=write_energy_csv,
-                    write_lammps_traj=write_lammps_traj,
-                    lammps_traj_interval=lammps_traj_interval,
-                    oszicar_pseudo_scf=write_pseudo_scf,
-                )
-                print("Calculation completed.")
-                return
-
-        if not os.path.exists(poscar_path):
+    previous_charge_base_dir = os.environ.get(root._CHARGE_ENV_BASE_DIR_VAR)
+    os.environ[root._CHARGE_ENV_BASE_DIR_VAR] = caller_cwd
+    try:
+        with root._active_pseudo_scf_settings(pseudo_scf_settings), root._active_vasp_input_paths(input_paths):
             if neb_mode:
-                print(
-                    "POSCAR not found. In NEB mode provide either a top-level POSCAR or "
-                    "numbered image directories (00, 01, ...)."
-                )
+                neb_image_dirs = root._discover_neb_image_directories(workdir)
+                if neb_image_dirs:
+                    root.run_neb_images(
+                        workdir=workdir,
+                        incar=incar,
+                        settings=settings,
+                        bcar=bcar,
+                        potcar_path=potcar_for_structure,
+                        write_energy_csv=write_energy_csv,
+                        write_lammps_traj=write_lammps_traj,
+                        lammps_traj_interval=lammps_traj_interval,
+                        oszicar_pseudo_scf=write_pseudo_scf,
+                    )
+                    print("Calculation completed.")
+                    return
+
+            if not os.path.exists(poscar_path):
+                if neb_mode:
+                    print(
+                        "POSCAR not found. In NEB mode provide either a top-level POSCAR or "
+                        "numbered image directories (00, 01, ...)."
+                    )
+                else:
+                    print("POSCAR not found.")
+                sys.exit(1)
+
+            structure = root.read_structure(poscar_path, potcar_for_structure)
+            atoms = root.AseAtomsAdaptor.get_atoms(structure)
+            atoms.wrap()
+            root._apply_initial_magnetization(atoms, incar)
+            with root._working_directory(workdir_abs):
+                calculator = root.get_calculator(bcar, structure=structure)
+
+            if settings.nsw <= 0 or settings.ibrion < 0:
+                with root._working_directory(workdir_abs):
+                    root.run_single_point(
+                        atoms,
+                        calculator,
+                        isif=settings.stress_isif,
+                        oszicar_pseudo_scf=write_pseudo_scf,
+                    )
+            elif settings.ibrion == 0:
+                with root._working_directory(workdir_abs):
+                    root.run_md(
+                        atoms,
+                        calculator,
+                        settings.nsw,
+                        settings.tebeg,
+                        settings.potim,
+                        mdalgo=settings.mdalgo,
+                        teend=settings.teend,
+                        smass=settings.smass,
+                        thermostat_params=settings.thermostat_params,
+                        isif=settings.stress_isif,
+                        oszicar_pseudo_scf=write_pseudo_scf,
+                        write_lammps_traj=write_lammps_traj,
+                        lammps_traj_interval=lammps_traj_interval,
+                    )
             else:
-                print("POSCAR not found.")
-            sys.exit(1)
-
-        structure = root.read_structure(poscar_path, potcar_for_structure)
-        atoms = root.AseAtomsAdaptor.get_atoms(structure)
-        atoms.wrap()
-        root._apply_initial_magnetization(atoms, incar)
-        with root._working_directory(workdir_abs):
-            calculator = root.get_calculator(bcar, structure=structure)
-
-        if settings.nsw <= 0 or settings.ibrion < 0:
-            with root._working_directory(workdir_abs):
-                root.run_single_point(
-                    atoms,
-                    calculator,
-                    isif=settings.stress_isif,
-                    oszicar_pseudo_scf=write_pseudo_scf,
-                )
-        elif settings.ibrion == 0:
-            with root._working_directory(workdir_abs):
-                root.run_md(
-                    atoms,
-                    calculator,
-                    settings.nsw,
-                    settings.tebeg,
-                    settings.potim,
-                    mdalgo=settings.mdalgo,
-                    teend=settings.teend,
-                    smass=settings.smass,
-                    thermostat_params=settings.thermostat_params,
-                    isif=settings.stress_isif,
-                    oszicar_pseudo_scf=write_pseudo_scf,
-                    write_lammps_traj=write_lammps_traj,
-                    lammps_traj_interval=lammps_traj_interval,
-                )
+                with root._working_directory(workdir_abs):
+                    root.run_relaxation(
+                        atoms,
+                        calculator,
+                        settings.nsw,
+                        settings.force_limit,
+                        write_energy_csv,
+                        isif=settings.isif,
+                        pstress=settings.pstress,
+                        energy_tolerance=settings.energy_tolerance,
+                        ibrion=settings.ibrion,
+                        stress_isif=settings.stress_isif,
+                        neb_mode=neb_mode,
+                        oszicar_pseudo_scf=write_pseudo_scf,
+                    )
+            if write_chgcar:
+                with root._working_directory(workdir_abs):
+                    charge_result = root.predict_charge_density(
+                        atoms,
+                        incar=incar,
+                        reference=atoms,
+                        **root._charge_density_options_from_bcar(bcar),
+                    )
+                    root.write_chgcar(
+                        "CHGCAR",
+                        atoms,
+                        charge_result.density,
+                        spin_density=charge_result.spin_density,
+                    )
+    finally:
+        if previous_charge_base_dir is None:
+            os.environ.pop(root._CHARGE_ENV_BASE_DIR_VAR, None)
         else:
-            with root._working_directory(workdir_abs):
-                root.run_relaxation(
-                    atoms,
-                    calculator,
-                    settings.nsw,
-                    settings.force_limit,
-                    write_energy_csv,
-                    isif=settings.isif,
-                    pstress=settings.pstress,
-                    energy_tolerance=settings.energy_tolerance,
-                    ibrion=settings.ibrion,
-                    stress_isif=settings.stress_isif,
-                    neb_mode=neb_mode,
-                    oszicar_pseudo_scf=write_pseudo_scf,
-                )
+            os.environ[root._CHARGE_ENV_BASE_DIR_VAR] = previous_charge_base_dir
 
     print("Calculation completed.")

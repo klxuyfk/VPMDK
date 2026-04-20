@@ -35,5 +35,8 @@ vpmdk = "vpmdk:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-packages = ["vpmdk_core"]
 py-modules = ["vpmdk"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["vpmdk_core*"]

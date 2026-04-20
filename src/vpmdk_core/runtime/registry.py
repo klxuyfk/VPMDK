@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import inspect
 import sys
-from typing import Dict
+from collections.abc import Mapping
+from typing import Any, Dict
+
+from ..models import BackendConfig, coerce_backend_config
 
 
 def _root():
@@ -99,7 +102,7 @@ def _attach_fallback_calculator(calculator, bcar_tags: Dict[str, str]):
     return calculator
 
 
-def get_calculator(bcar_tags: Dict[str, str], *, structure=None):
+def _build_calculator_from_tags(bcar_tags: Dict[str, str], *, structure=None):
     """Return ASE calculator based on BCAR tags."""
 
     root = _root()
@@ -137,3 +140,43 @@ def get_calculator(bcar_tags: Dict[str, str], *, structure=None):
     if accepts_structure:
         return builder(bcar_tags, structure=structure)
     return builder(bcar_tags)
+
+
+def build_calculator(config: BackendConfig, *, structure=None):
+    """Return ASE calculator from the filesystem-independent backend config."""
+
+    return _build_calculator_from_tags(config.to_legacy_tags(), structure=structure)
+
+
+def get_calculator(
+    config_or_tags: BackendConfig | Mapping[str, Any] | None = None,
+    *,
+    structure=None,
+    mlp: str | None = None,
+    model: str | None = None,
+    device: str | None = None,
+    options: Mapping[str, Any] | None = None,
+    **backend_kwargs: Any,
+):
+    """Return ASE calculator from BCAR tags or the new public config style."""
+
+    if (
+        isinstance(config_or_tags, Mapping)
+        and not isinstance(config_or_tags, BackendConfig)
+        and mlp is None
+        and model is None
+        and device is None
+        and options is None
+        and not backend_kwargs
+    ):
+        return _build_calculator_from_tags(dict(config_or_tags), structure=structure)
+
+    config = coerce_backend_config(
+        config_or_tags,
+        mlp=mlp,
+        model=model,
+        device=device,
+        options=options,
+        **backend_kwargs,
+    )
+    return build_calculator(config, structure=structure)

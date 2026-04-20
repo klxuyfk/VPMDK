@@ -39,7 +39,47 @@ def _load_chgnet_model(
                 )
         return root.CHGNetModel.from_file(model_path)
 
-    model = root.CHGNetModel.load(verbose=False, use_device=device)
+    named_model = None
+    if model_path and not root._looks_like_filesystem_path(
+        model_path,
+        suffixes=(".pt", ".pth", ".ckpt", ".tar"),
+    ):
+        named_model = model_path
+
+    load_attempts: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    if named_model is not None:
+        load_attempts.extend(
+            [
+                ((), {"model_name": named_model, "use_device": device, "verbose": False}),
+                ((), {"model_name": named_model, "use_device": device}),
+                ((), {"model_name": named_model, "verbose": False}),
+                ((named_model,), {"use_device": device, "verbose": False}),
+                ((named_model,), {"use_device": device}),
+                ((named_model,), {"verbose": False}),
+                ((named_model,), {}),
+            ]
+        )
+    else:
+        load_attempts.extend(
+            [
+                ((), {"verbose": False, "use_device": device}),
+                ((), {"use_device": device}),
+                ((), {"verbose": False}),
+                ((), {}),
+            ]
+        )
+
+    model = None
+    for args, kwargs in load_attempts:
+        filtered_kwargs = {key: value for key, value in kwargs.items() if value is not None}
+        try:
+            model = root.CHGNetModel.load(*args, **filtered_kwargs)
+            break
+        except TypeError:
+            continue
+    if model is None:
+        raise RuntimeError("CHGNet model loader does not expose a compatible load() signature.")
+
     if graph_converter_algorithm is not None:
         model = root._override_model_graph_converter_algorithm(
             model,
