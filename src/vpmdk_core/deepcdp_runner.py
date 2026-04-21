@@ -90,18 +90,35 @@ def _resolve_weighting(args: argparse.Namespace, metadata: dict[str, Any]) -> di
     return weighting or None
 
 
-def _resolve_species(args: argparse.Namespace, metadata: dict[str, Any], atoms) -> list[str]:
+def _coerce_species_entry(value: Any) -> str | int:
+    if isinstance(value, bool):
+        raise ValueError("DeepCDP SOAP species entries must be chemical symbols or atomic numbers.")
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        raise ValueError(f"Invalid DeepCDP SOAP species entry: {value!r}")
+
+    token = str(value).strip()
+    if not token:
+        raise ValueError("DeepCDP SOAP species entries must not be empty.")
+    if token.isdecimal():
+        return int(token)
+    return token
+
+
+def _resolve_species(args: argparse.Namespace, metadata: dict[str, Any], atoms) -> list[str | int]:
     raw = _override(args.species, metadata.get("species"))
     if raw is None:
-        unique_species: list[str] = []
-        for symbol in atoms.get_chemical_symbols():
-            if symbol not in unique_species:
-                unique_species.append(symbol)
-        return unique_species
+        raise ValueError(
+            "DeepCDP species must be provided via metadata JSON or --species "
+            "(CHARGE_DEEPCDP_SPECIES)."
+        )
     if isinstance(raw, str):
-        result = [token.strip() for token in raw.split(",") if token.strip()]
+        result = [_coerce_species_entry(token) for token in raw.split(",") if token.strip()]
     else:
-        result = [str(token).strip() for token in raw if str(token).strip()]
+        result = [_coerce_species_entry(token) for token in raw]
     if not result:
         raise ValueError("DeepCDP SOAP species list must not be empty.")
     return result
@@ -201,12 +218,15 @@ def _extract_state_dict(payload: Any) -> dict[str, Any]:
 
 
 def _normalize_state_dict_keys(state_dict: dict[str, Any]) -> dict[str, Any]:
-    if any(key.startswith("layers.") for key in state_dict):
-        return {
-            key.removeprefix("layers."): value
-            for key, value in state_dict.items()
-        }
-    return state_dict
+    normalized: dict[str, Any] = {}
+    for key, value in state_dict.items():
+        normalized_key = key
+        if normalized_key.startswith("module."):
+            normalized_key = normalized_key.removeprefix("module.")
+        if normalized_key.startswith("layers."):
+            normalized_key = normalized_key.removeprefix("layers.")
+        normalized[normalized_key] = value
+    return normalized
 
 
 def _build_network(state_dict: dict[str, Any], activation: str, torch_module):

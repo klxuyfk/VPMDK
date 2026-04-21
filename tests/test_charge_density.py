@@ -278,6 +278,36 @@ def test_deepcdp_runner_normalizes_layers_prefix_in_checkpoint_keys():
     assert set(normalized) == {"0.weight", "0.bias"}
 
 
+def test_deepcdp_runner_normalizes_dataparallel_layers_prefix_in_checkpoint_keys():
+    normalized = deepcdp_runner_module._normalize_state_dict_keys(
+        {
+            "module.layers.0.weight": np.zeros((3, 2), dtype=np.float32),
+            "module.layers.0.bias": np.zeros(3, dtype=np.float32),
+        }
+    )
+
+    assert set(normalized) == {"0.weight", "0.bias"}
+
+
+def test_deepcdp_runner_requires_explicit_species():
+    args = SimpleNamespace(species=None)
+
+    with pytest.raises(ValueError, match="DeepCDP species must be provided"):
+        deepcdp_runner_module._resolve_species(args, {}, None)
+
+
+def test_deepcdp_runner_preserves_numeric_species_from_metadata():
+    args = SimpleNamespace(species=None)
+
+    assert deepcdp_runner_module._resolve_species(args, {"species": [1, 8]}, None) == [1, 8]
+
+
+def test_deepcdp_runner_parses_numeric_species_from_cli_string():
+    args = SimpleNamespace(species="1,8")
+
+    assert deepcdp_runner_module._resolve_species(args, {}, None) == [1, 8]
+
+
 def test_deepcdp_runner_requires_explicit_activation():
     args = SimpleNamespace(activation=None)
 
