@@ -107,10 +107,13 @@ def _resolve_species(args: argparse.Namespace, metadata: dict[str, Any], atoms) 
     return result
 
 
-def _resolve_activation(args: argparse.Namespace, metadata: dict[str, Any], model_path: Path) -> str:
+def _resolve_activation(args: argparse.Namespace, metadata: dict[str, Any]) -> str:
     raw = _override(args.activation, metadata.get("activation"))
     if raw is None:
-        raw = "tanh" if "tanh" in model_path.name.lower() else "relu"
+        raise ValueError(
+            "DeepCDP activation must be provided via metadata JSON or --activation "
+            "(CHARGE_DEEPCDP_ACTIVATION)."
+        )
     normalized = str(raw).strip().lower().replace("-", "_")
     aliases = {
         "relu": "relu",
@@ -140,7 +143,7 @@ def _resolve_config(args: argparse.Namespace, metadata: dict[str, Any], atoms) -
         "lmax": _override(args.soap_lmax, metadata.get("lmax")),
         "sigma": _override(args.soap_sigma, metadata.get("sigma", 0.5)),
         "periodic": periodic,
-        "activation": _resolve_activation(args, metadata, Path(args.model_path)),
+        "activation": _resolve_activation(args, metadata),
         "weighting": _resolve_weighting(args, metadata),
     }
     missing = [key for key in ("rcut", "nmax", "lmax") if config[key] is None]

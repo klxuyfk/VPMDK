@@ -190,10 +190,19 @@ def _charge_backend_env_vars(kind: str, backend: str | None) -> tuple[str, ...]:
     return _CHARGE_BACKEND_ENV_VARS.get(backend_name, {}).get(kind, ())
 
 
-def _candidate_charge_backends(backend: str | None) -> tuple[str, ...]:
-    if backend is None:
-        return ("CHARGE3NET", "DEEPDFT", "DEEPCDP")
-    return (_normalize_charge_backend_name(backend),)
+def _resolve_charge_env_var(
+    *,
+    generic_env_var: str,
+    kind: str,
+    backend: str | None,
+) -> str | None:
+    backend_name = None if backend is None else _normalize_charge_backend_name(backend)
+    if backend_name is not None:
+        for env_var in _charge_backend_env_vars(kind, backend_name):
+            value = os.environ.get(env_var)
+            if value:
+                return value
+    return os.environ.get(generic_env_var)
 
 
 def _normalize_prec(value: Any) -> str:
@@ -416,19 +425,12 @@ def _resolve_charge_python(
 ) -> str:
     if python_executable:
         return str(Path(python_executable).expanduser())
-
-    def _resolve_from_env(backend: str | None) -> str | None:
-        env_python = os.environ.get("VPMDK_CHARGE_PYTHON")
-        if env_python:
-            return _resolve_charge_env_path(env_python)
-        for candidate_backend in _candidate_charge_backends(backend):
-            for env_var in _charge_backend_env_vars("python", candidate_backend):
-                env_python = os.environ.get(env_var)
-                if env_python:
-                    return _resolve_charge_env_path(env_python)
-        return None
-
-    resolved = _resolve_from_env(backend)
+    env_python = _resolve_charge_env_var(
+        generic_env_var="VPMDK_CHARGE_PYTHON",
+        kind="python",
+        backend=backend,
+    )
+    resolved = _resolve_charge_env_path(env_python)
     if resolved is not None:
         return resolved
     return sys.executable
@@ -449,15 +451,12 @@ def _resolve_charge_env_path(path_value: str | None) -> str | None:
 def _resolve_charge_source_dir(source_dir: str | None, backend: str | None = None) -> str | None:
     if source_dir:
         return str(Path(source_dir).expanduser())
-    env_source_dir = os.environ.get("VPMDK_CHARGE_SOURCE_DIR")
-    if env_source_dir:
-        return _resolve_charge_env_path(env_source_dir)
-    for candidate_backend in _candidate_charge_backends(backend):
-        for env_var in _charge_backend_env_vars("source_dir", candidate_backend):
-            env_source_dir = os.environ.get(env_var)
-            if env_source_dir:
-                return _resolve_charge_env_path(env_source_dir)
-    return None
+    env_source_dir = _resolve_charge_env_var(
+        generic_env_var="VPMDK_CHARGE_SOURCE_DIR",
+        kind="source_dir",
+        backend=backend,
+    )
+    return _resolve_charge_env_path(env_source_dir)
 
 
 def _resolve_charge_model_path(
@@ -467,14 +466,13 @@ def _resolve_charge_model_path(
 ) -> str | None:
     if model_path:
         return str(Path(model_path).expanduser())
-    env_model = os.environ.get("VPMDK_CHARGE_MODEL")
+    env_model = _resolve_charge_env_var(
+        generic_env_var="VPMDK_CHARGE_MODEL",
+        kind="model",
+        backend=backend,
+    )
     if env_model:
         return _resolve_charge_env_path(env_model)
-    for candidate_backend in _candidate_charge_backends(backend):
-        for env_var in _charge_backend_env_vars("model", candidate_backend):
-            env_model = os.environ.get(env_var)
-            if env_model:
-                return _resolve_charge_env_path(env_model)
     if source_dir and _normalize_charge_backend_name(backend) == "CHARGE3NET":
         default_model = Path(source_dir) / "models" / "charge3net_mp.pt"
         if default_model.exists():

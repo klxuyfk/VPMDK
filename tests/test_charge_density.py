@@ -218,6 +218,33 @@ def test_explicit_charge_paths_remain_relative_to_current_context(monkeypatch: p
     )
 
 
+def test_backend_specific_charge_env_vars_override_generic_values(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    caller_dir = tmp_path / "caller"
+    caller_dir.mkdir()
+    monkeypatch.setenv(charge_density_module._CHARGE_ENV_BASE_DIR_VAR, str(caller_dir))
+    monkeypatch.setenv("VPMDK_CHARGE_PYTHON", "generic-env/bin/python")
+    monkeypatch.setenv("VPMDK_DEEPDFT_PYTHON", "deepdft-env/bin/python")
+    monkeypatch.setenv("VPMDK_CHARGE_SOURCE_DIR", "generic-src")
+    monkeypatch.setenv("VPMDK_DEEPDFT_SOURCE_DIR", "deepdft-src")
+    monkeypatch.setenv("VPMDK_CHARGE_MODEL", "generic-model")
+    monkeypatch.setenv("VPMDK_DEEPDFT_MODEL", "deepdft-model")
+
+    assert charge_density_module._resolve_charge_python(None, backend="DEEPDFT") == str(
+        (caller_dir / "deepdft-env" / "bin" / "python").resolve()
+    )
+    assert charge_density_module._resolve_charge_source_dir(None, backend="DEEPDFT") == str(
+        (caller_dir / "deepdft-src").resolve()
+    )
+    assert charge_density_module._resolve_charge_model_path(
+        None,
+        None,
+        backend="DEEPDFT",
+    ) == str((caller_dir / "deepdft-model").resolve())
+
+
 def test_charge3net_runner_adjusts_singleton_tail_slice():
     batch_start, batch_stop, keep_slice = charge3net_runner_module._adjust_singleton_probe_slice(
         2500,
@@ -249,6 +276,19 @@ def test_deepcdp_runner_normalizes_layers_prefix_in_checkpoint_keys():
     )
 
     assert set(normalized) == {"0.weight", "0.bias"}
+
+
+def test_deepcdp_runner_requires_explicit_activation():
+    args = SimpleNamespace(activation=None)
+
+    with pytest.raises(ValueError, match="DeepCDP activation must be provided"):
+        deepcdp_runner_module._resolve_activation(args, {})
+
+
+def test_deepcdp_runner_accepts_activation_from_metadata():
+    args = SimpleNamespace(activation=None)
+
+    assert deepcdp_runner_module._resolve_activation(args, {"activation": "silu"}) == "silu"
 
 
 def test_write_chgcar_roundtrips_density(tmp_path: Path, load_atoms):
