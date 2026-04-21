@@ -3,6 +3,7 @@
 This directory demonstrates the new optional `CHGCAR` flow in both CLI and API usage.
 
 It uses the final atomic structure from the run and predicts a charge-density grid with ChargE3Net.
+The same `WRITE_CHGCAR` flow also supports `CHARGE_MLP=DEEPDFT` and `CHARGE_MLP=DEEPCDP`; this example keeps the sample files focused on ChargE3Net because that backend has the simplest default metadata story.
 
 ## Files
 
@@ -31,6 +32,8 @@ export VPMDK_CHARGE_MODEL=/path/to/charge3net/models/charge3net_mp.pt
 
 If `VPMDK_CHARGE_MODEL` is not set, VPMDK looks for `models/charge3net_mp.pt` under `VPMDK_CHARGE_SOURCE_DIR`.
 
+To run the charge-density backend on GPU, either export `CHARGE_DEVICE=cuda` in `BCAR` or set `VPMDK_CHARGE_DEVICE=cuda` in your shell and make sure `VPMDK_CHARGE_PYTHON` points to a CUDA-capable environment.
+
 ## Run
 
 CLI:
@@ -51,3 +54,5 @@ python ./examples/chgcar_charge3net/predict_api.py
 - The API example writes `api_CHGCAR` in this directory.
 - This example pins `NGXF/NGYF/NGZF=24` so it finishes quickly. In real calculations you can omit them and let VPMDK derive the fine grid from `PREC`, `ENCUT`, and optional `NGX/NGY/NGZ`.
 - The generated `CHGCAR` is VASP-like for the volumetric density block, but does not include PAW augmentation occupancies reconstructed from DFT.
+- For DeepDFT, point `CHARGE_MODEL` at a directory with `arguments.json` and `best_model.pth`, and set `CHARGE_SOURCE_DIR` to a DeepDFT checkout if needed.
+- For DeepCDP, point `CHARGE_MODEL` at a `.pt` checkpoint and provide SOAP metadata either in JSON or through `CHARGE_DEEPCDP_*` tags.

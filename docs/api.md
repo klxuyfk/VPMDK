@@ -195,6 +195,7 @@ result = vpmdk.predict_charge_density(
     atoms,
     grid_shape=(64, 64, 64),
     backend="CHARGE3NET",
+    device="cpu",
     source_dir="/path/to/charge3net",
     python_executable="/path/to/charge3net-env/bin/python",
     model_path="/path/to/charge3net/models/charge3net_mp.pt",
@@ -221,6 +222,14 @@ result = vpmdk.predict_charge_density(
 )
 ```
 
+`backend` also accepts `DEEPDFT`. In that mode, `model_path` should point to a DeepDFT model directory containing `arguments.json` and `best_model.pth`.
+
+`backend="DEEPCDP"` is also supported. In that mode, `model_path` should point to a `.pt` checkpoint, and the SOAP settings should come either from a nearby JSON metadata file or explicit kwargs such as `charge_species`, `soap_rcut`, `soap_nmax`, and `soap_lmax`.
+
+The `device` argument is passed to the charge-density backend independently from the force-field calculator. Typical values are `cpu`, `cuda`, and `cuda:0`.
+
+If you use `device="cuda"`, make sure `python_executable` points to an environment where that backend can actually see the GPU. In practice this means a CUDA-enabled `torch` build for DeepDFT / DeepCDP, and the corresponding backend dependencies installed in the same interpreter.
+
 Returned object:
 
 - `result.atoms`: `Atoms` used for prediction
@@ -239,7 +248,8 @@ vpmdk.write_chgcar("CHGCAR", atoms, result.density, spin_density=result.spin_den
 Notes:
 
 - `vpmdk.charge_density(...)` is an alias of `vpmdk.predict_charge_density(...)`
-- the current ChargE3Net backend runs in a separate Python process, so `source_dir`, `python_executable`, and usually `model_path` must point to a working ChargE3Net environment
+- charge-density backends run in a separate Python process, so `python_executable` should point to a working backend environment
+- ChargE3Net and DeepDFT usually also need `source_dir` to point at a local checkout when the backend modules are not installed into that interpreter
 - the current writer produces the volumetric density block in `CHGCAR` format, but does not reconstruct PAW augmentation occupancies
 - a runnable end-to-end example is available in [examples/chgcar_charge3net](/home/nei/temp/vpmdk_private/examples/chgcar_charge3net/README.md)
 

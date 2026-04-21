@@ -8,7 +8,7 @@ CLI-oriented examples plus Python API examples. Some directories include `refere
 - `md_mace`: short MD run with MACE
 - `neb_nequip_vtst`: NEB-style run with NequIP + VTST `nebresults.pl`
 - `api_chgnet`: Python library examples using `single_point`, `relax`, and backend discovery
-- `chgcar_charge3net`: CLI and API examples for optional `CHGCAR` output with ChargE3Net
+- `chgcar_charge3net`: CLI and API examples for optional `CHGCAR` output. The sample files use ChargE3Net, but the same `WRITE_CHGCAR` / `CHARGE_MLP` flow also supports DeepDFT and DeepCDP.
 - `uspex_9_4_4_si`: USPEX 9.4.4 input deck showing `vpmdk` as a drop-in executable in a VASP-oriented structure-search workflow
 
 ## Run
@@ -32,7 +32,7 @@ python ./examples/chgcar_charge3net/predict_api.py
 - Set `MODEL=...` in each `BCAR` to your local checkpoint path before running.
 - `relax_chgnet/run.sh` and `md_mace/run.sh` intentionally run only `vpmdk`.
 - `api_chgnet` does not use `BCAR` or `INCAR`; it demonstrates the stable Python API directly.
-- `chgcar_charge3net` requires a working ChargE3Net checkout and Python environment. Set `VPMDK_CHARGE_SOURCE_DIR`, `VPMDK_CHARGE_PYTHON`, and optionally `VPMDK_CHARGE_MODEL`, or edit the example `BCAR`.
+- `chgcar_charge3net` requires a working charge-density backend environment. For the bundled example values that means ChargE3Net plus `VPMDK_CHARGE_SOURCE_DIR`, `VPMDK_CHARGE_PYTHON`, and optionally `VPMDK_CHARGE_MODEL`. To try DeepDFT or DeepCDP instead, change `CHARGE_MLP` and backend-specific model settings in `BCAR`.
 - `chgcar_charge3net/INCAR` uses an explicit small fine FFT grid so the example stays runnable; for production-style inputs you would usually let `PREC`/`ENCUT` decide the grid.
 - `neb_nequip_vtst/run.sh` optionally accepts `NEQUIP_SOURCE` env var when NequIP is not installed in the current Python environment.
 - VTST scripts are downloaded to a temporary directory and removed automatically.

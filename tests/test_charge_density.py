@@ -20,6 +20,13 @@ charge3net_runner_spec = importlib.util.spec_from_file_location(
 assert charge3net_runner_spec is not None and charge3net_runner_spec.loader is not None
 charge3net_runner_module = importlib.util.module_from_spec(charge3net_runner_spec)
 charge3net_runner_spec.loader.exec_module(charge3net_runner_module)
+deepcdp_runner_spec = importlib.util.spec_from_file_location(
+    "vpmdk_core_deepcdp_runner",
+    Path(__file__).resolve().parents[1] / "src" / "vpmdk_core" / "deepcdp_runner.py",
+)
+assert deepcdp_runner_spec is not None and deepcdp_runner_spec.loader is not None
+deepcdp_runner_module = importlib.util.module_from_spec(deepcdp_runner_spec)
+deepcdp_runner_spec.loader.exec_module(deepcdp_runner_module)
 
 
 class _FakeLoadedDensity:
@@ -211,6 +218,33 @@ def test_explicit_charge_paths_remain_relative_to_current_context(monkeypatch: p
     )
 
 
+def test_backend_specific_charge_env_vars_override_generic_values(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    caller_dir = tmp_path / "caller"
+    caller_dir.mkdir()
+    monkeypatch.setenv(charge_density_module._CHARGE_ENV_BASE_DIR_VAR, str(caller_dir))
+    monkeypatch.setenv("VPMDK_CHARGE_PYTHON", "generic-env/bin/python")
+    monkeypatch.setenv("VPMDK_DEEPDFT_PYTHON", "deepdft-env/bin/python")
+    monkeypatch.setenv("VPMDK_CHARGE_SOURCE_DIR", "generic-src")
+    monkeypatch.setenv("VPMDK_DEEPDFT_SOURCE_DIR", "deepdft-src")
+    monkeypatch.setenv("VPMDK_CHARGE_MODEL", "generic-model")
+    monkeypatch.setenv("VPMDK_DEEPDFT_MODEL", "deepdft-model")
+
+    assert charge_density_module._resolve_charge_python(None, backend="DEEPDFT") == str(
+        (caller_dir / "deepdft-env" / "bin" / "python").resolve()
+    )
+    assert charge_density_module._resolve_charge_source_dir(None, backend="DEEPDFT") == str(
+        (caller_dir / "deepdft-src").resolve()
+    )
+    assert charge_density_module._resolve_charge_model_path(
+        None,
+        None,
+        backend="DEEPDFT",
+    ) == str((caller_dir / "deepdft-model").resolve())
+
+
 def test_charge3net_runner_adjusts_singleton_tail_slice():
     batch_start, batch_stop, keep_slice = charge3net_runner_module._adjust_singleton_probe_slice(
         2500,
@@ -231,6 +265,60 @@ def test_charge3net_runner_preserves_only_probe_when_total_is_one():
 
     assert (batch_start, batch_stop) == (0, 1)
     assert keep_slice.indices(1) == (0, 1, 1)
+
+
+def test_deepcdp_runner_normalizes_layers_prefix_in_checkpoint_keys():
+    normalized = deepcdp_runner_module._normalize_state_dict_keys(
+        {
+            "layers.0.weight": np.zeros((3, 2), dtype=np.float32),
+            "layers.0.bias": np.zeros(3, dtype=np.float32),
+        }
+    )
+
+    assert set(normalized) == {"0.weight", "0.bias"}
+
+
+def test_deepcdp_runner_normalizes_dataparallel_layers_prefix_in_checkpoint_keys():
+    normalized = deepcdp_runner_module._normalize_state_dict_keys(
+        {
+            "module.layers.0.weight": np.zeros((3, 2), dtype=np.float32),
+            "module.layers.0.bias": np.zeros(3, dtype=np.float32),
+        }
+    )
+
+    assert set(normalized) == {"0.weight", "0.bias"}
+
+
+def test_deepcdp_runner_requires_explicit_species():
+    args = SimpleNamespace(species=None)
+
+    with pytest.raises(ValueError, match="DeepCDP species must be provided"):
+        deepcdp_runner_module._resolve_species(args, {}, None)
+
+
+def test_deepcdp_runner_preserves_numeric_species_from_metadata():
+    args = SimpleNamespace(species=None)
+
+    assert deepcdp_runner_module._resolve_species(args, {"species": [1, 8]}, None) == [1, 8]
+
+
+def test_deepcdp_runner_parses_numeric_species_from_cli_string():
+    args = SimpleNamespace(species="1,8")
+
+    assert deepcdp_runner_module._resolve_species(args, {}, None) == [1, 8]
+
+
+def test_deepcdp_runner_requires_explicit_activation():
+    args = SimpleNamespace(activation=None)
+
+    with pytest.raises(ValueError, match="DeepCDP activation must be provided"):
+        deepcdp_runner_module._resolve_activation(args, {})
+
+
+def test_deepcdp_runner_accepts_activation_from_metadata():
+    args = SimpleNamespace(activation=None)
+
+    assert deepcdp_runner_module._resolve_activation(args, {"activation": "silu"}) == "silu"
 
 
 def test_write_chgcar_roundtrips_density(tmp_path: Path, load_atoms):
@@ -280,6 +368,72 @@ def test_public_predict_charge_density_uses_backend_runner(
     assert seen["n_atoms"] == len(atoms)
 
 
+def test_public_predict_charge_density_uses_deepdft_backend_runner(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    atoms = Atoms(
+        "H2",
+        positions=[[0.0, 0.0, 0.0], [0.0, 0.75, 0.0]],
+        cell=np.eye(3),
+        pbc=True,
+    )
+    seen: dict[str, object] = {}
+
+    def fake_runner(atoms_arg, **kwargs):
+        seen["n_atoms"] = len(atoms_arg)
+        seen.update(kwargs)
+        return np.ones(kwargs["grid_shape"], dtype=np.float32), None
+
+    monkeypatch.setattr(charge_density_module, "_run_deepdft_backend", fake_runner)
+
+    result = vpmdk.predict_charge_density(
+        atoms,
+        grid_shape=(4, 4, 4),
+        backend="DeepDFT",
+    )
+
+    assert isinstance(result, vpmdk.ChargeDensityResult)
+    assert result.backend == "DEEPDFT"
+    assert result.grid_shape == (4, 4, 4)
+    assert result.density.shape == (4, 4, 4)
+    assert result.spin_density is None
+    assert seen["grid_shape"] == (4, 4, 4)
+    assert seen["n_atoms"] == len(atoms)
+
+
+def test_public_predict_charge_density_uses_deepcdp_backend_runner(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    atoms = Atoms(
+        "H2",
+        positions=[[0.0, 0.0, 0.0], [0.0, 0.75, 0.0]],
+        cell=np.eye(3),
+        pbc=True,
+    )
+    seen: dict[str, object] = {}
+
+    def fake_runner(atoms_arg, **kwargs):
+        seen["n_atoms"] = len(atoms_arg)
+        seen.update(kwargs)
+        return np.ones(kwargs["grid_shape"], dtype=np.float32), None
+
+    monkeypatch.setattr(charge_density_module, "_run_deepcdp_backend", fake_runner)
+
+    result = vpmdk.predict_charge_density(
+        atoms,
+        grid_shape=(4, 4, 4),
+        backend="DeepCDP",
+    )
+
+    assert isinstance(result, vpmdk.ChargeDensityResult)
+    assert result.backend == "DEEPCDP"
+    assert result.grid_shape == (4, 4, 4)
+    assert result.density.shape == (4, 4, 4)
+    assert result.spin_density is None
+    assert seen["grid_shape"] == (4, 4, 4)
+    assert seen["n_atoms"] == len(atoms)
+
+
 def test_charge3net_backend_allows_missing_source_dir_and_omits_device_flag_when_unspecified(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -294,17 +448,17 @@ def test_charge3net_backend_allows_missing_source_dir_and_omits_device_flag_when
     monkeypatch.setattr(
         charge_density_module,
         "_resolve_charge_source_dir",
-        lambda source_dir: None,
+        lambda source_dir, backend=None: None,
     )
     monkeypatch.setattr(
         charge_density_module,
         "_resolve_charge_model_path",
-        lambda model_path, source_dir: "/tmp/charge3net/models/model.pt",
+        lambda model_path, source_dir, backend=None: "/tmp/charge3net/models/model.pt",
     )
     monkeypatch.setattr(
         charge_density_module,
         "_resolve_charge_python",
-        lambda python_executable: "/tmp/charge-env/bin/python",
+        lambda python_executable, backend=None: "/tmp/charge-env/bin/python",
     )
     monkeypatch.setattr(
         charge_density_module.np,
@@ -348,17 +502,17 @@ def test_charge3net_backend_passes_explicit_model_config_flags(
     monkeypatch.setattr(
         charge_density_module,
         "_resolve_charge_source_dir",
-        lambda source_dir: "/tmp/charge3net",
+        lambda source_dir, backend=None: "/tmp/charge3net",
     )
     monkeypatch.setattr(
         charge_density_module,
         "_resolve_charge_model_path",
-        lambda model_path, source_dir: "/tmp/charge3net/models/model.pt",
+        lambda model_path, source_dir, backend=None: "/tmp/charge3net/models/model.pt",
     )
     monkeypatch.setattr(
         charge_density_module,
         "_resolve_charge_python",
-        lambda python_executable: "/tmp/charge-env/bin/python",
+        lambda python_executable, backend=None: "/tmp/charge-env/bin/python",
     )
     monkeypatch.setattr(
         charge_density_module.np,
@@ -586,16 +740,20 @@ def test_charge3net_backend_passes_explicit_cutoff_override(
     atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3), pbc=True)
     seen: dict[str, object] = {}
 
-    monkeypatch.setattr(charge_density_module, "_resolve_charge_source_dir", lambda source_dir: None)
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_charge_source_dir",
+        lambda source_dir, backend=None: None,
+    )
     monkeypatch.setattr(
         charge_density_module,
         "_resolve_charge_model_path",
-        lambda model_path, source_dir: "/tmp/charge3net/models/model.pt",
+        lambda model_path, source_dir, backend=None: "/tmp/charge3net/models/model.pt",
     )
     monkeypatch.setattr(
         charge_density_module,
         "_resolve_charge_python",
-        lambda python_executable: "/tmp/charge-env/bin/python",
+        lambda python_executable, backend=None: "/tmp/charge-env/bin/python",
     )
     monkeypatch.setattr(
         charge_density_module.np,
@@ -614,6 +772,151 @@ def test_charge3net_backend_passes_explicit_cutoff_override(
     command = seen["command"]
     cutoff_index = command.index("--cutoff")
     assert command[cutoff_index + 1] == "5.5"
+
+
+def test_deepdft_backend_passes_model_dir_and_probe_count(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3), pbc=True)
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_charge_source_dir",
+        lambda source_dir, backend=None: "/tmp/deepdft",
+    )
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_deepdft_model_dir",
+        lambda model_path, source_dir: "/tmp/deepdft/model",
+    )
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_charge_python",
+        lambda python_executable, backend=None: "/tmp/deepdft-env/bin/python",
+    )
+    monkeypatch.setattr(
+        charge_density_module.np,
+        "load",
+        lambda path: _FakeLoadedDensity(np.ones((2, 2, 2), dtype=np.float32)),
+    )
+
+    def fake_run(command, **kwargs):
+        seen["command"] = list(command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(charge_density_module.subprocess, "run", fake_run)
+
+    density, spin_density = charge_density_module._run_deepdft_backend(
+        atoms,
+        grid_shape=(2, 2, 2),
+        device="cuda:0",
+        max_probes_per_batch=4096,
+    )
+
+    assert density.shape == (2, 2, 2)
+    assert spin_density is None
+    command = seen["command"]
+    assert command[:2] == [
+        "/tmp/deepdft-env/bin/python",
+        str(Path(charge_density_module.__file__).with_name("deepdft_runner.py")),
+    ]
+    assert "--model-dir" in command
+    assert command[command.index("--model-dir") + 1] == "/tmp/deepdft/model"
+    assert "--probe-count" in command
+    assert command[command.index("--probe-count") + 1] == "4096"
+    assert "--source-dir" in command
+    assert command[command.index("--source-dir") + 1] == "/tmp/deepdft"
+    assert "--device" in command
+    assert command[command.index("--device") + 1] == "cuda:0"
+
+
+def test_deepcdp_backend_passes_checkpoint_and_soap_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3), pbc=True)
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_charge_source_dir",
+        lambda source_dir, backend=None: "/tmp/deepcdp",
+    )
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_deepcdp_checkpoint_path",
+        lambda model_path, source_dir: "/tmp/deepcdp/model.pt",
+    )
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_charge_metadata_path",
+        lambda metadata_path, model_path, backend=None: "/tmp/deepcdp/config.json",
+    )
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_charge_python",
+        lambda python_executable, backend=None: "/tmp/deepcdp-env/bin/python",
+    )
+    monkeypatch.setattr(
+        charge_density_module.np,
+        "load",
+        lambda path: _FakeLoadedDensity(np.ones((2, 2, 2), dtype=np.float32)),
+    )
+
+    def fake_run(command, **kwargs):
+        seen["command"] = list(command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(charge_density_module.subprocess, "run", fake_run)
+
+    density, spin_density = charge_density_module._run_deepcdp_backend(
+        atoms,
+        grid_shape=(2, 2, 2),
+        device="cuda:0",
+        max_probes_per_batch=4096,
+        charge_species=["O", "H"],
+        soap_rcut=5.0,
+        soap_nmax=4,
+        soap_lmax=4,
+        soap_sigma=0.5,
+        soap_periodic=True,
+        activation="relu",
+        weighting={"function": "poly", "r0": 1.5, "c": 2, "m": 2},
+    )
+
+    assert density.shape == (2, 2, 2)
+    assert spin_density is None
+    command = seen["command"]
+    assert command[:2] == [
+        "/tmp/deepcdp-env/bin/python",
+        str(Path(charge_density_module.__file__).with_name("deepcdp_runner.py")),
+    ]
+    assert "--model-path" in command
+    assert command[command.index("--model-path") + 1] == "/tmp/deepcdp/model.pt"
+    assert "--metadata-path" in command
+    assert command[command.index("--metadata-path") + 1] == "/tmp/deepcdp/config.json"
+    assert "--species" in command
+    assert command[command.index("--species") + 1] == "O,H"
+    assert "--soap-rcut" in command
+    assert command[command.index("--soap-rcut") + 1] == "5.0"
+    assert "--soap-nmax" in command
+    assert command[command.index("--soap-nmax") + 1] == "4"
+    assert "--soap-lmax" in command
+    assert command[command.index("--soap-lmax") + 1] == "4"
+    assert "--soap-sigma" in command
+    assert command[command.index("--soap-sigma") + 1] == "0.5"
+    assert "--soap-periodic" in command
+    assert command[command.index("--soap-periodic") + 1] == "1"
+    assert "--activation" in command
+    assert command[command.index("--activation") + 1] == "relu"
+    assert "--weighting-function" in command
+    assert command[command.index("--weighting-function") + 1] == "poly"
+    assert "--weighting-r0" in command
+    assert command[command.index("--weighting-r0") + 1] == "1.5"
+    assert "--weighting-c" in command
+    assert command[command.index("--weighting-c") + 1] == "2"
+    assert "--weighting-m" in command
+    assert command[command.index("--weighting-m") + 1] == "2"
 
 
 def test_charge3net_runner_safe_globals_is_compatible_with_older_torch():
@@ -635,6 +938,76 @@ def test_charge3net_runner_safe_globals_is_compatible_with_older_torch():
     charge3net_runner_module._ensure_torch_safe_globals(fake_torch_modern)
 
     assert seen["values"] == [slice]
+
+
+def test_charge_density_options_supports_charge_mlp_alias():
+    options = charge_density_module._charge_density_options_from_bcar(
+        {
+            "CHARGE_MLP": "DeepDFT",
+            "CHARGE_MODEL": "/tmp/deepdft/model",
+            "CHARGE_MAX_PROBES_PER_BATCH": "4096",
+        }
+    )
+
+    assert options["backend"] == "DeepDFT"
+    assert options["model_path"] == "/tmp/deepdft/model"
+    assert options["max_probes_per_batch"] == 4096
+
+
+def test_charge_density_options_parse_deepcdp_overrides():
+    options = charge_density_module._charge_density_options_from_bcar(
+        {
+            "CHARGE_MLP": "DeepCDP",
+            "CHARGE_MODEL": "/tmp/deepcdp/model.pt",
+            "CHARGE_DEEPCDP_METADATA": "/tmp/deepcdp/config.json",
+            "CHARGE_DEEPCDP_SPECIES": "O,H",
+            "CHARGE_DEEPCDP_RCUT": "5.0",
+            "CHARGE_DEEPCDP_NMAX": "4",
+            "CHARGE_DEEPCDP_LMAX": "4",
+            "CHARGE_DEEPCDP_SIGMA": "0.5",
+            "CHARGE_DEEPCDP_PERIODIC": "1",
+            "CHARGE_DEEPCDP_ACTIVATION": "relu",
+            "CHARGE_DEEPCDP_WEIGHTING_FUNCTION": "poly",
+            "CHARGE_DEEPCDP_WEIGHTING_R0": "1.5",
+            "CHARGE_DEEPCDP_WEIGHTING_C": "2",
+            "CHARGE_DEEPCDP_WEIGHTING_M": "2",
+        }
+    )
+
+    assert options["backend"] == "DeepCDP"
+    assert options["model_path"] == "/tmp/deepcdp/model.pt"
+    assert options["metadata_path"] == "/tmp/deepcdp/config.json"
+    assert options["charge_species"] == ["O", "H"]
+    assert options["soap_rcut"] == 5.0
+    assert options["soap_nmax"] == 4
+    assert options["soap_lmax"] == 4
+    assert options["soap_sigma"] == 0.5
+    assert options["soap_periodic"] is True
+    assert options["activation"] == "relu"
+    assert options["weighting"] == {
+        "function": "poly",
+        "r0": 1.5,
+        "c": 2.0,
+        "m": 2.0,
+    }
+
+
+def test_resolve_deepdft_model_dir_accepts_best_model_checkpoint_path(tmp_path: Path):
+    checkpoint = tmp_path / "best_model.pth"
+    checkpoint.write_text("placeholder")
+
+    resolved = charge_density_module._resolve_deepdft_model_dir(str(checkpoint), None)
+
+    assert resolved == str(tmp_path)
+
+
+def test_resolve_deepcdp_checkpoint_path_accepts_directory_with_single_checkpoint(tmp_path: Path):
+    checkpoint = tmp_path / "model.pt"
+    checkpoint.write_text("placeholder")
+
+    resolved = charge_density_module._resolve_deepcdp_checkpoint_path(str(tmp_path), None)
+
+    assert resolved == str(checkpoint)
 
 
 def test_charge3net_runner_loads_checkout_modules_without_importing_data_init(

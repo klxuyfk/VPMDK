@@ -1632,6 +1632,73 @@ def test_main_writes_chgcar_when_requested(tmp_path: Path, prepare_inputs):
     assert seen["reference"] is not None
 
 
+def test_main_routes_chgcar_backend_from_charge_mlp_flag(tmp_path: Path, prepare_inputs):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0", "PREC": "N", "ENCUT": "400"},
+        extra_bcar={"WRITE_CHGCAR": "1", "CHARGE_MLP": "DeepDFT"},
+    )
+
+    seen: dict[str, object] = {}
+
+    def fake_predict_charge_density(atoms, **kwargs):
+        seen["backend"] = kwargs.get("backend")
+        return vpmdk.ChargeDensityResult(
+            atoms=atoms,
+            density=np.ones((2, 2, 2), dtype=float),
+            grid_shape=(2, 2, 2),
+            backend="DEEPDFT",
+        )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "predict_charge_density", fake_predict_charge_density)
+    monkeypatch.setattr(vpmdk, "write_chgcar", lambda *_, **__: None)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen["backend"] == "DeepDFT"
+
+
+def test_main_routes_chgcar_backend_to_deepcdp_from_charge_mlp_flag(
+    tmp_path: Path,
+    prepare_inputs,
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0", "PREC": "N", "ENCUT": "400"},
+        extra_bcar={"WRITE_CHGCAR": "1", "CHARGE_MLP": "DeepCDP"},
+    )
+
+    seen: dict[str, object] = {}
+
+    def fake_predict_charge_density(atoms, **kwargs):
+        seen["backend"] = kwargs.get("backend")
+        return vpmdk.ChargeDensityResult(
+            atoms=atoms,
+            density=np.ones((2, 2, 2), dtype=float),
+            grid_shape=(2, 2, 2),
+            backend="DEEPCDP",
+        )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "predict_charge_density", fake_predict_charge_density)
+    monkeypatch.setattr(vpmdk, "write_chgcar", lambda *_, **__: None)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen["backend"] == "DeepCDP"
+
+
 def test_main_writes_chgcar_in_requested_directory_using_final_cell(
     tmp_path: Path,
     prepare_inputs,

@@ -36,6 +36,10 @@ _CHGCAR_GRID_INCAR_TAGS = frozenset(
 _CHARGE_BACKEND_ALIASES = {
     "CHARGE3NET": "CHARGE3NET",
     "CHARGEE3NET": "CHARGE3NET",
+    "DEEPDFT": "DEEPDFT",
+    "DEEP_DFT": "DEEPDFT",
+    "DEEPCDP": "DEEPCDP",
+    "DEEP_CDP": "DEEPCDP",
 }
 
 _PREC_ALIASES = {
@@ -79,6 +83,32 @@ _CHARGE_MODEL_CONFIG_TAGS = {
     "CHARGE_BASIS": ("basis", str),
     "CHARGE_NUM_BASIS": ("num_basis", int),
     "CHARGE_SPIN": ("spin", bool),
+}
+
+_DEEPCDP_WEIGHTING_KEYS = {
+    "CHARGE_DEEPCDP_WEIGHTING_FUNCTION": ("function", str),
+    "CHARGE_DEEPCDP_WEIGHTING_R0": ("r0", float),
+    "CHARGE_DEEPCDP_WEIGHTING_C": ("c", float),
+    "CHARGE_DEEPCDP_WEIGHTING_M": ("m", float),
+    "CHARGE_DEEPCDP_WEIGHTING_D": ("d", float),
+}
+
+_CHARGE_BACKEND_ENV_VARS = {
+    "CHARGE3NET": {
+        "python": ("VPMDK_CHARGE3NET_PYTHON",),
+        "source_dir": ("VPMDK_CHARGE3NET_SOURCE_DIR",),
+        "model": ("VPMDK_CHARGE3NET_MODEL",),
+    },
+    "DEEPDFT": {
+        "python": ("VPMDK_DEEPDFT_PYTHON",),
+        "source_dir": ("VPMDK_DEEPDFT_SOURCE_DIR",),
+        "model": ("VPMDK_DEEPDFT_MODEL",),
+    },
+    "DEEPCDP": {
+        "python": ("VPMDK_DEEPCDP_PYTHON",),
+        "source_dir": ("VPMDK_DEEPCDP_SOURCE_DIR",),
+        "model": ("VPMDK_DEEPCDP_MODEL",),
+    },
 }
 
 
@@ -138,11 +168,41 @@ def _coerce_grid_shape(grid_shape: Any) -> tuple[int, int, int]:
     return values
 
 
+def _coerce_csv_tokens(value: Any, *, key: str) -> list[str]:
+    if value is None:
+        return []
+    tokens = [token.strip() for token in str(value).split(",")]
+    result = [token for token in tokens if token]
+    if not result:
+        raise ValueError(f"Invalid {key} value: {value!r}")
+    return result
+
+
 def _normalize_charge_backend_name(name: str | None) -> str:
     candidate = "CHARGE3NET" if name is None else str(name).strip().upper()
     if not candidate:
         candidate = "CHARGE3NET"
     return _CHARGE_BACKEND_ALIASES.get(candidate, candidate)
+
+
+def _charge_backend_env_vars(kind: str, backend: str | None) -> tuple[str, ...]:
+    backend_name = _normalize_charge_backend_name(backend)
+    return _CHARGE_BACKEND_ENV_VARS.get(backend_name, {}).get(kind, ())
+
+
+def _resolve_charge_env_var(
+    *,
+    generic_env_var: str,
+    kind: str,
+    backend: str | None,
+) -> str | None:
+    backend_name = None if backend is None else _normalize_charge_backend_name(backend)
+    if backend_name is not None:
+        for env_var in _charge_backend_env_vars(kind, backend_name):
+            value = os.environ.get(env_var)
+            if value:
+                return value
+    return os.environ.get(generic_env_var)
 
 
 def _normalize_prec(value: Any) -> str:
@@ -265,7 +325,10 @@ def determine_vasp_fft_grid(reference, incar: Mapping[str, Any]) -> tuple[int, i
 def _charge_density_options_from_bcar(bcar_tags: Mapping[str, Any]) -> dict[str, Any]:
     root = _root()
     options: dict[str, Any] = {
-        "backend": bcar_tags.get("CHARGE_BACKEND", "CHARGE3NET"),
+        "backend": bcar_tags.get(
+            "CHARGE_MLP",
+            bcar_tags.get("CHARGE_BACKEND", "CHARGE3NET"),
+        ),
         "model_path": bcar_tags.get("CHARGE_MODEL"),
         "device": bcar_tags.get("CHARGE_DEVICE"),
         "source_dir": bcar_tags.get("CHARGE_SOURCE_DIR"),
@@ -290,6 +353,46 @@ def _charge_density_options_from_bcar(bcar_tags: Mapping[str, Any]) -> dict[str,
             options[option_name] = _coerce_float(raw_value, key=tag_name)
         else:
             options[option_name] = str(raw_value)
+    deepcdp_metadata = bcar_tags.get("CHARGE_DEEPCDP_METADATA")
+    if deepcdp_metadata is not None:
+        options["metadata_path"] = str(deepcdp_metadata)
+    deepcdp_species = bcar_tags.get("CHARGE_DEEPCDP_SPECIES")
+    if deepcdp_species is not None:
+        options["charge_species"] = _coerce_csv_tokens(
+            deepcdp_species,
+            key="CHARGE_DEEPCDP_SPECIES",
+        )
+    soap_rcut = bcar_tags.get("CHARGE_DEEPCDP_RCUT")
+    if soap_rcut is not None:
+        options["soap_rcut"] = _coerce_float(soap_rcut, key="CHARGE_DEEPCDP_RCUT")
+    soap_nmax = bcar_tags.get("CHARGE_DEEPCDP_NMAX")
+    if soap_nmax is not None:
+        options["soap_nmax"] = _coerce_int_option(soap_nmax, key="CHARGE_DEEPCDP_NMAX")
+    soap_lmax = bcar_tags.get("CHARGE_DEEPCDP_LMAX")
+    if soap_lmax is not None:
+        options["soap_lmax"] = _coerce_int_option(soap_lmax, key="CHARGE_DEEPCDP_LMAX")
+    soap_sigma = bcar_tags.get("CHARGE_DEEPCDP_SIGMA")
+    if soap_sigma is not None:
+        options["soap_sigma"] = _coerce_float(soap_sigma, key="CHARGE_DEEPCDP_SIGMA")
+    if "CHARGE_DEEPCDP_PERIODIC" in bcar_tags:
+        options["soap_periodic"] = root._parse_optional_bool_tag(
+            dict(bcar_tags),
+            "CHARGE_DEEPCDP_PERIODIC",
+        )
+    activation = bcar_tags.get("CHARGE_DEEPCDP_ACTIVATION")
+    if activation is not None:
+        options["activation"] = str(activation)
+    weighting: dict[str, Any] = {}
+    for tag_name, (option_name, value_type) in _DEEPCDP_WEIGHTING_KEYS.items():
+        raw_value = bcar_tags.get(tag_name)
+        if raw_value is None:
+            continue
+        if value_type is float:
+            weighting[option_name] = _coerce_float(raw_value, key=tag_name)
+        else:
+            weighting[option_name] = str(raw_value)
+    if weighting:
+        options["weighting"] = weighting
     return options
 
 
@@ -316,17 +419,20 @@ def _validate_max_probes_per_batch(
     return int(numeric)
 
 
-def _resolve_charge_python(python_executable: str | None) -> str:
+def _resolve_charge_python(
+    python_executable: str | None,
+    backend: str | None = None,
+) -> str:
     if python_executable:
         return str(Path(python_executable).expanduser())
-    env_python = (
-        os.environ.get("VPMDK_CHARGE_PYTHON")
-        or os.environ.get("VPMDK_CHARGE3NET_PYTHON")
+    env_python = _resolve_charge_env_var(
+        generic_env_var="VPMDK_CHARGE_PYTHON",
+        kind="python",
+        backend=backend,
     )
-    if env_python:
-        resolved = _resolve_charge_env_path(env_python)
-        if resolved is not None:
-            return resolved
+    resolved = _resolve_charge_env_path(env_python)
+    if resolved is not None:
+        return resolved
     return sys.executable
 
 
@@ -342,27 +448,94 @@ def _resolve_charge_env_path(path_value: str | None) -> str | None:
     return str((Path(base_dir).expanduser() / expanded).resolve())
 
 
-def _resolve_charge_source_dir(source_dir: str | None) -> str | None:
+def _resolve_charge_source_dir(source_dir: str | None, backend: str | None = None) -> str | None:
     if source_dir:
         return str(Path(source_dir).expanduser())
-    env_source_dir = (
-        os.environ.get("VPMDK_CHARGE_SOURCE_DIR")
-        or os.environ.get("VPMDK_CHARGE3NET_SOURCE_DIR")
+    env_source_dir = _resolve_charge_env_var(
+        generic_env_var="VPMDK_CHARGE_SOURCE_DIR",
+        kind="source_dir",
+        backend=backend,
     )
     return _resolve_charge_env_path(env_source_dir)
 
 
-def _resolve_charge_model_path(model_path: str | None, source_dir: str | None) -> str | None:
+def _resolve_charge_model_path(
+    model_path: str | None,
+    source_dir: str | None,
+    backend: str | None = None,
+) -> str | None:
     if model_path:
         return str(Path(model_path).expanduser())
-    env_model = os.environ.get("VPMDK_CHARGE_MODEL") or os.environ.get("VPMDK_CHARGE3NET_MODEL")
+    env_model = _resolve_charge_env_var(
+        generic_env_var="VPMDK_CHARGE_MODEL",
+        kind="model",
+        backend=backend,
+    )
     if env_model:
         return _resolve_charge_env_path(env_model)
-    if source_dir:
+    if source_dir and _normalize_charge_backend_name(backend) == "CHARGE3NET":
         default_model = Path(source_dir) / "models" / "charge3net_mp.pt"
         if default_model.exists():
             return str(default_model)
     return None
+
+
+def _resolve_charge_metadata_path(
+    metadata_path: str | None,
+    model_path: str | None,
+    backend: str | None = None,
+) -> str | None:
+    if metadata_path:
+        return str(Path(metadata_path).expanduser())
+
+    backend_name = _normalize_charge_backend_name(backend)
+    if backend_name != "DEEPCDP":
+        return None
+
+    if model_path:
+        model_location = Path(model_path).expanduser()
+        candidate_dir = model_location if model_location.is_dir() else model_location.parent
+        for filename in ("deepcdp_config.json", "metadata.json", "config.json"):
+            candidate = candidate_dir / filename
+            if candidate.exists():
+                return str(candidate)
+    env_value = os.environ.get("VPMDK_DEEPCDP_METADATA")
+    if env_value:
+        return _resolve_charge_env_path(env_value)
+    return None
+
+
+def _resolve_deepdft_model_dir(model_path: str | None, source_dir: str | None) -> str | None:
+    resolved = _resolve_charge_model_path(model_path, source_dir, backend="DEEPDFT")
+    if not resolved:
+        return None
+    model_dir = Path(resolved).expanduser()
+    if model_dir.is_file() or model_dir.name in {"best_model.pth", "arguments.json"}:
+        model_dir = model_dir.parent
+    return str(model_dir)
+
+
+def _resolve_deepcdp_checkpoint_path(model_path: str | None, source_dir: str | None) -> str | None:
+    resolved = _resolve_charge_model_path(model_path, source_dir, backend="DEEPCDP")
+    if not resolved:
+        return None
+    checkpoint_path = Path(resolved).expanduser()
+    if checkpoint_path.is_file():
+        return str(checkpoint_path)
+    explicit_candidate = checkpoint_path / "model.pt"
+    if explicit_candidate.exists():
+        return str(explicit_candidate)
+    pt_files = sorted(checkpoint_path.glob("*.pt"))
+    if len(pt_files) == 1:
+        return str(pt_files[0])
+    if not pt_files:
+        raise RuntimeError(
+            "DeepCDP model path must point to a .pt checkpoint or a directory containing one."
+        )
+    raise RuntimeError(
+        "DeepCDP model directory contains multiple .pt checkpoints. Set CHARGE_MODEL "
+        "to the exact checkpoint path."
+    )
 
 
 def _run_charge3net_backend(
@@ -383,8 +556,8 @@ def _run_charge3net_backend(
     num_basis: int | None = None,
     spin: bool | None = None,
 ) -> tuple[np.ndarray, np.ndarray | None]:
-    source_dir = _resolve_charge_source_dir(source_dir)
-    model_path = _resolve_charge_model_path(model_path, source_dir)
+    source_dir = _resolve_charge_source_dir(source_dir, backend="CHARGE3NET")
+    model_path = _resolve_charge_model_path(model_path, source_dir, backend="CHARGE3NET")
     max_probes_per_batch = _validate_max_probes_per_batch(max_probes_per_batch)
     if num_interactions is not None:
         num_interactions = _coerce_int_option(num_interactions, key="num_interactions")
@@ -402,7 +575,7 @@ def _run_charge3net_backend(
         )
 
     runner_path = Path(__file__).with_name("charge3net_runner.py")
-    python_path = _resolve_charge_python(python_executable)
+    python_path = _resolve_charge_python(python_executable, backend="CHARGE3NET")
 
     with tempfile.TemporaryDirectory(prefix="vpmdk_charge3net_") as tmp_dir:
         input_path = Path(tmp_dir) / "input.npz"
@@ -466,6 +639,172 @@ def _run_charge3net_backend(
         return density, spin_density
 
 
+def _run_deepdft_backend(
+    atoms,
+    *,
+    grid_shape: tuple[int, int, int],
+    model_path: str | None = None,
+    device: str | None = None,
+    source_dir: str | None = None,
+    python_executable: str | None = None,
+    max_probes_per_batch: int = _DEFAULT_MAX_PROBES_PER_BATCH,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    source_dir = _resolve_charge_source_dir(source_dir, backend="DEEPDFT")
+    model_dir = _resolve_deepdft_model_dir(model_path, source_dir)
+    probe_count = _validate_max_probes_per_batch(max_probes_per_batch)
+    if not model_dir:
+        raise RuntimeError(
+            "DeepDFT model directory not found. Set CHARGE_MODEL (or "
+            "VPMDK_CHARGE_MODEL / VPMDK_DEEPDFT_MODEL) to a directory containing "
+            "arguments.json and best_model.pth."
+        )
+
+    runner_path = Path(__file__).with_name("deepdft_runner.py")
+    python_path = _resolve_charge_python(python_executable, backend="DEEPDFT")
+
+    with tempfile.TemporaryDirectory(prefix="vpmdk_deepdft_") as tmp_dir:
+        input_path = Path(tmp_dir) / "input.npz"
+        output_path = Path(tmp_dir) / "density.npz"
+        np.savez(
+            input_path,
+            numbers=np.asarray(atoms.get_atomic_numbers(), dtype=np.int64),
+            positions=np.asarray(atoms.get_positions(), dtype=float),
+            cell=np.asarray(atoms.get_cell(), dtype=float),
+            pbc=np.asarray(atoms.get_pbc(), dtype=bool),
+            grid_shape=np.asarray(grid_shape, dtype=np.int64),
+        )
+        command = [
+            python_path,
+            str(runner_path),
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+            "--model-dir",
+            str(model_dir),
+            "--probe-count",
+            str(int(probe_count)),
+        ]
+        if source_dir:
+            command.extend(["--source-dir", str(source_dir)])
+        if device is not None:
+            command.extend(["--device", str(_root()._resolve_device(device))])
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            stderr = completed.stderr.strip()
+            stdout = completed.stdout.strip()
+            details = stderr or stdout or "no output"
+            raise RuntimeError(f"DeepDFT prediction failed: {details}")
+        with np.load(output_path) as payload:
+            density = np.asarray(payload["density"])
+        return density, None
+
+
+def _run_deepcdp_backend(
+    atoms,
+    *,
+    grid_shape: tuple[int, int, int],
+    model_path: str | None = None,
+    device: str | None = None,
+    source_dir: str | None = None,
+    python_executable: str | None = None,
+    max_probes_per_batch: int = _DEFAULT_MAX_PROBES_PER_BATCH,
+    metadata_path: str | None = None,
+    charge_species: list[str] | tuple[str, ...] | str | None = None,
+    soap_rcut: float | None = None,
+    soap_nmax: int | None = None,
+    soap_lmax: int | None = None,
+    soap_sigma: float | None = None,
+    soap_periodic: bool | None = None,
+    activation: str | None = None,
+    weighting: Mapping[str, Any] | None = None,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    source_dir = _resolve_charge_source_dir(source_dir, backend="DEEPCDP")
+    checkpoint_path = _resolve_deepcdp_checkpoint_path(model_path, source_dir)
+    resolved_metadata_path = _resolve_charge_metadata_path(
+        metadata_path,
+        checkpoint_path,
+        backend="DEEPCDP",
+    )
+    probe_count = _validate_max_probes_per_batch(max_probes_per_batch)
+    if not checkpoint_path:
+        raise RuntimeError(
+            "DeepCDP checkpoint not found. Set CHARGE_MODEL (or VPMDK_CHARGE_MODEL / "
+            "VPMDK_DEEPCDP_MODEL) to a DeepCDP .pt file or directory."
+        )
+
+    runner_path = Path(__file__).with_name("deepcdp_runner.py")
+    python_path = _resolve_charge_python(python_executable, backend="DEEPCDP")
+
+    with tempfile.TemporaryDirectory(prefix="vpmdk_deepcdp_") as tmp_dir:
+        input_path = Path(tmp_dir) / "input.npz"
+        output_path = Path(tmp_dir) / "density.npz"
+        np.savez(
+            input_path,
+            numbers=np.asarray(atoms.get_atomic_numbers(), dtype=np.int64),
+            positions=np.asarray(atoms.get_positions(), dtype=float),
+            cell=np.asarray(atoms.get_cell(), dtype=float),
+            pbc=np.asarray(atoms.get_pbc(), dtype=bool),
+            grid_shape=np.asarray(grid_shape, dtype=np.int64),
+        )
+        command = [
+            python_path,
+            str(runner_path),
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+            "--model-path",
+            str(checkpoint_path),
+            "--probe-count",
+            str(int(probe_count)),
+        ]
+        if device is not None:
+            command.extend(["--device", str(_root()._resolve_device(device))])
+        if resolved_metadata_path:
+            command.extend(["--metadata-path", str(resolved_metadata_path)])
+        if charge_species is not None:
+            if isinstance(charge_species, str):
+                species_tokens = _coerce_csv_tokens(charge_species, key="charge_species")
+            else:
+                species_tokens = [str(token).strip() for token in charge_species if str(token).strip()]
+            command.extend(["--species", ",".join(species_tokens)])
+        if soap_rcut is not None:
+            command.extend(["--soap-rcut", str(float(soap_rcut))])
+        if soap_nmax is not None:
+            command.extend(["--soap-nmax", str(_coerce_int_option(soap_nmax, key="soap_nmax"))])
+        if soap_lmax is not None:
+            command.extend(["--soap-lmax", str(_coerce_int_option(soap_lmax, key="soap_lmax"))])
+        if soap_sigma is not None:
+            command.extend(["--soap-sigma", str(float(soap_sigma))])
+        if soap_periodic is not None:
+            command.extend(["--soap-periodic", "1" if soap_periodic else "0"])
+        if activation is not None:
+            command.extend(["--activation", str(activation)])
+        if weighting:
+            for key, value in weighting.items():
+                command.extend([f"--weighting-{key.replace('_', '-')}", str(value)])
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            stderr = completed.stderr.strip()
+            stdout = completed.stdout.strip()
+            details = stderr or stdout or "no output"
+            raise RuntimeError(f"DeepCDP prediction failed: {details}")
+        with np.load(output_path) as payload:
+            density = np.asarray(payload["density"])
+        return density, None
+
+
 def predict_charge_density(
     atoms,
     *,
@@ -486,6 +825,15 @@ def predict_charge_density(
     basis: str | None = None,
     num_basis: int | None = None,
     spin: bool | None = None,
+    metadata_path: str | None = None,
+    charge_species: list[str] | tuple[str, ...] | str | None = None,
+    soap_rcut: float | None = None,
+    soap_nmax: int | None = None,
+    soap_lmax: int | None = None,
+    soap_sigma: float | None = None,
+    soap_periodic: bool | None = None,
+    activation: str | None = None,
+    weighting: Mapping[str, Any] | None = None,
 ) -> ChargeDensityResult:
     """Predict charge density on a user-specified or INCAR-derived grid."""
 
@@ -496,10 +844,14 @@ def predict_charge_density(
     grid_shape = _coerce_grid_shape(grid_shape)
 
     backend_name = _normalize_charge_backend_name(backend)
-    resolved_source_dir = _resolve_charge_source_dir(source_dir)
-    resolved_model_path = _resolve_charge_model_path(model_path, resolved_source_dir)
     max_probes_per_batch = _validate_max_probes_per_batch(max_probes_per_batch)
     if backend_name == "CHARGE3NET":
+        resolved_source_dir = _resolve_charge_source_dir(source_dir, backend=backend_name)
+        resolved_model_path = _resolve_charge_model_path(
+            model_path,
+            resolved_source_dir,
+            backend=backend_name,
+        )
         density, spin_density = _run_charge3net_backend(
             atoms,
             grid_shape=grid_shape,
@@ -517,6 +869,80 @@ def predict_charge_density(
             num_basis=num_basis,
             spin=spin,
         )
+        model_config = {
+            key: value
+            for key, value in {
+                "num_interactions": num_interactions,
+                "num_neighbors": num_neighbors,
+                "mul": mul,
+                "lmax": lmax,
+                "basis": basis,
+                "num_basis": num_basis,
+                "spin": spin,
+                "cutoff": cutoff,
+                "spin_output": spin_density is not None,
+            }.items()
+            if value is not None
+        }
+    elif backend_name == "DEEPDFT":
+        resolved_source_dir = _resolve_charge_source_dir(source_dir, backend=backend_name)
+        resolved_model_path = _resolve_deepdft_model_dir(model_path, resolved_source_dir)
+        density, spin_density = _run_deepdft_backend(
+            atoms,
+            grid_shape=grid_shape,
+            model_path=resolved_model_path,
+            device=device,
+            source_dir=resolved_source_dir,
+            python_executable=python_executable,
+            max_probes_per_batch=max_probes_per_batch,
+        )
+        model_config = {
+            "probe_count": max_probes_per_batch,
+            "spin_output": False,
+        }
+    elif backend_name == "DEEPCDP":
+        resolved_source_dir = _resolve_charge_source_dir(source_dir, backend=backend_name)
+        resolved_model_path = _resolve_deepcdp_checkpoint_path(model_path, resolved_source_dir)
+        resolved_metadata_path = _resolve_charge_metadata_path(
+            metadata_path,
+            resolved_model_path,
+            backend=backend_name,
+        )
+        density, spin_density = _run_deepcdp_backend(
+            atoms,
+            grid_shape=grid_shape,
+            model_path=resolved_model_path,
+            device=device,
+            source_dir=resolved_source_dir,
+            python_executable=python_executable,
+            max_probes_per_batch=max_probes_per_batch,
+            metadata_path=resolved_metadata_path,
+            charge_species=charge_species,
+            soap_rcut=soap_rcut,
+            soap_nmax=soap_nmax,
+            soap_lmax=soap_lmax,
+            soap_sigma=soap_sigma,
+            soap_periodic=soap_periodic,
+            activation=activation,
+            weighting=weighting,
+        )
+        model_config = {
+            key: value
+            for key, value in {
+                "probe_count": max_probes_per_batch,
+                "metadata_path": resolved_metadata_path,
+                "charge_species": charge_species,
+                "soap_rcut": soap_rcut,
+                "soap_nmax": soap_nmax,
+                "soap_lmax": soap_lmax,
+                "soap_sigma": soap_sigma,
+                "soap_periodic": soap_periodic,
+                "activation": activation,
+                "weighting": dict(weighting) if weighting else None,
+                "spin_output": False,
+            }.items()
+            if value is not None
+        }
     else:
         raise ValueError(f"Unsupported charge-density backend: {backend_name}")
 
@@ -530,21 +956,7 @@ def predict_charge_density(
             "model_path": resolved_model_path,
             "device": "auto" if device is None else _root()._resolve_device(device),
             "source_dir": resolved_source_dir,
-            "model_config": {
-                key: value
-                for key, value in {
-                    "num_interactions": num_interactions,
-                    "num_neighbors": num_neighbors,
-                    "mul": mul,
-                    "lmax": lmax,
-                    "basis": basis,
-                    "num_basis": num_basis,
-                    "spin": spin,
-                    "cutoff": cutoff,
-                    "spin_output": spin_density is not None,
-                }.items()
-                if value is not None
-            },
+            "model_config": model_config,
         },
     )
 
