@@ -192,16 +192,24 @@ directory because the CLI changes into `--dir` before constructing the
 calculator.
 
 Charge-environment paths are a special case: relative `CHARGE_*` paths are
-resolved against the caller's original shell working directory so that:
+handled differently depending on how they are provided:
+
+- explicit `CHARGE_PYTHON`, `CHARGE_SOURCE_DIR`, and `CHARGE_MODEL` values in
+  `BCAR` are used as written, so under `vpmdk --dir ...` they are interpreted
+  relative to the selected calculation directory
+- environment-variable fallbacks are resolved against the caller's original
+  shell working directory
+
+This means that:
 
 ```bash
 vpmdk --dir /other/location
 ```
 
-still works with:
+does not make this `BCAR` entry relative to the shell that launched `vpmdk`:
 
 ```text
 CHARGE_PYTHON=./env/bin/python
 ```
 
-from the place where the command was launched.
+For that use case, prefer an absolute path or an environment-variable fallback.
