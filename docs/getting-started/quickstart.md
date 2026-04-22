@@ -14,7 +14,8 @@ calc_dir/
 
 Compatibility inputs:
 
-- `POTCAR` is optional and is used only for species-name reconciliation.
+- `POTCAR` is optional and can affect species reconciliation and some
+  compatibility-output metadata.
 - `KPOINTS`, `WAVECAR`, and existing `CHGCAR` files are detected but ignored by
   the force-field run itself.
 

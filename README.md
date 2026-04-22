@@ -153,7 +153,8 @@ Included examples:
 ## Compatibility Notes
 
 - `POSCAR` is required for standard runs.
-- `POTCAR` is optional and is used only for species-label reconciliation.
+- `POTCAR` is optional and can affect species reconciliation and some
+  VASP-compatibility metadata.
 - `KPOINTS`, `WAVECAR`, and existing `CHGCAR` files are ignored by the
   force-field calculation itself.
 - If `BCAR` is omitted, VPMDK defaults to `MLP=CHGNET`.
