@@ -169,7 +169,7 @@ also accepted; VPMDK normalizes that to the parent directory.
 
 ## DeepCDP
 
-Minimal example:
+Complete example without relying on metadata inference:
 
 ```text
 WRITE_CHGCAR=1
@@ -177,8 +177,22 @@ CHARGE_MLP=DEEPCDP
 CHARGE_PYTHON=/path/to/env/bin/python
 CHARGE_MODEL=/path/to/model.pt
 CHARGE_DEEPCDP_SPECIES=O,H
+CHARGE_DEEPCDP_RCUT=5.0
+CHARGE_DEEPCDP_NMAX=4
+CHARGE_DEEPCDP_LMAX=4
+CHARGE_DEEPCDP_SIGMA=0.5
+CHARGE_DEEPCDP_PERIODIC=1
 CHARGE_DEEPCDP_ACTIVATION=relu
 ```
+
+At minimum, a DeepCDP setup needs either:
+
+- metadata that already provides species, activation, and SOAP configuration, or
+- explicit `CHARGE_DEEPCDP_SPECIES`, `CHARGE_DEEPCDP_RCUT`,
+  `CHARGE_DEEPCDP_NMAX`, `CHARGE_DEEPCDP_LMAX`, and
+  `CHARGE_DEEPCDP_ACTIVATION` tags
+
+`CHARGE_DEEPCDP_SIGMA` and `CHARGE_DEEPCDP_PERIODIC` are optional overrides.
 
 Metadata handling:
 
@@ -187,8 +201,8 @@ Metadata handling:
   `deepcdp_config.json`, `metadata.json`, or `config.json`
 - `VPMDK_DEEPCDP_METADATA` is also supported
 
-If species or activation cannot be inferred from metadata, they must be supplied
-explicitly.
+If metadata is incomplete, the missing species, activation, or SOAP parameters
+must be supplied explicitly.
 
 ## Python API
 

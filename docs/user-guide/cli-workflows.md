@@ -199,7 +199,13 @@ You should expect warnings for:
 - CHGCAR-grid-related `INCAR` tags when `WRITE_CHGCAR` is disabled
 - pseudo-SCF-only tags (`NELM`, `NELMIN`, `NELMDL`, `EDIFF`) when pseudo-SCF
   output is disabled
-- malformed numeric tags
+- malformed optional numeric tags that are parsed through warning-tolerant
+  helpers, such as `PSTRESS`, `TEBEG`, `TEEND`, `SMASS`, `ANDERSEN_PROB`,
+  `LANGEVIN_GAMMA`, `CSVR_PERIOD`, `NHC_NCHAINS`, or `IMAGES`
+
+Core execution-control tags such as `NSW`, `IBRION`, `EDIFFG`, `POTIM`,
+`MDALGO`, and `ISIF` are not warning-tolerant in the same way; malformed values
+there usually abort the run.
 
 Unknown `BCAR` tags are not globally validated; they are simply ignored unless
 some backend or helper explicitly consumes them.
