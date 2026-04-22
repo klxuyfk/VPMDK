@@ -32,7 +32,8 @@ Behavior:
 - `BCAR` is optional; the backend defaults to `CHGNET`.
 - `POTCAR` is optional and only helps species labeling.
 - `KPOINTS`, `WAVECAR`, and existing `CHGCAR` are ignored for the actual ML
-  calculation, though `KPOINTS` content is echoed into compatibility XML.
+  calculation. `KPOINTS` is used only for limited compatibility metadata; the
+  generated `vasprun.xml` still writes a simplified Gamma-only k-point section.
 
 ## Parsing Rules
 
@@ -161,16 +162,24 @@ If `WRITE_CHGCAR=1`, the CLI runs `predict_charge_density()` after the main
 force-field workflow completes. The density is generated from the final atomic
 structure, not from the initial `POSCAR`.
 
-Charge-backend settings come from `BCAR`, and relative charge-environment paths
-are resolved against the caller's original working directory rather than the
-selected `--dir` directory. This is important when you launch:
+Charge-backend settings come from `BCAR`. Relative path handling depends on how
+the value is provided:
+
+- explicit `CHARGE_PYTHON`, `CHARGE_SOURCE_DIR`, and `CHARGE_MODEL` values from
+  `BCAR` are used as written, so under `vpmdk --dir ...` they are interpreted
+  relative to the selected run directory
+- environment-variable fallbacks such as `VPMDK_CHARGE_PYTHON` are resolved
+  relative to the caller's original working directory
+
+This matters when you launch:
 
 ```bash
 vpmdk --dir some/other/path
 ```
 
-and keep `CHARGE_PYTHON=./env/bin/python` or similar values relative to the
-shell you launched from.
+and expect `CHARGE_PYTHON=./env/bin/python` in `BCAR` to stay relative to the
+shell you launched from. For that use case, prefer an absolute path or an
+environment-variable fallback.
 
 ## MAGMOM and Species Handling
 

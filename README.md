@@ -37,9 +37,9 @@ pip install chgnet
 
 More setup details:
 
-- docs index: [docs/README.md](/home/nei/temp/vpmdk_private/docs/README.md)
-- installation guide: [docs/getting-started/installation.md](/home/nei/temp/vpmdk_private/docs/getting-started/installation.md)
-- backend reference: [docs/reference/backends.md](/home/nei/temp/vpmdk_private/docs/reference/backends.md)
+- docs index: [docs/README.md](docs/README.md)
+- installation guide: [docs/getting-started/installation.md](docs/getting-started/installation.md)
+- backend reference: [docs/reference/backends.md](docs/reference/backends.md)
 
 ## Choose Your Entry Point
 
@@ -124,22 +124,22 @@ default.
 
 ## Documentation Map
 
-- docs index: [docs/README.md](/home/nei/temp/vpmdk_private/docs/README.md)
-- quick start: [docs/getting-started/quickstart.md](/home/nei/temp/vpmdk_private/docs/getting-started/quickstart.md)
-- CLI workflows: [docs/user-guide/cli-workflows.md](/home/nei/temp/vpmdk_private/docs/user-guide/cli-workflows.md)
-- Python API guide: [docs/user-guide/python-api.md](/home/nei/temp/vpmdk_private/docs/user-guide/python-api.md)
-- charge density and `CHGCAR`: [docs/user-guide/charge-density.md](/home/nei/temp/vpmdk_private/docs/user-guide/charge-density.md)
-- API reference: [docs/reference/api-reference.md](/home/nei/temp/vpmdk_private/docs/reference/api-reference.md)
-- `INCAR` reference: [docs/reference/incar-tags.md](/home/nei/temp/vpmdk_private/docs/reference/incar-tags.md)
-- `BCAR` reference: [docs/reference/bcar-tags.md](/home/nei/temp/vpmdk_private/docs/reference/bcar-tags.md)
-- backend reference: [docs/reference/backends.md](/home/nei/temp/vpmdk_private/docs/reference/backends.md)
-- architecture: [docs/development/architecture.md](/home/nei/temp/vpmdk_private/docs/development/architecture.md)
-- backend environment notes: [docs/development/backend-environments.md](/home/nei/temp/vpmdk_private/docs/development/backend-environments.md)
-- validation notes: [docs/development/validation.md](/home/nei/temp/vpmdk_private/docs/development/validation.md)
+- docs index: [docs/README.md](docs/README.md)
+- quick start: [docs/getting-started/quickstart.md](docs/getting-started/quickstart.md)
+- CLI workflows: [docs/user-guide/cli-workflows.md](docs/user-guide/cli-workflows.md)
+- Python API guide: [docs/user-guide/python-api.md](docs/user-guide/python-api.md)
+- charge density and `CHGCAR`: [docs/user-guide/charge-density.md](docs/user-guide/charge-density.md)
+- API reference: [docs/reference/api-reference.md](docs/reference/api-reference.md)
+- `INCAR` reference: [docs/reference/incar-tags.md](docs/reference/incar-tags.md)
+- `BCAR` reference: [docs/reference/bcar-tags.md](docs/reference/bcar-tags.md)
+- backend reference: [docs/reference/backends.md](docs/reference/backends.md)
+- architecture: [docs/development/architecture.md](docs/development/architecture.md)
+- backend environment notes: [docs/development/backend-environments.md](docs/development/backend-environments.md)
+- validation notes: [docs/development/validation.md](docs/development/validation.md)
 
 ## Examples
 
-Runnable examples live under [examples/README.md](/home/nei/temp/vpmdk_private/examples/README.md).
+Runnable examples live under [examples/README.md](examples/README.md).
 
 Included examples:
 

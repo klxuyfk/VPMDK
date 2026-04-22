@@ -125,8 +125,11 @@ Backend-specific variables:
 Path resolution detail:
 
 - if a path is absolute, it is used directly
-- if it is relative and the CLI was launched with `--dir`, charge paths are
-  still resolved relative to the original caller working directory
+- explicit `CHARGE_PYTHON`, `CHARGE_SOURCE_DIR`, and `CHARGE_MODEL` values are
+  used as written; in CLI runs they therefore behave like paths relative to the
+  active calculation directory when `vpmdk --dir ...` is used
+- environment-variable fallbacks are resolved against the original caller
+  working directory through `VPMDK_CHARGE_ENV_BASE_DIR`
 
 ## ChargE3Net
 
