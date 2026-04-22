@@ -148,7 +148,8 @@ MD-specific semantics:
 
 - `steps=0` is allowed and returns one non-advanced fallback step
 - zero-step MD does not sample velocities or create an MD driver
-- if `temperature <= 0`, velocities are zeroed rather than resampled
+- when `steps > 0` and `temperature <= 0`, velocities are zeroed rather than
+  resampled
 
 ## Backends and Structure-Derived Metadata
 

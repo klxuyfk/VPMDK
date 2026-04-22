@@ -30,7 +30,9 @@ Behavior:
   provide the structures.
 - `INCAR` is optional; missing values fall back to internal defaults.
 - `BCAR` is optional; the backend defaults to `CHGNET`.
-- `POTCAR` is optional and only helps species labeling.
+- `POTCAR` is optional. It helps species labeling and also affects some
+  VASP-compatibility output details such as the `TITEL` lines written into
+  `OUTCAR`.
 - `KPOINTS`, `WAVECAR`, and existing `CHGCAR` are ignored for the actual ML
   calculation. `KPOINTS` is used only for limited compatibility metadata; the
   generated `vasprun.xml` still writes a simplified Gamma-only k-point section.

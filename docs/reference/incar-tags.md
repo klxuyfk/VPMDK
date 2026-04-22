@@ -2,8 +2,10 @@
 
 ## Supported Tags
 
-VPMDK intentionally supports a focused subset of `INCAR`. Anything outside this
-subset is ignored with a warning.
+VPMDK intentionally supports a focused subset of `INCAR` for main execution
+settings. Other tags can still be consumed by supported auxiliary flows such as
+CHGCAR grid selection or pseudo-SCF compatibility output, but tags outside the
+documented supported/auxiliary sets are ignored with a warning.
 
 Supported tags:
 
