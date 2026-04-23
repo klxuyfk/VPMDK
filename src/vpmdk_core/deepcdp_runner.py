@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--metadata-path",
         help="Optional JSON file with SOAP and activation metadata.",
+    )
+    parser.add_argument(
+        "--source-dir",
+        help="Optional DeepCDP checkout root prepended to sys.path before imports.",
     )
     parser.add_argument("--device", help="Torch device override.")
     parser.add_argument("--probe-count", type=int, default=2500, help="Probe batch size.")
@@ -173,9 +178,26 @@ def _resolve_config(args: argparse.Namespace, metadata: dict[str, Any], atoms) -
     return config
 
 
-def _load_modules():
-    import torch  # type: ignore
-    from dscribe.descriptors import SOAP  # type: ignore
+def _prepare_source_dir(source_dir: str | None) -> str | None:
+    if not source_dir:
+        return None
+    source_root = str(Path(source_dir).expanduser().resolve())
+    if source_root not in sys.path:
+        sys.path.insert(0, source_root)
+    return source_root
+
+
+def _load_modules(source_dir: str | None):
+    _prepare_source_dir(source_dir)
+    try:
+        import torch  # type: ignore
+        from dscribe.descriptors import SOAP  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            "Unable to import DeepCDP runner dependencies. Install them in "
+            "CHARGE_PYTHON or set CHARGE_SOURCE_DIR to a checkout/environment "
+            "root that exposes the required modules."
+        ) from exc
 
     return torch, SOAP
 
@@ -266,11 +288,12 @@ def _predict_density(
     config: dict[str, Any],
     probe_count: int,
     device_arg: str | None,
+    source_dir: str | None,
 ) -> np.ndarray:
     if probe_count <= 0:
         raise ValueError(f"Invalid --probe-count value: {probe_count!r}")
 
-    torch_module, soap_cls = _load_modules()
+    torch_module, soap_cls = _load_modules(source_dir)
     device = _resolve_device_argument(device_arg, torch_module)
     checkpoint = torch_module.load(checkpoint_path, map_location=device)
     state_dict = _extract_state_dict(checkpoint)
@@ -326,6 +349,7 @@ def main() -> int:
         config=config,
         probe_count=int(args.probe_count),
         device_arg=args.device,
+        source_dir=args.source_dir,
     )
     np.savez(args.output, density=density)
     return 0
