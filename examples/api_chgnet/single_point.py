@@ -23,11 +23,11 @@ import vpmdk
 def main() -> None:
     here = Path(__file__).resolve().parent
     atoms = read(here / "POSCAR")
+    backend = vpmdk.BackendConfig(mlp="CHGNET", device="cpu")
 
     result = vpmdk.single_point(
         atoms,
-        mlp="CHGNET",
-        device="cpu",
+        backend,
     )
 
     print(f"Energy: {result.potential_energy:.8f} eV")

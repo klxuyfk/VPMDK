@@ -5,6 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
+from .compat.vasp import (
+    VaspCompatConfig,
+    VaspMDConfig,
+    VaspRelaxConfig,
+    VaspSinglePointConfig,
+)
+
 
 def _normalize_option_key(key: object) -> str:
     """Return a canonical BCAR-style option key."""
@@ -226,7 +233,23 @@ def coerce_backend_config(
 class SinglePointConfig:
     """Configuration for a single-point evaluation."""
 
-    isif: int | None = None
+    compat: VaspSinglePointConfig | None = None
+
+    @property
+    def effective_isif(self) -> int | None:
+        """Return VASP compatibility metadata for stress formatting."""
+
+        if self.compat is None:
+            return None
+        return self.compat.isif
+
+    @property
+    def effective_ibrion(self) -> int:
+        """Return VASP compatibility metadata for the observer layer."""
+
+        if self.compat is None:
+            return -1
+        return int(self.compat.ibrion)
 
 
 @dataclass(frozen=True)
@@ -238,21 +261,36 @@ class RelaxConfig:
     relax_cell: bool = False
     pressure_kbar: float | None = None
     energy_tolerance: float | None = None
-    isif: int = 2
-    stress_isif: int | None = None
-    ibrion: int = 2
+    compat: VaspRelaxConfig | None = None
 
     def __post_init__(self) -> None:
         steps = _coerce_non_negative_int(self.steps, field_name="RelaxConfig.steps")
-        isif = int(self.isif)
-        stress_isif = self.stress_isif
-        if self.relax_cell and isif == 2:
-            isif = 3
-        if self.relax_cell and stress_isif is None:
-            stress_isif = isif
         object.__setattr__(self, "steps", steps)
-        object.__setattr__(self, "isif", isif)
-        object.__setattr__(self, "stress_isif", stress_isif)
+
+    @property
+    def effective_isif(self) -> int:
+        """Return the VASP compatibility stress mode attached to this run."""
+
+        default_isif = 3 if self.relax_cell else 2
+        if self.compat is None or self.compat.isif is None:
+            return default_isif
+        return int(self.compat.isif)
+
+    @property
+    def effective_stress_isif(self) -> int:
+        """Return the compatibility stress mode reported to observers."""
+
+        if self.compat is not None and self.compat.stress_isif is not None:
+            return int(self.compat.stress_isif)
+        return self.effective_isif
+
+    @property
+    def effective_ibrion(self) -> int:
+        """Return the VASP compatibility ionic algorithm identifier."""
+
+        if self.compat is None:
+            return 2
+        return int(self.compat.ibrion)
 
 
 @dataclass(frozen=True)
@@ -266,8 +304,7 @@ class MDConfig:
     temperature_end: float | None = None
     thermostat_kwargs: dict[str, float] = field(default_factory=dict)
     smass: float | None = None
-    isif: int | None = 0
-    mdalgo: int | None = None
+    compat: VaspMDConfig | None = None
 
     def __post_init__(self) -> None:
         steps = _coerce_non_negative_int(self.steps, field_name="MDConfig.steps")
@@ -277,25 +314,17 @@ class MDConfig:
     def effective_mdalgo(self) -> int:
         """Return the MD algorithm after resolving the public thermostat."""
 
-        if self.mdalgo is not None:
-            return int(self.mdalgo)
+        if self.compat is not None and self.compat.mdalgo is not None:
+            return int(self.compat.mdalgo)
         return thermostat_to_mdalgo(self.thermostat)
 
+    @property
+    def effective_isif(self) -> int | None:
+        """Return the compatibility stress mode reported for MD."""
 
-@dataclass(frozen=True)
-class VaspCompatConfig:
-    """Compatibility-output settings used by the legacy wrappers and CLI."""
-
-    enabled: bool = True
-    write_pseudo_scf: bool = False
-    write_contcar: bool = True
-    write_xdatcar: bool = False
-    write_lammps_traj: bool = False
-    lammps_traj_interval: int = 1
-    lammps_traj_path: str = "lammps.lammpstrj"
-    neb_mode: bool = False
-    neb_prev_positions: Any = None
-    neb_next_positions: Any = None
+        if self.compat is None:
+            return 0
+        return self.compat.isif
 
 
 @dataclass(frozen=True)

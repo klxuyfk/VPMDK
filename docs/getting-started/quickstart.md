@@ -1,12 +1,12 @@
 # Quick Start
 
-## 1. Prepare a Calculation Directory
+## 1. Prepare Input Files in the Current Directory
 
-At minimum, VPMDK needs a `POSCAR`. Typical runs also include `INCAR` and
-`BCAR`.
+At minimum, VPMDK needs a `POSCAR` in the current directory. Typical runs also
+include `INCAR` and `BCAR`.
 
 ```text
-calc_dir/
+./
 ├── POSCAR
 ├── INCAR
 └── BCAR
@@ -50,15 +50,18 @@ DEVICE=cpu
 Run:
 
 ```bash
-vpmdk --dir ./calc_dir
+vpmdk
 ```
 
-Outputs written into `calc_dir/`:
+Outputs written into the current directory:
 
 - `CONTCAR`
 - `OUTCAR`
 - `OSZICAR`
 - `vasprun.xml`
+
+If you want to launch from outside the calculation directory, use
+`vpmdk --dir ./calc_dir`.
 
 ## 4. Run a Single-Point Calculation
 
@@ -131,10 +134,16 @@ from ase.io import read
 import vpmdk
 
 atoms = read("POSCAR")
+backend = vpmdk.BackendConfig(mlp="CHGNET", device="cpu")
 
-sp = vpmdk.single_point(atoms, mlp="CHGNET", device="cpu")
-relaxed = vpmdk.relax(atoms, mlp="CHGNET", steps=100, fmax=0.02)
-traj = vpmdk.md(atoms, mlp="MACE", model="/path/to/model", steps=20, temperature=300)
+sp = vpmdk.single_point(atoms, backend)
+relaxed = vpmdk.relax(atoms, backend, steps=100, fmax=0.02)
+traj = vpmdk.md(
+    atoms,
+    vpmdk.BackendConfig(mlp="MACE", model="/path/to/model"),
+    steps=20,
+    temperature=300,
+)
 ```
 
 See [Python API](../user-guide/python-api.md) for the side-effect model and

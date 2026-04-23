@@ -358,6 +358,7 @@ from .backend_common import (
 )
 from .api import (
     build_calculator,
+    get_calculator,
     get_backend_capabilities,
     list_backends,
     md,
@@ -442,10 +443,9 @@ from .charge_density import (
     _CHGCAR_GRID_INCAR_TAGS,
     _charge_density_options_from_bcar,
     charge_density,
-    determine_vasp_fft_grid,
     predict_charge_density,
-    write_chgcar,
 )
+from . import compat
 from .io.inputs import (
     _apply_initial_magnetization,
     _expand_magmom_to_atoms,
@@ -519,7 +519,6 @@ from .models import (
     RunStep,
     SinglePointConfig,
     SinglePointResult,
-    VaspCompatConfig,
     coerce_backend_config,
     normalize_thermostat_name,
     run_steps_to_energy_rows,
@@ -549,7 +548,6 @@ from .runtime.registry import (
     _attach_fallback_calculator,
     _build_calculator_from_tags,
     _build_calculator_from_init_factory,
-    get_calculator,
 )
 from .runtime.relax import (
     _EnergyConvergenceMonitor,

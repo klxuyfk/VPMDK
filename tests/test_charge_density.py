@@ -12,6 +12,7 @@ from ase import Atoms
 from ase.calculators.vasp import VaspChargeDensity
 
 import vpmdk
+import vpmdk.compat.vasp as vasp_compat
 charge_density_module = importlib.import_module("vpmdk_core.charge_density")
 charge3net_runner_spec = importlib.util.spec_from_file_location(
     "vpmdk_core_charge3net_runner",
@@ -58,7 +59,7 @@ def test_determine_vasp_fft_grid_matches_normal_reference():
         pbc=True,
     )
 
-    grid_shape = vpmdk.determine_vasp_fft_grid(atoms, {"PREC": "N", "ENCUT": "400"})
+    grid_shape = vasp_compat.determine_vasp_fft_grid(atoms, {"PREC": "N", "ENCUT": "400"})
 
     assert grid_shape == (108, 108, 84)
 
@@ -75,7 +76,7 @@ def test_determine_vasp_fft_grid_matches_accurate_reference():
         pbc=True,
     )
 
-    grid_shape = vpmdk.determine_vasp_fft_grid(atoms, {"PREC": "A", "ENCUT": "350"})
+    grid_shape = vasp_compat.determine_vasp_fft_grid(atoms, {"PREC": "A", "ENCUT": "350"})
 
     assert grid_shape == (60, 60, 40)
 
@@ -83,7 +84,7 @@ def test_determine_vasp_fft_grid_matches_accurate_reference():
 def test_determine_vasp_fft_grid_respects_explicit_fine_grid(load_atoms):
     atoms = load_atoms()
 
-    grid_shape = vpmdk.determine_vasp_fft_grid(
+    grid_shape = vasp_compat.determine_vasp_fft_grid(
         atoms,
         {"ENCUT": "520", "NGXF": "20", "NGYF": "24", "NGZF": "28"},
     )
@@ -103,7 +104,7 @@ def test_determine_vasp_fft_grid_preserves_partial_explicit_coarse_override():
         pbc=True,
     )
 
-    grid_shape = vpmdk.determine_vasp_fft_grid(
+    grid_shape = vasp_compat.determine_vasp_fft_grid(
         atoms,
         {"PREC": "N", "ENCUT": "400", "NGX": "80", "NGZ": "60"},
     )
@@ -143,7 +144,7 @@ def test_determine_vasp_fft_grid_rejects_non_integral_explicit_values(incar):
     )
 
     with pytest.raises(ValueError):
-        vpmdk.determine_vasp_fft_grid(atoms, incar)
+        vasp_compat.determine_vasp_fft_grid(atoms, incar)
 
 
 def test_next_even_smooth_number_never_rounds_down():
@@ -346,7 +347,7 @@ def test_write_chgcar_roundtrips_density(tmp_path: Path, load_atoms):
     density = np.arange(24, dtype=float).reshape(2, 3, 4) / 10.0
     path = tmp_path / "CHGCAR"
 
-    vpmdk.write_chgcar(path, atoms, density)
+    vasp_compat.write_chgcar(path, atoms, density)
 
     reread = VaspChargeDensity(filename=str(path))
     assert np.allclose(reread.chg[-1], density)

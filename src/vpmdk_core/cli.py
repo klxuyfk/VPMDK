@@ -6,6 +6,8 @@ import argparse
 import os
 import sys
 
+from .compat import vasp as vasp_compat
+
 
 def _root():
     return sys.modules["vpmdk_core"]
@@ -140,7 +142,7 @@ def main():
                         reference=atoms,
                         **root._charge_density_options_from_bcar(bcar),
                     )
-                    root.write_chgcar(
+                    vasp_compat.write_chgcar(
                         "CHGCAR",
                         atoms,
                         charge_result.density,

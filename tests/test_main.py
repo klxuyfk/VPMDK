@@ -10,6 +10,7 @@ import pytest
 import numpy as np
 
 import vpmdk
+import vpmdk.compat.vasp as vasp_compat
 from tests.conftest import DummyCalculator
 
 
@@ -1616,7 +1617,7 @@ def test_main_writes_chgcar_when_requested(tmp_path: Path, prepare_inputs):
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
     monkeypatch.setattr(vpmdk, "predict_charge_density", fake_predict_charge_density)
-    monkeypatch.setattr(vpmdk, "write_chgcar", fake_write_chgcar)
+    monkeypatch.setattr(vasp_compat, "write_chgcar", fake_write_chgcar)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
     try:
         vpmdk.main()
@@ -1654,7 +1655,7 @@ def test_main_routes_chgcar_backend_from_charge_mlp_flag(tmp_path: Path, prepare
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
     monkeypatch.setattr(vpmdk, "predict_charge_density", fake_predict_charge_density)
-    monkeypatch.setattr(vpmdk, "write_chgcar", lambda *_, **__: None)
+    monkeypatch.setattr(vasp_compat, "write_chgcar", lambda *_, **__: None)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
     try:
         vpmdk.main()
@@ -1689,7 +1690,7 @@ def test_main_routes_chgcar_backend_to_deepcdp_from_charge_mlp_flag(
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
     monkeypatch.setattr(vpmdk, "predict_charge_density", fake_predict_charge_density)
-    monkeypatch.setattr(vpmdk, "write_chgcar", lambda *_, **__: None)
+    monkeypatch.setattr(vasp_compat, "write_chgcar", lambda *_, **__: None)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
     try:
         vpmdk.main()
@@ -1750,7 +1751,7 @@ def test_main_writes_chgcar_in_requested_directory_using_final_cell(
     monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
     monkeypatch.setattr(vpmdk, "run_relaxation", fake_run_relaxation)
     monkeypatch.setattr(vpmdk, "predict_charge_density", fake_predict_charge_density)
-    monkeypatch.setattr(vpmdk, "write_chgcar", fake_write_chgcar)
+    monkeypatch.setattr(vasp_compat, "write_chgcar", fake_write_chgcar)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
     try:
         vpmdk.main()
@@ -1803,7 +1804,7 @@ def test_main_preserves_caller_relative_charge_env_paths_under_dir(
     monkeypatch.setenv("VPMDK_CHARGE_MODEL", "charge_model.pt")
     monkeypatch.setattr(vpmdk, "get_calculator", lambda *_, **__: DummyCalculator())
     monkeypatch.setattr(vpmdk, "predict_charge_density", fake_predict_charge_density)
-    monkeypatch.setattr(vpmdk, "write_chgcar", lambda *_, **__: None)
+    monkeypatch.setattr(vasp_compat, "write_chgcar", lambda *_, **__: None)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(run_dir)])
     try:
         vpmdk.main()

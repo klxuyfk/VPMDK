@@ -7,7 +7,8 @@ import sys
 from contextlib import contextmanager
 from typing import Callable, List
 
-from ..models import RelaxConfig, VaspCompatConfig
+from ..compat.vasp import VaspCompatConfig, VaspRelaxConfig
+from ..models import RelaxConfig
 from ..observers import PrintProgressObserver, VaspCompatObserver
 
 
@@ -163,12 +164,14 @@ def run_relaxation(
             relax_cell=isif >= 3,
             pressure_kbar=pstress,
             energy_tolerance=energy_tolerance,
-            isif=isif,
-            stress_isif=stress_isif,
-            ibrion=ibrion,
+            compat=VaspRelaxConfig(
+                isif=isif,
+                stress_isif=stress_isif,
+                ibrion=ibrion,
+            ),
         ),
         observer=[VaspCompatObserver(), PrintProgressObserver()],
-        vasp_compat=VaspCompatConfig(
+        compatibility=VaspCompatConfig(
             enabled=True,
             write_pseudo_scf=oszicar_pseudo_scf,
             write_contcar=True,

@@ -22,6 +22,7 @@ The root and `src/` shims both re-export `vpmdk_core`, so user code can import
 |------|----------------|
 | `vpmdk_core/api.py` | stable public object-based API |
 | `vpmdk_core/models.py` | config/result dataclasses and thermostat helpers |
+| `vpmdk_core/compat/vasp.py` | VASP-only compatibility config and helpers |
 | `vpmdk_core/runtime/registry.py` | backend registry and calculator construction |
 | `vpmdk_core/backends/` | backend-specific builders |
 | `vpmdk_core/settings/incar.py` | `INCAR` parsing and execution settings |
@@ -86,8 +87,9 @@ Backends are selected by `MLP` / `NNP`, normalized to uppercase, then routed to
 the corresponding builder in `backends/`.
 
 Most builders consume a legacy string-based BCAR mapping because the project
-grew from the CLI first. `BackendConfig` is the adapter that keeps the public
-API clean while still feeding those builders.
+grew from the CLI first. `BackendConfig` is now the primary public object, and
+BCAR-like mappings remain as a compatibility input path that still feeds those
+builders.
 
 ## Relaxation and MD Semantics
 

@@ -5,7 +5,8 @@ from __future__ import annotations
 import sys
 from typing import Dict
 
-from ..models import MDConfig, VaspCompatConfig
+from ..compat.vasp import VaspCompatConfig, VaspMDConfig
+from ..models import MDConfig
 from ..observers import PrintProgressObserver, VaspCompatObserver
 
 
@@ -215,11 +216,10 @@ def run_md(
             temperature_end=teend,
             thermostat_kwargs=dict(thermostat_params or {}),
             smass=smass,
-            isif=isif,
-            mdalgo=mdalgo,
+            compat=VaspMDConfig(isif=isif, mdalgo=mdalgo),
         ),
         observer=[VaspCompatObserver(), PrintProgressObserver()],
-        vasp_compat=VaspCompatConfig(
+        compatibility=VaspCompatConfig(
             enabled=True,
             write_pseudo_scf=oszicar_pseudo_scf,
             write_contcar=True,

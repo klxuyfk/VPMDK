@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import sys
 
-from ..models import SinglePointConfig, VaspCompatConfig
+from ..compat.vasp import VaspCompatConfig, VaspSinglePointConfig
+from ..models import SinglePointConfig
 from ..observers import PrintProgressObserver, VaspCompatObserver
 
 
@@ -25,9 +26,9 @@ def run_single_point(
     result = _root().single_point(
         atoms,
         calculator=calculator,
-        config=SinglePointConfig(isif=isif),
+        config=SinglePointConfig(compat=VaspSinglePointConfig(isif=isif)),
         observer=[VaspCompatObserver(), PrintProgressObserver()],
-        vasp_compat=VaspCompatConfig(
+        compatibility=VaspCompatConfig(
             enabled=True,
             write_pseudo_scf=oszicar_pseudo_scf,
             write_contcar=True,

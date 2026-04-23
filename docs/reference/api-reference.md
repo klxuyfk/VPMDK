@@ -11,20 +11,14 @@ All public symbols are re-exported through `vpmdk`.
 Builds and returns an ASE calculator from:
 
 - a `BackendConfig`
-- a BCAR-like mapping
-- keyword arguments such as `mlp=`, `model=`, `device=`
+- a BCAR-like mapping kept for compatibility
 
 Accepted high-level arguments:
 
 | Argument | Meaning | Default |
 |----------|---------|---------|
-| `config_or_tags` | `BackendConfig` or BCAR-like mapping | `None` |
+| `backend` | `BackendConfig` or BCAR-like mapping | required |
 | `structure` | optional pymatgen structure for backends that benefit from it | `None` |
-| `mlp` | backend name | `CHGNET` when building from keyword args |
-| `model` | checkpoint path or named model | `None` |
-| `device` | backend device hint | `None` |
-| `options` | mapping of backend-specific options | `None` |
-| `**backend_kwargs` | backend-specific options normalized to uppercase keys | none |
 
 ### `build_calculator(...)`
 
@@ -42,13 +36,12 @@ Key parameters:
 | Parameter | Meaning | Default |
 |-----------|---------|---------|
 | `atoms` | ASE atoms object | required |
-| `calculator` | prebuilt calculator or calculator wrapper | `None` |
 | `backend` | `BackendConfig` or BCAR-like mapping | `None` |
-| `mlp`, `model`, `device` | backend-selection convenience args | `None` |
+| `calculator` | prebuilt calculator or calculator wrapper | `None` |
 | `structure` | optional pymatgen structure | `None` |
 | `config` | `SinglePointConfig` | `SinglePointConfig()` |
 | `observer` | one observer or iterable of observers | `None` |
-| `vasp_compat` | `VaspCompatConfig` | `None` |
+| `compatibility` | `vpmdk.compat.vasp.VaspCompatConfig` | `None` |
 
 ### `relax(atoms, ...) -> RelaxResult`
 
@@ -66,8 +59,8 @@ Convenience arguments when `config` is omitted:
 
 Derived defaults:
 
-- `isif=2`, `stress_isif=2` when `relax_cell=False`
-- `isif=3`, `stress_isif=3` when `relax_cell=True`
+- compatibility metadata uses `ISIF=2` when `relax_cell=False`
+- compatibility metadata uses `ISIF=3` when `relax_cell=True`
 
 Special semantics:
 
@@ -116,9 +109,13 @@ Backward-compatible alias of `predict_charge_density(...)`.
 
 ### `determine_vasp_fft_grid(reference, incar) -> tuple[int, int, int]`
 
+Moved under `vpmdk.compat.vasp.determine_vasp_fft_grid(...)`.
+
 Returns the fine FFT grid derived from VASP-like `INCAR` tags.
 
 ### `write_chgcar(path, atoms, density, spin_density=None) -> None`
+
+Moved under `vpmdk.compat.vasp.write_chgcar(...)`.
 
 Writes a VASP-like `CHGCAR` from one or two 3D arrays.
 
@@ -164,7 +161,7 @@ Class helpers:
 
 | Field | Meaning | Default |
 |-------|---------|---------|
-| `isif` | stress/output mode hint | `None` |
+| `compat` | `vpmdk.compat.vasp.VaspSinglePointConfig \| None` | `None` |
 
 ### `RelaxConfig`
 
@@ -175,9 +172,7 @@ Class helpers:
 | `relax_cell` | `False` | upgrades default `isif` to `3` |
 | `pressure_kbar` | `None` | mapped to ASE scalar pressure |
 | `energy_tolerance` | `None` | ionic `delta E` stop criterion |
-| `isif` | `2` | upgraded to `3` when `relax_cell=True` and still default |
-| `stress_isif` | `None` | if unset and `relax_cell=True`, becomes `isif` |
-| `ibrion` | `2` | compatibility metadata only |
+| `compat` | `vpmdk.compat.vasp.VaspRelaxConfig \| None` | advanced compatibility metadata |
 
 ### `MDConfig`
 
@@ -190,15 +185,14 @@ Class helpers:
 | `temperature_end` | `None` |
 | `thermostat_kwargs` | `{}` |
 | `smass` | `None` |
-| `isif` | `0` |
-| `mdalgo` | `None` |
+| `compat` | `vpmdk.compat.vasp.VaspMDConfig \| None` |
 
 Computed property:
 
 - `effective_mdalgo`: explicit `mdalgo` when set, otherwise the value derived
   from `thermostat`
 
-### `VaspCompatConfig`
+### `vpmdk.compat.vasp.VaspCompatConfig`
 
 | Field | Default |
 |-------|---------|

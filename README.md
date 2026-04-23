@@ -1,8 +1,13 @@
 # VPMDK
 
-VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*) is an ASE-oriented wrapper
-for machine-learning interatomic potentials with a VASP-compatible CLI layered
-on top. It provides:
+VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*) is an ASE-oriented layer
+for machine-learning interatomic potentials. Different MLP packages expose
+different calculator constructors, model-loading conventions, and optional
+features; VPMDK provides one place to absorb those differences and present a
+more uniform workflow around `ase.Atoms`.
+
+On top of that core API, VPMDK also provides a VASP-compatible CLI for
+directory-based workflows. In practice it provides:
 
 - a stable Python API for calculator construction, single-point runs,
   relaxations, MD, and charge-density prediction
@@ -52,11 +57,15 @@ More setup details:
 CLI entry point:
 
 ```bash
-vpmdk --dir ./calc_dir
+vpmdk
 ```
+
+Use `--dir PATH` only when you want to run against a calculation directory
+other than the current one.
 
 Python API entry points:
 
+- `vpmdk.BackendConfig(...)`
 - `vpmdk.get_calculator(...)`
 - `vpmdk.single_point(...)`
 - `vpmdk.relax(...)`
@@ -67,10 +76,10 @@ Python API entry points:
 
 ### CLI
 
-Prepare a calculation directory:
+Work in a calculation directory containing:
 
 ```text
-calc_dir/
+./
 ├── POSCAR
 ├── INCAR
 └── BCAR
@@ -97,27 +106,34 @@ DEVICE=cpu
 Run:
 
 ```bash
-vpmdk --dir ./calc_dir
+vpmdk
 ```
+
+If you prefer launching from outside that directory, use `vpmdk --dir ./calc_dir`.
 
 ### Python API
 
 ```python
 from ase.io import read
 import vpmdk
+import vpmdk.compat.vasp as vasp_compat
 
 atoms = read("POSCAR")
+backend = vpmdk.BackendConfig(mlp="CHGNET", device="cpu")
 
-sp = vpmdk.single_point(atoms, mlp="CHGNET", device="cpu")
-relaxed = vpmdk.relax(atoms, mlp="CHGNET", steps=200, fmax=0.02, relax_cell=True)
+sp = vpmdk.single_point(atoms, backend)
+relaxed = vpmdk.relax(atoms, backend, steps=200, fmax=0.02, relax_cell=True)
 traj = vpmdk.md(
     atoms,
-    mlp="CHGNET",
+    backend,
     temperature=300,
     steps=100,
     timestep=1.0,
     thermostat="langevin",
 )
+
+charge = vpmdk.predict_charge_density(atoms, incar={"ENCUT": 520})
+vasp_compat.write_chgcar("CHGCAR", atoms, charge.density, spin_density=charge.spin_density)
 ```
 
 The public Python API does not write `OUTCAR`, `OSZICAR`, or `vasprun.xml` by

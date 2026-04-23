@@ -52,7 +52,11 @@ def execute_single_point(
     root = _root()
     config = config or SinglePointConfig()
     observer = coerce_observer(observer)
-    context = context or RunContext(mode="single_point", ibrion=-1, isif=config.isif)
+    context = context or RunContext(
+        mode="single_point",
+        ibrion=config.effective_ibrion,
+        isif=config.effective_isif,
+    )
     atoms.calc = root._resolve_calculator(calculator)
 
     if observer is not None:
@@ -98,8 +102,8 @@ def execute_relaxation(
     observer = coerce_observer(observer)
     context = context or RunContext(
         mode="relax",
-        ibrion=config.ibrion,
-        isif=config.stress_isif if config.stress_isif is not None else config.isif,
+        ibrion=config.effective_ibrion,
+        isif=config.effective_stress_isif,
     )
     atoms.calc = root._resolve_calculator(calculator)
     if observer is not None:
@@ -132,7 +136,7 @@ def execute_relaxation(
     )
     scalar_pressure_kwarg = scalar_pressure if scalar_pressure is not None else 0.0
     builder, freeze_required = root._make_relaxation_builder(
-        config.isif,
+        config.effective_isif,
         scalar_pressure,
         scalar_pressure_kwarg,
     )
@@ -212,7 +216,7 @@ def execute_md(
     context = context or RunContext(
         mode="md",
         ibrion=0,
-        isif=config.isif,
+        isif=config.effective_isif,
         potim=config.timestep_fs,
         mdalgo=mdalgo,
     )
