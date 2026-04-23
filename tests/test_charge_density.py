@@ -321,6 +321,26 @@ def test_deepcdp_runner_accepts_activation_from_metadata():
     assert deepcdp_runner_module._resolve_activation(args, {"activation": "silu"}) == "silu"
 
 
+def test_deepcdp_runner_prepare_source_dir_prepends_resolved_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    source_dir = tmp_path / "deepcdp-checkout"
+    source_dir.mkdir()
+    original_sys_path = list(sys.path)
+
+    monkeypatch.setattr(deepcdp_runner_module.sys, "path", list(original_sys_path))
+
+    resolved = deepcdp_runner_module._prepare_source_dir(str(source_dir))
+
+    assert resolved == str(source_dir.resolve())
+    assert deepcdp_runner_module.sys.path[0] == str(source_dir.resolve())
+
+    deepcdp_runner_module._prepare_source_dir(str(source_dir))
+
+    assert deepcdp_runner_module.sys.path.count(str(source_dir.resolve())) == 1
+
+
 def test_write_chgcar_roundtrips_density(tmp_path: Path, load_atoms):
     atoms = load_atoms()
     density = np.arange(24, dtype=float).reshape(2, 3, 4) / 10.0
@@ -895,6 +915,8 @@ def test_deepcdp_backend_passes_checkpoint_and_soap_overrides(
     assert command[command.index("--model-path") + 1] == "/tmp/deepcdp/model.pt"
     assert "--metadata-path" in command
     assert command[command.index("--metadata-path") + 1] == "/tmp/deepcdp/config.json"
+    assert "--source-dir" in command
+    assert command[command.index("--source-dir") + 1] == "/tmp/deepcdp"
     assert "--species" in command
     assert command[command.index("--species") + 1] == "O,H"
     assert "--soap-rcut" in command

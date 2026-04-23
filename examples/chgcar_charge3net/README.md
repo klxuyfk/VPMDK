@@ -32,7 +32,8 @@ export VPMDK_CHARGE_MODEL=/path/to/charge3net/models/charge3net_mp.pt
 
 If `VPMDK_CHARGE_MODEL` is not set, VPMDK looks for `models/charge3net_mp.pt` under `VPMDK_CHARGE_SOURCE_DIR`.
 
-To run the charge-density backend on GPU, either export `CHARGE_DEVICE=cuda` in `BCAR` or set `VPMDK_CHARGE_DEVICE=cuda` in your shell and make sure `VPMDK_CHARGE_PYTHON` points to a CUDA-capable environment.
+To run the charge-density backend on GPU, set `CHARGE_DEVICE=cuda` in `BCAR`
+and make sure `VPMDK_CHARGE_PYTHON` points to a CUDA-capable environment.
 
 ## Run
 

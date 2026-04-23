@@ -764,6 +764,8 @@ def _run_deepcdp_backend(
             "--probe-count",
             str(int(probe_count)),
         ]
+        if source_dir:
+            command.extend(["--source-dir", str(source_dir)])
         if device is not None:
             command.extend(["--device", str(_root()._resolve_device(device))])
         if resolved_metadata_path:
