@@ -64,8 +64,8 @@ Common packages:
 - `orb-models` for `MLP=ORB`
 - `upet` for `MLP=UPET`
 - `TACE` for `MLP=TACE`
-- `fairchem` for `MLP=FAIRCHEM` / `FAIRCHEM_V2`
-- a compatible OCP / FAIRChem v1 install for `MLP=FAIRCHEM_V1`
+- `fairchem-core>=2,<3` for `MLP=FAIRCHEM` / `FAIRCHEM_V2` / `ESEN`
+- `fairchem-core==1.10.0` as the documented baseline for `MLP=FAIRCHEM_V1`
 - `grace-tensorpotential` for `MLP=GRACE`
 - `deepmd-kit` for `MLP=DEEPMD`
 - `mattersim` for `MLP=MATTERSIM`
@@ -73,6 +73,37 @@ Common packages:
 
 See [Backend Reference](../reference/backends.md) for the exact per-backend
 `MODEL` expectations and defaults.
+
+## FAIRChem Version Guidance
+
+FAIRChem support is version-sensitive and the package name on PyPI is
+`fairchem-core`, not `fairchem`.
+
+Recommended installation patterns:
+
+```bash
+pip install "fairchem-core>=2,<3"
+```
+
+Use that for:
+
+- `MLP=FAIRCHEM`
+- `MLP=FAIRCHEM_V2`
+- `MLP=ESEN`
+
+For legacy v1 / OCP-style usage, the documented baseline in this repository is:
+
+```bash
+pip install "fairchem-core==1.10.0"
+```
+
+Use that for:
+
+- `MLP=FAIRCHEM_V1`
+
+Do not mix FAIRChem v1 and v2 in the same environment. If you need
+reproducibility, pin an exact `fairchem-core` release in your environment file
+rather than relying on an open-ended install.
 
 ## Editable Development Setup
 

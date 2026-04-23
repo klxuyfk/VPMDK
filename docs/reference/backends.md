@@ -28,8 +28,8 @@ the behavior implemented in `src/vpmdk_core/backends/`.
 | `UPET` | `upet` / `UPETCalculator` | required local checkpoint or named model | none | `UPET_VERSION`, `UPET_NON_CONSERVATIVE` |
 | `TACE` | `TACE` / `TACEAseCalc` | required local checkpoint or named foundation model | none | `TACE_DTYPE`, `TACE_SPIN_ON`, `TACE_NEIGHBORLIST_BACKEND`, `TACE_FIDELITY_IDX` / `TACE_LEVEL` |
 | `EQUFLASH` | EquFlash / `GGNN.common.calculator.UCalculator` | required local checkpoint file | none | currently no bundled named models |
-| `FAIRCHEM` / `FAIRCHEM_V2` / `ESEN` | `fairchem` / `FAIRChemCalculator` | named checkpoint/model identifier | `esen-sm-direct-all-oc25` | `FAIRCHEM_TASK`, `FAIRCHEM_INFERENCE_SETTINGS`, `DEVICE` |
-| `FAIRCHEM_V1` | OCP / FAIRChem v1 `OCPCalculator` or predictor | required local checkpoint; config usually required | none | `FAIRCHEM_CONFIG`, `FAIRCHEM_V1_PREDICTOR`, `DEVICE` |
+| `FAIRCHEM` / `FAIRCHEM_V2` / `ESEN` | `fairchem-core` 2.x / `FAIRChemCalculator` | named checkpoint/model identifier | `esen-sm-direct-all-oc25` | `FAIRCHEM_TASK`, `FAIRCHEM_INFERENCE_SETTINGS`, `DEVICE` |
+| `FAIRCHEM_V1` | `fairchem-core==1.10.0` baseline or compatible OCP/FAIRChem v1 install / `OCPCalculator` or predictor | required local checkpoint; config usually required | none | `FAIRCHEM_CONFIG`, `FAIRCHEM_V1_PREDICTOR`, `DEVICE` |
 | `GRACE` | TensorPotential / `TPCalculator` or `grace_fm` | local model path or foundation-model name | `GRACE-2L-MP-r6` when available | GRACE padding/dtype tags |
 | `DEEPMD` | `deepmd-kit` / `DP` | required local frozen model or supported checkpoint | none | `DEEPMD_TYPE_MAP`, `DEEPMD_HEAD` |
 
@@ -79,7 +79,8 @@ it supports that concept.
 
 ## Known Backend-Specific Caveats
 
-- `FAIRCHEM_V1` and `FAIRCHEM_V2` are not environment-compatible in practice.
+- `FAIRCHEM_V1` and `FAIRCHEM_V2` are not environment-compatible in practice;
+  use separate environments and pin `fairchem-core` versions intentionally.
 - `FLASHTP` requires `sevenn` plus FlashTP support visible to the installed
   `SevenNetCalculator`.
 - `SEVENNET_ENABLE_CUEQ`, `SEVENNET_ENABLE_FLASH`, and `SEVENNET_ENABLE_OEQ`

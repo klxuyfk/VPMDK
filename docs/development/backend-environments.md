@@ -37,8 +37,20 @@ Important caveats:
 Guidance:
 
 - keep this separate from FAIRChem v1
+- install from the `fairchem-core` PyPI package, using a 2.x release line
 - gated checkpoints may require HuggingFace access
 - UMA is a convenient path once access is available
+
+Baseline install pattern:
+
+```bash
+python -m venv /tmp/fairchem_v2_env
+/tmp/fairchem_v2_env/bin/pip install --upgrade pip
+/tmp/fairchem_v2_env/bin/pip install "fairchem-core>=2,<3"
+```
+
+If you need strict reproducibility, pin an exact 2.x version in your lockfile
+instead of using the open 2.x range.
 
 Typical settings:
 
