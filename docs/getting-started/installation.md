@@ -102,6 +102,12 @@ Use that for:
 
 - `MLP=FAIRCHEM_V1`
 
+This is only the baseline package pin, not the full working recipe. The v1 path
+also needs the matching PyG extras and a SciPy pin that still provides
+`scipy.special.sph_harm`. Use the full environment recipe in
+[Backend Environment Notes](../development/backend-environments.md) when setting
+up `MLP=FAIRCHEM_V1`.
+
 Do not mix FAIRChem v1 and v2 in the same environment. If you need
 reproducibility, pin an exact `fairchem-core` release in your environment file
 rather than relying on an open-ended install.

@@ -51,7 +51,10 @@ These metadata are descriptive and are not a full runtime guarantee.
 Device handling is backend-specific:
 
 - most Torch-style backends use `DEVICE` directly
-- if `DEVICE` is omitted, VPMDK's helper prefers `cuda` when `torch.cuda.is_available()`
+- backends that call VPMDK's `_resolve_device()` helper prefer `cuda` when
+  `torch.cuda.is_available()` and `DEVICE` is omitted
+- other backends, such as FAIRChem and ORB, pass the raw `DEVICE` value through
+  and otherwise stay on the backend's own default device behavior
 - `NEQUIX_BACKEND=torch` supports explicit post-construction device transfer
 - `NEQUIX_BACKEND=jax` follows the active JAX runtime rather than VPMDK moving the model
 
