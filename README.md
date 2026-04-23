@@ -11,9 +11,10 @@ on top. It provides:
 
 Supported integrations include CHGNet, MACE, MatGL/M3GNet, SevenNet, FlashTP,
 Eqnorm, MatRIS, AlphaNet, HIENet, Nequix, NequIP, Allegro, ORB, UPET, TACE,
-FAIRChem, GRACE, DeePMD, MatterSim, Matlantis, and optional charge-density
-backends such as ChargE3Net, DeepDFT, and DeepCDP. Actual availability depends
-on which backend packages are installed in your environment.
+EquFlash, FAIRChem, GRACE, DeePMD, MatterSim, and Matlantis, plus optional
+charge-density backends such as ChargE3Net, DeepDFT, and DeepCDP. Actual
+availability depends on which backend packages are installed in your
+environment.
 
 ## Installation
 

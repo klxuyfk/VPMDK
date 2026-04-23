@@ -21,14 +21,16 @@ python -m venv /tmp/fairchem_v1_env
 /tmp/fairchem_v1_env/bin/pip install fairchem-core==1.10.0
 /tmp/fairchem_v1_env/bin/pip install torch-scatter torch-sparse \
   -f https://data.pyg.org/whl/torch-2.4.0+cu121.html
-/tmp/fairchem_v1_env/bin/pip install "scipy==1.16.3"
+/tmp/fairchem_v1_env/bin/pip install "scipy==1.15.3"
 ```
 
 Important caveats:
 
 - PyG extras such as `torch-scatter` and `torch-sparse` are required for common
   OCP import paths
-- newer SciPy versions can break v1 code that still expects `scipy.special.sph_harm`
+- use a SciPy release that still provides `scipy.special.sph_harm`; the pinned
+  `1.15.3` recipe remains compatible with Python 3.10 while avoiding the
+  removal planned in newer SciPy releases
 - `MODEL` is required
 - `FAIRCHEM_CONFIG` is usually required as well
 
