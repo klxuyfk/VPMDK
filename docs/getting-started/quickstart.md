@@ -118,7 +118,8 @@ CHARGE_MODEL=/path/to/charge3net_mp.pt
 ```
 
 The `CHGCAR` grid is derived from `INCAR` using `NGXF/NGYF/NGZF`, then
-`NGX/NGY/NGZ + PREC`, then `ENCUT + PREC`.
+`NGX/NGY/NGZ`, then `ENCUT`. If `PREC` is omitted, VPMDK falls back to
+`PREC=NORMAL`.
 
 ## 7. Try the Python API
 

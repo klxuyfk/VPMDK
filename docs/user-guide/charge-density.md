@@ -28,8 +28,12 @@ grid from `INCAR`.
 Priority order:
 
 1. `NGXF`, `NGYF`, `NGZF`
-2. `NGX`, `NGY`, `NGZ` plus `PREC`
-3. `ENCUT` plus `PREC`
+2. `NGX`, `NGY`, `NGZ`
+3. `ENCUT`
+
+`PREC` is optional in the derived-grid path. When it is omitted, VPMDK uses
+`PREC=NORMAL`. `ENCUT` is only required when VPMDK has to derive missing coarse
+grid dimensions rather than taking a complete `NGX/NGY/NGZ` triplet directly.
 
 Recognized `PREC` aliases:
 

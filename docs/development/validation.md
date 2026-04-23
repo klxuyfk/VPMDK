@@ -3,14 +3,15 @@
 ## Scope
 
 This page records the validation status currently documented in the repository.
-It is based on the maintained validation notes and test suite, not on an
-automatic rerun performed every time docs are edited.
+It is the authoritative in-repo summary of historical manual validation plus
+the current test suite; it is not regenerated automatically every time docs are
+edited.
 
 There are two validation layers:
 
 - unit/regression tests under `tests/`
-- longer backend-dependent integration or manual runs under `tests/integration/`
-  and historical maintainer notes
+- longer backend-dependent integration or manually summarized validation
+  coverage under `tests/integration/` and this page
 
 ## Regression Coverage
 
@@ -41,7 +42,7 @@ validation against a reference dataset.
 
 ## Historically Recorded Manual CUDA MD Runs
 
-The repository's maintained notes record successful manual CUDA MD runs for:
+This page records successful manual CUDA MD runs for:
 
 - CHGNet
 - SevenNet
@@ -60,7 +61,7 @@ Recorded exclusions:
 
 - Matlantis was explicitly excluded from that manual validation round
 
-The same notes also record recurring environment fixes:
+This page also records recurring environment fixes:
 
 - GRACE: missing `ptxas`
 - MatGL: DGL backend mismatch
@@ -70,7 +71,7 @@ The same notes also record recurring environment fixes:
 
 ## Model Storage
 
-Historical validation notes reference external checkpoint storage such as:
+Historically validated setups have used external checkpoint storage such as:
 
 ```text
 /mnt/d/lin_temp/codex
