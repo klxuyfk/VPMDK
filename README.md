@@ -52,8 +52,11 @@ More setup details:
 CLI entry point:
 
 ```bash
-vpmdk --dir ./calc_dir
+vpmdk
 ```
+
+Use `--dir PATH` only when you want to run against a calculation directory
+other than the current one.
 
 Python API entry points:
 
@@ -67,10 +70,10 @@ Python API entry points:
 
 ### CLI
 
-Prepare a calculation directory:
+Work in a calculation directory containing:
 
 ```text
-calc_dir/
+./
 ├── POSCAR
 ├── INCAR
 └── BCAR
@@ -97,8 +100,10 @@ DEVICE=cpu
 Run:
 
 ```bash
-vpmdk --dir ./calc_dir
+vpmdk
 ```
+
+If you prefer launching from outside that directory, use `vpmdk --dir ./calc_dir`.
 
 ### Python API
 

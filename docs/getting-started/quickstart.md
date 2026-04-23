@@ -1,12 +1,12 @@
 # Quick Start
 
-## 1. Prepare a Calculation Directory
+## 1. Prepare Input Files in the Current Directory
 
-At minimum, VPMDK needs a `POSCAR`. Typical runs also include `INCAR` and
-`BCAR`.
+At minimum, VPMDK needs a `POSCAR` in the current directory. Typical runs also
+include `INCAR` and `BCAR`.
 
 ```text
-calc_dir/
+./
 ├── POSCAR
 ├── INCAR
 └── BCAR
@@ -50,15 +50,18 @@ DEVICE=cpu
 Run:
 
 ```bash
-vpmdk --dir ./calc_dir
+vpmdk
 ```
 
-Outputs written into `calc_dir/`:
+Outputs written into the current directory:
 
 - `CONTCAR`
 - `OUTCAR`
 - `OSZICAR`
 - `vasprun.xml`
+
+If you want to launch from outside the calculation directory, use
+`vpmdk --dir ./calc_dir`.
 
 ## 4. Run a Single-Point Calculation
 

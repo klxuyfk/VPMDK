@@ -188,14 +188,14 @@ Backend-specific overrides win over the shared graph-converter tags.
 ## Notes on Relative Paths
 
 `MODEL` and most backend-local paths are resolved relative to the active run
-directory because the CLI changes into `--dir` before constructing the
-calculator.
+directory because the CLI changes into the selected calculation directory
+before constructing the calculator.
 
 Charge-environment paths are a special case: relative `CHARGE_*` paths are
 handled differently depending on how they are provided:
 
 - explicit `CHARGE_PYTHON`, `CHARGE_SOURCE_DIR`, and `CHARGE_MODEL` values in
-  `BCAR` are used as written, so under `vpmdk --dir ...` they are interpreted
+  `BCAR` are used as written, so when you use `--dir` they are interpreted
   relative to the selected calculation directory
 - environment-variable fallbacks are resolved against the caller's original
   shell working directory

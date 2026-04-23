@@ -131,7 +131,8 @@ Path resolution detail:
 - if a path is absolute, it is used directly
 - explicit `CHARGE_PYTHON`, `CHARGE_SOURCE_DIR`, and `CHARGE_MODEL` values are
   used as written; in CLI runs they therefore behave like paths relative to the
-  active calculation directory when `vpmdk --dir ...` is used
+  active calculation directory, including when a different one is selected with
+  `--dir`
 - environment-variable fallbacks are resolved against the original caller
   working directory through `VPMDK_CHARGE_ENV_BASE_DIR`
 
