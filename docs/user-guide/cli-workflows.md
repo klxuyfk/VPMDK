@@ -9,10 +9,11 @@ runs one workflow, and writes VASP-like outputs back into that same directory.
 Main entry point:
 
 ```bash
-vpmdk --dir ./calc_dir
+vpmdk
 ```
 
-If `--dir` is omitted, the current directory is used.
+Use `--dir PATH` only when you want to target a calculation directory other
+than the current one.
 
 ## Input Files
 
@@ -168,8 +169,8 @@ Charge-backend settings come from `BCAR`. Relative path handling depends on how
 the value is provided:
 
 - explicit `CHARGE_PYTHON`, `CHARGE_SOURCE_DIR`, and `CHARGE_MODEL` values from
-  `BCAR` are used as written, so under `vpmdk --dir ...` they are interpreted
-  relative to the selected run directory
+  `BCAR` are used as written, so if you select another calculation directory
+  with `--dir` they are interpreted relative to that run directory
 - environment-variable fallbacks such as `VPMDK_CHARGE_PYTHON` are resolved
   relative to the caller's original working directory
 

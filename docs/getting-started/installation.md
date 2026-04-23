@@ -28,17 +28,20 @@ test suite stubs, but not enough to execute most production force fields.
 After installation, the main command is:
 
 ```bash
-vpmdk --dir ./calc_dir
+vpmdk
 ```
 
 From a source checkout, both compatibility wrappers also work:
 
 ```bash
-python -m vpmdk --dir ./calc_dir
-python vpmdk.py --dir ./calc_dir
+python -m vpmdk
+python vpmdk.py
 ```
 
 All three route into `vpmdk_core.main()`.
+
+Use `--dir PATH` only when you want to run against a calculation directory
+other than the current one.
 
 ## Backend Packages
 
