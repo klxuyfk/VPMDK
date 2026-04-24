@@ -81,7 +81,12 @@ def _load_incar(path: str):
     return {}
 
 
-def _warn_for_unsupported_incar_tags(incar, *, pseudo_scf_enabled: bool = False) -> None:
+def _warn_for_unsupported_incar_tags(
+    incar,
+    *,
+    pseudo_scf_enabled: bool = False,
+    chgcar_enabled: bool = False,
+) -> None:
     """Emit warnings for INCAR options that are silently ignored."""
 
     import sys
@@ -95,6 +100,14 @@ def _warn_for_unsupported_incar_tags(incar, *, pseudo_scf_enabled: bool = False)
             print(
                 f"Warning: INCAR tag {key} does not affect the run and is used only "
                 "for pseudo-SCF compatibility output"
+            )
+            continue
+        if key in getattr(root, "_CHGCAR_GRID_INCAR_TAGS", frozenset()):
+            if chgcar_enabled:
+                continue
+            print(
+                f"Warning: INCAR tag {key} affects only CHGCAR grid output and "
+                "WRITE_CHGCAR is not enabled; ignoring it."
             )
             continue
         if key not in supported_tags:
@@ -283,6 +296,13 @@ def _should_write_pseudo_scf(bcar_tags: Dict[str, str]) -> bool:
     """Return ``True`` when BCAR requests pseudo electronic-step compatibility output."""
 
     raw = bcar_tags.get("WRITE_PSEUDO_SCF", bcar_tags.get("WRITE_OSZICAR_PSEUDO_SCF", "0"))
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _should_write_chgcar(bcar_tags: Dict[str, str]) -> bool:
+    """Return ``True`` when BCAR requests CHGCAR output."""
+
+    raw = bcar_tags.get("WRITE_CHGCAR", "0")
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 

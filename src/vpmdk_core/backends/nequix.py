@@ -99,44 +99,19 @@ def _build_nequix_calculator(bcar_tags: Dict[str, str], *, structure=None):
         kwargs["model_name"] = _resolve_nequix_model_name(model_value)
 
     requested_device = bcar_tags.get("DEVICE")
-    if backend == "torch":
+    calculator = root.NequixCalculator(**kwargs)
+
+    if backend == "torch" and requested_device:
         try:
             import torch
 
-            nequix_module = root.importlib.import_module("nequix.calculator")
-            nequix_data_module = root.importlib.import_module("nequix.data")
-
-            torch_device = torch.device(
-                root._resolve_device(requested_device)
-                or ("cuda" if torch.cuda.is_available() else "cpu")
-            )
-            model, config = nequix_module.from_pretrained(
-                model_name=kwargs.get("model_name"),
-                model_path=kwargs.get("model_path"),
-                backend="torch",
-                use_kernel=use_kernel,
-            )
-
-            calculator = root.NequixCalculator.__new__(root.NequixCalculator)
-            root.Calculator.__init__(calculator)
-            calculator.model = model.to(torch_device)
-            calculator.config = config
+            torch_device = torch.device(requested_device)
+            calculator.model = calculator.model.to(torch_device)
             calculator.device = torch_device
             calculator.model.eval()
-            calculator.compile_state = (
-                False if use_compile and torch_device.type == "cuda" else True
-            )
-            calculator.atom_indices = nequix_data_module.atomic_numbers_to_indices(
-                config["atomic_numbers"]
-            )
-            calculator.cutoff = config["cutoff"]
-            calculator._capacity = None
-            calculator._capacity_multiplier = capacity_multiplier
-            calculator.backend = "torch"
-            return calculator
         except Exception as exc:
             raise RuntimeError(
-                f"Unable to initialize Nequix torch backend for DEVICE={requested_device!r}."
+                f"Unable to move Nequix torch backend to DEVICE={requested_device!r}."
             ) from exc
 
-    return root.NequixCalculator(**kwargs)
+    return calculator

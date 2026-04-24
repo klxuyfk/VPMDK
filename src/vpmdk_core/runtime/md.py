@@ -5,6 +5,10 @@ from __future__ import annotations
 import sys
 from typing import Dict
 
+from ..compat.vasp import VaspCompatConfig, VaspMDConfig
+from ..models import MDConfig
+from ..observers import PrintProgressObserver, VaspCompatObserver
+
 
 def _root():
     return sys.modules["vpmdk_core"]
@@ -201,122 +205,31 @@ def run_md(
     lammps_traj_interval: int = 1,
     lammps_traj_path: str = "lammps.lammpstrj",
 ):
-    root = _root()
-    atoms.calc = root._resolve_calculator(calculator)
-    recorder = root._initialize_vasp_compat_outputs(
+    result = _root().md(
         atoms,
-        ibrion=0,
-        isif=isif,
-        potim=timestep,
-        mdalgo=mdalgo,
-        write_oszicar_pseudo_scf=oszicar_pseudo_scf,
-        neb_mode=neb_mode,
-        neb_prev_positions=neb_prev_positions,
-        neb_next_positions=neb_next_positions,
+        calculator=calculator,
+        config=MDConfig(
+            steps=steps,
+            temperature=temperature,
+            timestep_fs=timestep,
+            thermostat="nve",
+            temperature_end=teend,
+            thermostat_kwargs=dict(thermostat_params or {}),
+            smass=smass,
+            compat=VaspMDConfig(isif=isif, mdalgo=mdalgo),
+        ),
+        observer=[VaspCompatObserver(), PrintProgressObserver()],
+        compatibility=VaspCompatConfig(
+            enabled=True,
+            write_pseudo_scf=oszicar_pseudo_scf,
+            write_contcar=True,
+            write_xdatcar=True,
+            write_lammps_traj=write_lammps_traj,
+            lammps_traj_interval=lammps_traj_interval,
+            lammps_traj_path=lammps_traj_path,
+            neb_mode=neb_mode,
+            neb_prev_positions=neb_prev_positions,
+            neb_next_positions=neb_next_positions,
+        ),
     )
-    if temperature <= 0:
-        velocities = atoms.get_velocities()
-        if velocities is None:
-            zeros = [[0.0, 0.0, 0.0] for _ in range(len(atoms))]
-            atoms.set_velocities(zeros)
-        else:
-            atoms.set_velocities(velocities * 0.0)
-    else:
-        root.velocitydistribution.MaxwellBoltzmannDistribution(
-            atoms, temperature_K=temperature
-        )
-    params = thermostat_params or {}
-    dyn, update_temperature = root._select_md_dynamics(
-        atoms,
-        mdalgo,
-        timestep,
-        temperature,
-        smass,
-        params,
-    )
-    target_end = temperature if teend is None else teend
-    md_step = 0
-
-    def _log_md_state() -> None:
-        nonlocal md_step
-        md_step += 1
-        potential_energy = atoms.get_potential_energy()
-        try:
-            kinetic_energy = atoms.get_kinetic_energy()
-        except Exception:
-            kinetic_energy = 0.0
-        thermostat_potential = root._extract_numeric_attribute(
-            dyn,
-            (
-                "thermostat_potential_energy",
-                "thermostat_potential",
-                "nose_potential_energy",
-                "nhc_potential_energy",
-            ),
-        )
-        thermostat_kinetic = root._extract_numeric_attribute(
-            dyn,
-            (
-                "thermostat_kinetic_energy",
-                "thermostat_kinetic",
-                "nose_kinetic_energy",
-                "nhc_kinetic_energy",
-            ),
-        )
-        total_energy = potential_energy + kinetic_energy + thermostat_potential + thermostat_kinetic
-        try:
-            temperature_inst = atoms.get_temperature()
-        except Exception:
-            temperature_inst = 0.0
-        print(
-            f"{md_step:7d} T={temperature_inst:7.1f} "
-            f"E= {root._format_energy_value(total_energy)} "
-            f"F= {root._format_energy_value(potential_energy)} "
-            f"E0= {root._format_energy_value(potential_energy)}  "
-            f"EK= {root._format_energy_value(kinetic_energy)} "
-            f"SP= {root._format_energy_value(thermostat_potential)} "
-            f"SK= {root._format_energy_value(thermostat_kinetic)}"
-        )
-        root._record_vasp_compat_step(
-            recorder,
-            atoms,
-            step_index=md_step,
-            potential_energy=potential_energy,
-            total_energy=total_energy,
-            kinetic_energy=kinetic_energy,
-            thermostat_potential=thermostat_potential,
-            thermostat_kinetic=thermostat_kinetic,
-            temperature=temperature_inst,
-        )
-
-    for i in range(steps):
-        dyn.run(1)
-        atoms.wrap()
-        _log_md_state()
-        root._write_xdatcar_step("XDATCAR", atoms, i)
-        if write_lammps_traj and i % lammps_traj_interval == 0:
-            root._write_lammps_trajectory_step(lammps_traj_path, atoms, i)
-        if steps > 1 and i + 1 < steps and target_end != temperature:
-            next_temp = temperature + (target_end - temperature) * (i + 1) / (steps - 1)
-            update_temperature(next_temp)
-    if not recorder.steps:
-        potential_energy = atoms.get_potential_energy()
-        kinetic_energy = 0.0
-        try:
-            kinetic_energy = atoms.get_kinetic_energy()
-        except Exception:
-            kinetic_energy = 0.0
-        root._record_vasp_compat_step(
-            recorder,
-            atoms,
-            step_index=1,
-            potential_energy=potential_energy,
-            total_energy=potential_energy + kinetic_energy,
-            kinetic_energy=kinetic_energy,
-            temperature=float(temperature),
-        )
-    atoms.wrap()
-    root._write_vasprun_xml(recorder, atoms)
-    root._append_outcar_footer(recorder)
-    root.write("CONTCAR", atoms, direct=True)
-    return atoms.get_potential_energy()
+    return result.potential_energy

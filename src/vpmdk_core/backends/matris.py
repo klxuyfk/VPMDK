@@ -106,23 +106,19 @@ def _build_matris_calculator(bcar_tags: Dict[str, str]):
             )
         return root._instantiate_matris_calculator(model=model, task=task, device=device)
 
-    if graph_converter_algorithm is None:
-        return root.MatRISCalculator(model=model_value, task=task, device=device)
+    kwargs: Dict[str, object] = {}
+    if graph_converter_algorithm is not None and root._callable_supports_parameter(
+        root.MatRISCalculator,
+        "graph_converter_algorithm",
+    ):
+        kwargs["graph_converter_algorithm"] = graph_converter_algorithm
+        return root.MatRISCalculator(model=model_value, task=task, device=device, **kwargs)
 
-    try:
-        return root.MatRISCalculator(
-            model=model_value,
-            task=task,
-            device=device,
-            graph_converter_algorithm=graph_converter_algorithm,
+    calculator = root.MatRISCalculator(model=model_value, task=task, device=device, **kwargs)
+    if graph_converter_algorithm is not None:
+        calculator.model = root._override_model_graph_converter_algorithm(
+            calculator.model,
+            algorithm=graph_converter_algorithm,
+            backend_name="MatRIS",
         )
-    except TypeError:
-        calculator = root.MatRISCalculator(model=model_value, task=task, device=device)
-        model = getattr(calculator, "model", None)
-        if model is not None:
-            calculator.model = root._override_model_graph_converter_algorithm(
-                model,
-                algorithm=graph_converter_algorithm,
-                backend_name="MatRIS",
-            )
-        return calculator
+    return calculator

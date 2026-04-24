@@ -1,0 +1,10 @@
+MLP=CHGNET
+DEVICE=cpu
+WRITE_CHGCAR=1
+
+# Optional explicit overrides instead of environment variables:
+# CHARGE_MLP=CHARGE3NET
+# CHARGE_SOURCE_DIR=/path/to/charge3net
+# CHARGE_PYTHON=/path/to/charge3net-env/bin/python
+# CHARGE_MODEL=/path/to/charge3net/models/charge3net_mp.pt
+# CHARGE_DEVICE=cpu
