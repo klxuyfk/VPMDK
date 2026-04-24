@@ -23,11 +23,11 @@ import vpmdk
 def main() -> None:
     here = Path(__file__).resolve().parent
     atoms = read(here / "POSCAR")
+    backend = vpmdk.BackendConfig(mlp="CHGNET", device="cpu")
 
     result = vpmdk.relax(
         atoms,
-        mlp="CHGNET",
-        device="cpu",
+        backend,
         steps=5,
         fmax=0.05,
         relax_cell=False,

@@ -33,4 +33,4 @@ python list_backends.py
 
 - These are library examples, so they do not write `OUTCAR`/`OSZICAR`/`vasprun.xml` by default.
 - `relax.py` explicitly writes `relaxed.vasp` so the optimized structure is easy to inspect.
-- If you want VASP-style compatibility outputs from Python, attach `vpmdk.VaspCompatObserver()` with `vpmdk.VaspCompatConfig(...)`.
+- If you want VASP-style compatibility outputs from Python, attach `vpmdk.VaspCompatObserver()` with `vpmdk.compat.vasp.VaspCompatConfig(...)`.

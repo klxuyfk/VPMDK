@@ -16,6 +16,7 @@ if SRC_DIR.is_dir() and str(SRC_DIR) not in sys.path:
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib-vpmdk")
 
 import vpmdk
+import vpmdk.compat.vasp as vasp_compat
 
 
 def main() -> None:
@@ -30,7 +31,12 @@ def main() -> None:
     )
 
     output_path = HERE / "api_CHGCAR"
-    vpmdk.write_chgcar(output_path, atoms, result.density, spin_density=result.spin_density)
+    vasp_compat.write_chgcar(
+        output_path,
+        atoms,
+        result.density,
+        spin_density=result.spin_density,
+    )
 
     print(f"backend={result.backend}")
     print(f"grid_shape={result.grid_shape}")

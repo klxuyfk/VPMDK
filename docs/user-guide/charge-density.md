@@ -230,7 +230,7 @@ Returned object:
 
 ## Writing CHGCAR
 
-`write_chgcar(path, atoms, density, spin_density=None)` writes a VASP-like
+`vpmdk.compat.vasp.write_chgcar(path, atoms, density, spin_density=None)` writes a VASP-like
 volumetric file using ASE's `VaspChargeDensity`.
 
 Constraints:

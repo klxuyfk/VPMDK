@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from typing import Any
 
+from .compat.vasp import VaspCompatConfig
 from .charge_density import predict_charge_density
 from .execution import execute_md, execute_relaxation, execute_single_point
 from .models import (
@@ -19,7 +20,6 @@ from .models import (
     RunContext,
     SinglePointConfig,
     SinglePointResult,
-    VaspCompatConfig,
     coerce_backend_config,
 )
 
@@ -43,6 +43,16 @@ def _derive_structure_from_atoms(atoms, structure=None):
         except Exception:
             return None
     return None
+
+
+def _require_backend_config(backend: object) -> BackendConfig:
+    """Return a validated public backend config."""
+
+    if not isinstance(backend, BackendConfig):
+        raise TypeError(
+            "Public Python API backend arguments must be BackendConfig instances."
+        )
+    return backend
 
 
 _BASE_CAPABILITIES: dict[str, BackendCapabilities] = {
@@ -218,60 +228,49 @@ def get_backend_capabilities(
 
 
 def build_calculator(
-    config_or_tags: BackendConfig | dict[str, Any] | None = None,
+    backend: BackendConfig,
     *,
     structure=None,
-    mlp: str | None = None,
-    model: str | None = None,
-    device: str | None = None,
-    options: dict[str, Any] | None = None,
-    **backend_kwargs: Any,
 ):
-    """Build an ASE calculator from library config or BCAR-like tags."""
+    """Build an ASE calculator from ``BackendConfig``."""
 
-    config = coerce_backend_config(
-        config_or_tags,
-        mlp=mlp,
-        model=model,
-        device=device,
-        options=options,
-        **backend_kwargs,
-    )
+    config = coerce_backend_config(_require_backend_config(backend))
     return _root()._build_calculator_from_tags(config.to_legacy_tags(), structure=structure)
+
+
+def get_calculator(
+    backend: BackendConfig,
+    *,
+    structure=None,
+):
+    """Return an ASE calculator from ``BackendConfig``."""
+
+    return build_calculator(backend, structure=structure)
 
 
 def single_point(
     atoms,
+    backend: BackendConfig | None = None,
     *,
     calculator=None,
-    backend: BackendConfig | dict[str, Any] | None = None,
-    mlp: str | None = None,
-    model: str | None = None,
-    device: str | None = None,
     structure=None,
     config: SinglePointConfig | None = None,
     observer=None,
-    vasp_compat: VaspCompatConfig | None = None,
-    **backend_kwargs: Any,
+    compatibility: VaspCompatConfig | None = None,
 ) -> SinglePointResult:
     """Run a single-point evaluation using either a supplied or constructed calculator."""
 
     if calculator is None:
+        if backend is None:
+            raise ValueError("single_point() requires either calculator=... or backend=...")
         structure = _derive_structure_from_atoms(atoms, structure)
-        calculator = build_calculator(
-            backend,
-            mlp=mlp,
-            model=model,
-            device=device,
-            structure=structure,
-            **backend_kwargs,
-        )
+        calculator = build_calculator(backend, structure=structure)
     config = config or SinglePointConfig()
     context = RunContext(
         mode="single_point",
-        ibrion=-1,
-        isif=config.isif,
-        vasp_compat=vasp_compat,
+        ibrion=config.effective_ibrion,
+        isif=config.effective_isif,
+        vasp_compat=compatibility,
     )
     return execute_single_point(
         atoms,
@@ -284,12 +283,9 @@ def single_point(
 
 def relax(
     atoms,
+    backend: BackendConfig | None = None,
     *,
     calculator=None,
-    backend: BackendConfig | dict[str, Any] | None = None,
-    mlp: str | None = None,
-    model: str | None = None,
-    device: str | None = None,
     structure=None,
     config: RelaxConfig | None = None,
     steps: int = 200,
@@ -298,35 +294,27 @@ def relax(
     pressure_kbar: float | None = None,
     energy_tolerance: float | None = None,
     observer=None,
-    vasp_compat: VaspCompatConfig | None = None,
-    **backend_kwargs: Any,
+    compatibility: VaspCompatConfig | None = None,
 ) -> RelaxResult:
     """Run a relaxation using the stable library API."""
 
     if calculator is None:
+        if backend is None:
+            raise ValueError("relax() requires either calculator=... or backend=...")
         structure = _derive_structure_from_atoms(atoms, structure)
-        calculator = build_calculator(
-            backend,
-            mlp=mlp,
-            model=model,
-            device=device,
-            structure=structure,
-            **backend_kwargs,
-        )
+        calculator = build_calculator(backend, structure=structure)
     config = config or RelaxConfig(
         steps=steps,
         fmax=fmax,
         relax_cell=relax_cell,
         pressure_kbar=pressure_kbar,
         energy_tolerance=energy_tolerance,
-        isif=3 if relax_cell else 2,
-        stress_isif=3 if relax_cell else 2,
     )
     context = RunContext(
         mode="relax",
-        ibrion=config.ibrion,
-        isif=config.stress_isif if config.stress_isif is not None else config.isif,
-        vasp_compat=vasp_compat,
+        ibrion=config.effective_ibrion,
+        isif=config.effective_stress_isif,
+        vasp_compat=compatibility,
     )
     return execute_relaxation(
         atoms,
@@ -339,12 +327,9 @@ def relax(
 
 def md(
     atoms,
+    backend: BackendConfig | None = None,
     *,
     calculator=None,
-    backend: BackendConfig | dict[str, Any] | None = None,
-    mlp: str | None = None,
-    model: str | None = None,
-    device: str | None = None,
     structure=None,
     config: MDConfig | None = None,
     temperature: float = 300.0,
@@ -355,21 +340,15 @@ def md(
     thermostat_kwargs: dict[str, float] | None = None,
     smass: float | None = None,
     observer=None,
-    vasp_compat: VaspCompatConfig | None = None,
-    **backend_kwargs: Any,
+    compatibility: VaspCompatConfig | None = None,
 ) -> MDResult:
     """Run molecular dynamics using the stable library API."""
 
     if calculator is None:
+        if backend is None:
+            raise ValueError("md() requires either calculator=... or backend=...")
         structure = _derive_structure_from_atoms(atoms, structure)
-        calculator = build_calculator(
-            backend,
-            mlp=mlp,
-            model=model,
-            device=device,
-            structure=structure,
-            **backend_kwargs,
-        )
+        calculator = build_calculator(backend, structure=structure)
     config = config or MDConfig(
         steps=steps,
         temperature=temperature,
@@ -378,15 +357,14 @@ def md(
         temperature_end=temperature_end,
         thermostat_kwargs=dict(thermostat_kwargs or {}),
         smass=smass,
-        isif=0,
     )
     context = RunContext(
         mode="md",
         ibrion=0,
-        isif=config.isif,
+        isif=config.effective_isif,
         potim=config.timestep_fs,
         mdalgo=config.effective_mdalgo,
-        vasp_compat=vasp_compat,
+        vasp_compat=compatibility,
     )
     return execute_md(
         atoms,

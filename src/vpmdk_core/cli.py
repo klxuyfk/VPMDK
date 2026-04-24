@@ -6,6 +6,8 @@ import argparse
 import os
 import sys
 
+from .compat import vasp as vasp_compat
+
 
 def _root():
     return sys.modules["vpmdk_core"]
@@ -89,7 +91,7 @@ def main():
             atoms.wrap()
             root._apply_initial_magnetization(atoms, incar)
             with root._working_directory(workdir_abs):
-                calculator = root.get_calculator(bcar, structure=structure)
+                calculator = root._build_calculator_from_tags(bcar, structure=structure)
 
             if settings.nsw <= 0 or settings.ibrion < 0:
                 with root._working_directory(workdir_abs):
@@ -140,7 +142,7 @@ def main():
                         reference=atoms,
                         **root._charge_density_options_from_bcar(bcar),
                     )
-                    root.write_chgcar(
+                    vasp_compat.write_chgcar(
                         "CHGCAR",
                         atoms,
                         charge_result.density,

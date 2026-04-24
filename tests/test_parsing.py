@@ -62,18 +62,6 @@ def test_bcar_parsing_prefers_mlp_over_legacy_nnp(tmp_path: Path):
     assert tags["NNP"] == "CHGNET"
 
 
-def test_get_calculator_accepts_legacy_nnp_tag(monkeypatch: pytest.MonkeyPatch):
-    class DummyCHGNet:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    monkeypatch.setattr(vpmdk, "CHGNetCalculator", DummyCHGNet)
-
-    calculator = vpmdk.get_calculator({"NNP": "CHGNET"})
-
-    assert isinstance(calculator, DummyCHGNet)
-
-
 def test_get_calculator_accepts_upet_named_model(monkeypatch: pytest.MonkeyPatch):
     captured: dict[str, object] = {}
 
@@ -83,7 +71,9 @@ def test_get_calculator_accepts_upet_named_model(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(vpmdk, "UPETCalculator", fake_calc)
 
-    calculator = vpmdk.get_calculator({"MLP": "UPET", "MODEL": "pet-oam-xl"})
+    calculator = vpmdk.get_calculator(
+        vpmdk.BackendConfig(mlp="UPET", model="pet-oam-xl")
+    )
 
     assert calculator == "upet"
     assert captured["model"] == "pet-oam-xl"
@@ -98,10 +88,12 @@ def test_get_calculator_accepts_flashtp_backend(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(vpmdk, "_build_flashtp_calculator", fake_builder)
 
-    calculator = vpmdk.get_calculator({"MLP": "FlashTP", "MODEL": "7net-0"})
+    calculator = vpmdk.get_calculator(
+        vpmdk.BackendConfig(mlp="FlashTP", model="7net-0")
+    )
 
     assert calculator == "flashtp"
-    assert captured["tags"] == {"MLP": "FlashTP", "MODEL": "7net-0"}
+    assert captured["tags"] == {"MLP": "FLASHTP", "MODEL": "7net-0"}
 
 
 def test_get_calculator_accepts_equflash_backend(monkeypatch: pytest.MonkeyPatch):
@@ -113,10 +105,12 @@ def test_get_calculator_accepts_equflash_backend(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(vpmdk, "_build_equflash_calculator", fake_builder)
 
-    calculator = vpmdk.get_calculator({"MLP": "EquFlash", "MODEL": "/tmp/equflash.ckpt"})
+    calculator = vpmdk.get_calculator(
+        vpmdk.BackendConfig(mlp="EquFlash", model="/tmp/equflash.ckpt")
+    )
 
     assert calculator == "equflash"
-    assert captured["tags"] == {"MLP": "EquFlash", "MODEL": "/tmp/equflash.ckpt"}
+    assert captured["tags"] == {"MLP": "EQUFLASH", "MODEL": "/tmp/equflash.ckpt"}
 
 
 def test_get_calculator_accepts_eqnorm_named_model(monkeypatch: pytest.MonkeyPatch):
@@ -147,7 +141,7 @@ def test_get_calculator_accepts_eqnorm_named_model(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(vpmdk, "_ensure_eqnorm_torch_safe_globals", fake_safe_globals)
     monkeypatch.setattr(vpmdk, "EqnormCalculator", fake_calc)
 
-    calculator = vpmdk.get_calculator({"MLP": "EQNORM", "MODEL": "eqnorm"})
+    calculator = vpmdk.get_calculator(vpmdk.BackendConfig(mlp="EQNORM", model="eqnorm"))
 
     assert calculator == "eqnorm"
     assert captured["model_name"] == "eqnorm"
@@ -168,7 +162,7 @@ def test_get_calculator_accepts_hienet_named_model(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(vpmdk, "_ensure_hienet_named_model_checkpoint", fake_ensure)
     monkeypatch.setattr(vpmdk, "HIENetCalculator", fake_calc)
 
-    calculator = vpmdk.get_calculator({"MLP": "HIENET", "MODEL": "hienet"})
+    calculator = vpmdk.get_calculator(vpmdk.BackendConfig(mlp="HIENET", model="hienet"))
 
     assert calculator == "hienet"
     assert captured["model_name"] == "hienet"
@@ -187,7 +181,9 @@ def test_get_calculator_accepts_nequix_named_model(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(vpmdk, "NequixCalculator", FakeNequixCalculator)
 
-    calculator = vpmdk.get_calculator({"MLP": "NEQUIX", "MODEL": "NEQUIX-MP-1"})
+    calculator = vpmdk.get_calculator(
+        vpmdk.BackendConfig(mlp="NEQUIX", model="NEQUIX-MP-1")
+    )
 
     assert isinstance(calculator, FakeNequixCalculator)
     assert captured["model_name"] == vpmdk.DEFAULT_NEQUIX_MODEL
@@ -220,7 +216,9 @@ def test_get_calculator_accepts_alphanet_named_model(
     monkeypatch.setattr(vpmdk, "_ensure_alphanet_named_model_files", fake_ensure)
     monkeypatch.setattr(vpmdk, "_load_alphanet_config", fake_load)
 
-    calculator = vpmdk.get_calculator({"MLP": "ALPHANET", "MODEL": "AlphaNet-MATPES-r2scan"})
+    calculator = vpmdk.get_calculator(
+        vpmdk.BackendConfig(mlp="ALPHANET", model="AlphaNet-MATPES-r2scan")
+    )
 
     assert calculator == "alphanet"
     assert captured["model_name"] == "AlphaNet-MATPES-r2scan"
@@ -241,7 +239,7 @@ def test_get_calculator_forwards_structure_to_alphanet_builder(
 
     monkeypatch.setattr(vpmdk, "_build_alphanet_calculator", fake_builder)
 
-    calculator = vpmdk.get_calculator({"MLP": "ALPHANET"}, structure=structure)
+    calculator = vpmdk.get_calculator(vpmdk.BackendConfig(mlp="ALPHANET"), structure=structure)
 
     assert calculator == "alphanet"
     assert captured["tags"] == {"MLP": "ALPHANET"}
@@ -269,7 +267,9 @@ def test_get_calculator_accepts_matris_named_model(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(vpmdk, "_load_matris_checkpoint_model", fake_load)
     monkeypatch.setattr(vpmdk, "_instantiate_matris_calculator", fake_instantiate)
 
-    calculator = vpmdk.get_calculator({"MLP": "MATRIS", "MODEL": "matris_10m_mp"})
+    calculator = vpmdk.get_calculator(
+        vpmdk.BackendConfig(mlp="MATRIS", model="matris_10m_mp")
+    )
 
     assert calculator == "matris"
     assert captured["model_name"] == "matris_10m_mp"
@@ -295,26 +295,17 @@ def test_get_calculator_accepts_tace_named_model(monkeypatch: pytest.MonkeyPatch
         DummyRegistry({"TACE-v1-OAM-M": Path("/tmp/TACE-v1-OAM-M.pt")}),
     )
 
-    calculator = vpmdk.get_calculator({"MLP": "TACE", "MODEL": "TACE-v1-OAM-M"})
+    calculator = vpmdk.get_calculator(
+        vpmdk.BackendConfig(mlp="TACE", model="TACE-v1-OAM-M")
+    )
 
     assert calculator == "tace"
     assert captured["model"] == "/tmp/TACE-v1-OAM-M.pt"
 
 
-def test_get_calculator_rejects_explicit_empty_backend_tags(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    class DummyCHGNet:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    monkeypatch.setattr(vpmdk, "CHGNetCalculator", DummyCHGNet)
-
+def test_get_calculator_rejects_empty_backend_name():
     with pytest.raises(ValueError, match="MLP"):
-        vpmdk.get_calculator({"MLP": ""})
-
-    with pytest.raises(ValueError, match="NNP"):
-        vpmdk.get_calculator({"NNP": "  "})
+        vpmdk.get_calculator(vpmdk.BackendConfig(mlp=""))
 
 
 @pytest.mark.parametrize(

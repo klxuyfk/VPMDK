@@ -8,6 +8,7 @@ import pytest
 from ase.calculators.calculator import all_changes
 
 import vpmdk
+import vpmdk.compat.vasp as vasp_compat
 from tests.conftest import DummyCalculator
 
 api_module = importlib.import_module("vpmdk_core.api")
@@ -48,21 +49,22 @@ def test_public_single_point_returns_resolved_ase_calculator(load_atoms):
     assert result.calculator is inner
 
 
-def test_public_get_calculator_accepts_backend_kwargs(monkeypatch: pytest.MonkeyPatch):
+def test_public_get_calculator_prefers_backend_config(monkeypatch: pytest.MonkeyPatch):
     captured: dict[str, object] = {}
 
-    def fake_builder(tags):
+    def fake_builder(tags, *, structure=None):
         captured["tags"] = tags
         return "calc"
 
     monkeypatch.setattr(vpmdk, "_build_flashtp_calculator", fake_builder)
 
-    calculator = vpmdk.get_calculator(
+    backend = vpmdk.BackendConfig(
         mlp="FlashTP",
         model="7net-0",
         device="cuda:0",
-        sevennet_enable_flash=True,
+        options={"sevennet_enable_flash": True},
     )
+    calculator = vpmdk.get_calculator(backend)
 
     assert calculator == "calc"
     assert captured["tags"] == {
@@ -91,28 +93,18 @@ def test_public_wrappers_do_not_override_backend_mlp_with_default(
     captured: dict[str, object] = {}
     sentinel = object()
 
-    def fake_build_calculator(
-        config_or_tags=None,
-        *,
-        structure=None,
-        mlp=None,
-        model=None,
-        device=None,
-        options=None,
-        **backend_kwargs,
-    ):
-        captured["backend"] = config_or_tags
-        captured["mlp"] = mlp
+    def fake_build_calculator(backend, *, structure=None):
+        captured["backend"] = backend
         return DummyCalculator()
 
     monkeypatch.setattr(api_module, "build_calculator", fake_build_calculator)
     monkeypatch.setattr(api_module, execute_name, lambda *args, **kwargs: sentinel)
 
-    result = getattr(vpmdk, call_name)(atoms, backend={"MLP": "MACE"})
+    backend = vpmdk.BackendConfig(mlp="MACE")
+    result = getattr(vpmdk, call_name)(atoms, backend=backend)
 
     assert result is sentinel
-    assert captured["backend"] == {"MLP": "MACE"}
-    assert captured["mlp"] is None
+    assert captured["backend"] is backend
 
 
 @pytest.mark.parametrize(
@@ -140,33 +132,24 @@ def test_public_wrappers_derive_structure_from_atoms_for_structure_backends(
             captured["atoms"] = atoms_arg
             return derived_structure
 
-    def fake_build_calculator(
-        config_or_tags=None,
-        *,
-        structure=None,
-        mlp=None,
-        model=None,
-        device=None,
-        options=None,
-        **backend_kwargs,
-    ):
+    def fake_build_calculator(backend, *, structure=None):
         captured["structure"] = structure
-        captured["mlp"] = mlp
+        captured["backend"] = backend
         return DummyCalculator()
 
     monkeypatch.setattr(vpmdk, "AseAtomsAdaptor", FakeAdaptor)
     monkeypatch.setattr(api_module, "build_calculator", fake_build_calculator)
     monkeypatch.setattr(api_module, execute_name, lambda *args, **kwargs: sentinel)
 
-    result = getattr(vpmdk, call_name)(atoms, mlp="ALPHANET")
+    result = getattr(vpmdk, call_name)(atoms, backend=vpmdk.BackendConfig(mlp="ALPHANET"))
 
     assert result is sentinel
     assert captured["atoms"] is atoms
     assert captured["structure"] is derived_structure
-    assert captured["mlp"] == "ALPHANET"
+    assert captured["backend"].mlp == "ALPHANET"
 
 
-def test_public_build_calculator_accepts_bcar_like_mapping(monkeypatch: pytest.MonkeyPatch):
+def test_public_build_calculator_requires_backend_config(monkeypatch: pytest.MonkeyPatch):
     captured: dict[str, object] = {}
 
     def fake_builder(tags, *, structure=None):
@@ -176,10 +159,34 @@ def test_public_build_calculator_accepts_bcar_like_mapping(monkeypatch: pytest.M
 
     monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", fake_builder)
 
-    calculator = vpmdk.build_calculator({"MLP": "MACE", "MODEL": "small"})
+    calculator = vpmdk.build_calculator(
+        vpmdk.BackendConfig(mlp="MACE", model="small")
+    )
 
     assert calculator == "calc"
     assert captured["tags"] == {"MLP": "MACE", "MODEL": "small"}
+
+
+@pytest.mark.parametrize(
+    ("callable_obj", "args", "kwargs"),
+    [
+        (lambda: vpmdk.get_calculator({"MLP": "MACE"}), (), {}),
+        (lambda atoms: vpmdk.single_point(atoms, {"MLP": "MACE"}), ("atoms",), {}),
+        (lambda atoms: vpmdk.relax(atoms, {"MLP": "MACE"}), ("atoms",), {}),
+        (lambda atoms: vpmdk.md(atoms, {"MLP": "MACE"}), ("atoms",), {}),
+    ],
+)
+def test_public_api_rejects_mapping_backends(
+    load_atoms,
+    callable_obj,
+    args,
+    kwargs,
+):
+    atoms = load_atoms()
+    resolved_args = tuple(atoms if arg == "atoms" else arg for arg in args)
+
+    with pytest.raises(TypeError, match="BackendConfig"):
+        callable_obj(*resolved_args, **kwargs)
 
 
 def test_get_backend_capabilities_reflects_matris_task():
@@ -216,15 +223,18 @@ def test_list_backends_marks_flashtp_unavailable_without_flash_support(
 def test_relax_config_relax_cell_updates_default_isif_values():
     config = vpmdk.RelaxConfig(relax_cell=True)
 
-    assert config.isif == 3
-    assert config.stress_isif == 3
+    assert config.effective_isif == 3
+    assert config.effective_stress_isif == 3
 
 
 def test_relax_config_preserves_explicit_isif_when_relax_cell_enabled():
-    config = vpmdk.RelaxConfig(relax_cell=True, isif=4, stress_isif=6)
+    config = vpmdk.RelaxConfig(
+        relax_cell=True,
+        compat=vasp_compat.VaspRelaxConfig(isif=4, stress_isif=6),
+    )
 
-    assert config.isif == 4
-    assert config.stress_isif == 6
+    assert config.effective_isif == 4
+    assert config.effective_stress_isif == 6
 
 
 @pytest.mark.parametrize(
@@ -372,7 +382,7 @@ def test_public_md_steps_zero_vasp_compat_does_not_write_xdatcar(
             steps=0,
             temperature=300.0,
             observer=[vpmdk.VaspCompatObserver()],
-            vasp_compat=vpmdk.VaspCompatConfig(enabled=True, write_xdatcar=True),
+            compatibility=vasp_compat.VaspCompatConfig(enabled=True, write_xdatcar=True),
         )
     finally:
         monkeypatch.undo()
@@ -452,7 +462,7 @@ def test_public_md_vasp_compat_respects_write_xdatcar(
             steps=1,
             temperature=300.0,
             observer=[vpmdk.VaspCompatObserver()],
-            vasp_compat=vpmdk.VaspCompatConfig(enabled=True, write_xdatcar=False),
+            compatibility=vasp_compat.VaspCompatConfig(enabled=True, write_xdatcar=False),
         )
     finally:
         monkeypatch.undo()

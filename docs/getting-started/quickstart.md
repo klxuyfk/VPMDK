@@ -134,10 +134,16 @@ from ase.io import read
 import vpmdk
 
 atoms = read("POSCAR")
+backend = vpmdk.BackendConfig(mlp="CHGNET", device="cpu")
 
-sp = vpmdk.single_point(atoms, mlp="CHGNET", device="cpu")
-relaxed = vpmdk.relax(atoms, mlp="CHGNET", steps=100, fmax=0.02)
-traj = vpmdk.md(atoms, mlp="MACE", model="/path/to/model", steps=20, temperature=300)
+sp = vpmdk.single_point(atoms, backend)
+relaxed = vpmdk.relax(atoms, backend, steps=100, fmax=0.02)
+traj = vpmdk.md(
+    atoms,
+    vpmdk.BackendConfig(mlp="MACE", model="/path/to/model"),
+    steps=20,
+    temperature=300,
+)
 ```
 
 See [Python API](../user-guide/python-api.md) for the side-effect model and

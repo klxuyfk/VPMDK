@@ -15,6 +15,7 @@ That is the main difference from the CLI:
 
 Common entry points:
 
+- `vpmdk.BackendConfig(...)`
 - `vpmdk.get_calculator(...)`
 - `vpmdk.build_calculator(...)`
 - `vpmdk.single_point(...)`
@@ -22,10 +23,10 @@ Common entry points:
 - `vpmdk.md(...)`
 - `vpmdk.predict_charge_density(...)`
 - `vpmdk.charge_density(...)`
-- `vpmdk.determine_vasp_fft_grid(...)`
-- `vpmdk.write_chgcar(...)`
 - `vpmdk.list_backends()`
 - `vpmdk.get_backend_capabilities(...)`
+- `vpmdk.compat.vasp.determine_vasp_fft_grid(...)`
+- `vpmdk.compat.vasp.write_chgcar(...)`
 
 ## Side-Effect Model
 
@@ -40,7 +41,7 @@ By default, the public execution functions do not create:
 This is enforced by the execution layer and is covered by regression tests.
 
 If you want compatibility files from Python, attach `VaspCompatObserver()` and
-pass an enabled `VaspCompatConfig`.
+pass an enabled `vpmdk.compat.vasp.VaspCompatConfig`.
 
 ## Building Calculators
 
@@ -49,11 +50,12 @@ The most direct way to construct a backend is:
 ```python
 import vpmdk
 
-calc = vpmdk.get_calculator(
+backend = vpmdk.BackendConfig(
     mlp="MACE",
     model="/path/to/model.pt",
     device="cuda",
 )
+calc = vpmdk.get_calculator(backend)
 ```
 
 Equivalent object-oriented form:
@@ -70,10 +72,12 @@ calc = vpmdk.build_calculator(config)
 
 Useful rules:
 
+- `BackendConfig` is the primary public backend-selection object
 - backend option keys are normalized to uppercase BCAR-style names
 - booleans in `options` are stringified as `1`/`0` before reaching the legacy
   builders
-- `NNP` remains accepted when using a BCAR-like mapping
+- the public Python API does not accept BCAR-like mappings; that compatibility
+  path is reserved for the CLI and internal adapters
 
 ## Running Single-Point Calculations
 
@@ -82,7 +86,8 @@ from ase.io import read
 import vpmdk
 
 atoms = read("POSCAR")
-result = vpmdk.single_point(atoms, mlp="CHGNET", device="cpu")
+backend = vpmdk.BackendConfig(mlp="CHGNET", device="cpu")
+result = vpmdk.single_point(atoms, backend)
 
 print(result.potential_energy)
 print(result.forces)
@@ -93,14 +98,15 @@ Notes:
 
 - the returned calculator is the resolved ASE calculator, not necessarily the
   wrapper object you passed in
-- `SinglePointConfig(isif=...)` can request stress formatting semantics
+- advanced VASP metadata for single-point formatting lives under
+  `vpmdk.compat.vasp.VaspSinglePointConfig`
 
 ## Running Relaxations
 
 ```python
 result = vpmdk.relax(
     atoms,
-    mlp="CHGNET",
+    backend,
     steps=200,
     fmax=0.02,
     relax_cell=True,
@@ -114,16 +120,15 @@ Important semantics:
 
 - `steps=0` is allowed and behaves like a single evaluation of the initial structure
 - negative or fractional `steps` are rejected
-- `relax_cell=True` upgrades the default `isif`/`stress_isif` from `2` to `3`
-- explicit `isif`/`stress_isif` values are preserved if you set them yourself
+- `relax_cell=True` requests cell relaxation without exposing VASP-specific knobs
+- advanced VASP metadata lives under `vpmdk.compat.vasp.VaspRelaxConfig`
 
 ## Running Molecular Dynamics
 
 ```python
 result = vpmdk.md(
     atoms,
-    mlp="MACE",
-    model="/path/to/model",
+    vpmdk.BackendConfig(mlp="MACE", model="/path/to/model"),
     temperature=300,
     steps=100,
     timestep=1.0,
@@ -150,6 +155,7 @@ MD-specific semantics:
 - zero-step MD does not sample velocities or create an MD driver
 - when `steps > 0` and `temperature <= 0`, velocities are zeroed rather than
   resampled
+- advanced VASP metadata such as `MDALGO` lives under `vpmdk.compat.vasp.VaspMDConfig`
 
 ## Backends and Structure-Derived Metadata
 
@@ -189,8 +195,10 @@ print(caps.energy, caps.forces, caps.stress)
 If you want the public API to emit the same files as the CLI:
 
 ```python
+import vpmdk.compat.vasp as vasp_compat
+
 observer = [vpmdk.VaspCompatObserver(), vpmdk.PrintProgressObserver()]
-compat = vpmdk.VaspCompatConfig(
+compat = vasp_compat.VaspCompatConfig(
     enabled=True,
     write_pseudo_scf=True,
     write_contcar=True,
@@ -203,7 +211,7 @@ result = vpmdk.md(
     steps=5,
     temperature=300,
     observer=observer,
-    vasp_compat=compat,
+    compatibility=compat,
 )
 ```
 
@@ -212,6 +220,8 @@ This is opt-in. The pure execution layer itself stays free of implicit file I/O.
 ## Charge Density from Python
 
 ```python
+import vpmdk.compat.vasp as vasp_compat
+
 charge = vpmdk.predict_charge_density(
     atoms,
     incar={"ENCUT": 520, "PREC": "Accurate"},
@@ -221,7 +231,12 @@ charge = vpmdk.predict_charge_density(
     model_path="/path/to/charge3net_mp.pt",
 )
 
-vpmdk.write_chgcar("CHGCAR", atoms, charge.density, spin_density=charge.spin_density)
+vasp_compat.write_chgcar(
+    "CHGCAR",
+    atoms,
+    charge.density,
+    spin_density=charge.spin_density,
+)
 ```
 
 See [Charge Density](charge-density.md) and
