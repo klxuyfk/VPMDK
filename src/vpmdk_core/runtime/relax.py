@@ -7,6 +7,10 @@ import sys
 from contextlib import contextmanager
 from typing import Callable, List
 
+from ..compat.vasp import VaspCompatConfig, VaspRelaxConfig
+from ..models import RelaxConfig
+from ..observers import PrintProgressObserver, VaspCompatObserver
+
 
 def _root():
     return sys.modules["vpmdk_core"]
@@ -151,80 +155,34 @@ def run_relaxation(
     neb_next_positions=None,
     oszicar_pseudo_scf: bool = False,
 ):
-    root = _root()
-    atoms.calc = root._resolve_calculator(calculator)
-    recorder = root._initialize_vasp_compat_outputs(
+    result = _root().relax(
         atoms,
-        ibrion=ibrion,
-        isif=isif if stress_isif is None else stress_isif,
-        neb_mode=neb_mode,
-        write_oszicar_pseudo_scf=oszicar_pseudo_scf,
-        neb_prev_positions=neb_prev_positions,
-        neb_next_positions=neb_next_positions,
+        calculator=calculator,
+        config=RelaxConfig(
+            steps=steps,
+            fmax=fmax,
+            relax_cell=isif >= 3,
+            pressure_kbar=pstress,
+            energy_tolerance=energy_tolerance,
+            compat=VaspRelaxConfig(
+                isif=isif,
+                stress_isif=stress_isif,
+                ibrion=ibrion,
+            ),
+        ),
+        observer=[VaspCompatObserver(), PrintProgressObserver()],
+        compatibility=VaspCompatConfig(
+            enabled=True,
+            write_pseudo_scf=oszicar_pseudo_scf,
+            write_contcar=True,
+            neb_mode=neb_mode,
+            neb_prev_positions=neb_prev_positions,
+            neb_next_positions=neb_next_positions,
+        ),
     )
-    energies: List[float] = []
-    previous_energy: float | None = None
-    step_counter = 0
-    scalar_pressure = pstress * root.KBAR_TO_EV_PER_A3 if pstress is not None else None
-    scalar_pressure_kwarg = scalar_pressure if scalar_pressure is not None else 0.0
-
-    builder, freeze_required = _make_relaxation_builder(
-        isif, scalar_pressure, scalar_pressure_kwarg
-    )
-
-    with _temporarily_freeze_atoms(atoms, freeze_required):
-        relax_object = builder(atoms)
-        dyn = root.BFGS(relax_object, logfile="OUTCAR")
-
-        def _log_relaxation_energy() -> None:
-            nonlocal previous_energy, step_counter
-            target = getattr(relax_object, "atoms", atoms)
-            energy = target.get_potential_energy()
-            delta = 0.0 if previous_energy is None else energy - previous_energy
-            previous_energy = energy
-            step_counter += 1
-            root._record_vasp_compat_step(
-                recorder,
-                target,
-                step_index=step_counter,
-                potential_energy=energy,
-                total_energy=energy,
-            )
-            print(
-                f"{step_counter:4d} F= {root._format_energy_value(energy)} "
-                f"E0= {root._format_energy_value(energy)}  d E ={root._format_energy_value(delta)}"
-            )
-
-        if write_energy_csv:
-            dyn.attach(lambda: energies.append(atoms.get_potential_energy()))
-        dyn.attach(_log_relaxation_energy)
-        if energy_tolerance is None:
-            dyn.run(fmax=fmax, steps=steps)
-        else:
-            monitor = _EnergyConvergenceMonitor(atoms, energy_tolerance)
-            dyn.fmax = fmax
-            for force_converged in dyn.irun(steps=steps):
-                energy_converged = monitor.update()
-                if energy_converged or force_converged:
-                    break
-
-    target_atoms = getattr(relax_object, "atoms", atoms)
-    target_atoms.wrap()
-    if not recorder.steps:
-        fallback_energy = target_atoms.get_potential_energy()
-        root._record_vasp_compat_step(
-            recorder,
-            target_atoms,
-            step_index=1,
-            potential_energy=fallback_energy,
-            total_energy=fallback_energy,
-        )
-    root._write_vasprun_xml(recorder, target_atoms)
-    root._append_outcar_footer(recorder)
-    root.write("CONTCAR", target_atoms, direct=True)
     if write_energy_csv:
         with open("energy.csv", "w", newline="") as csvfile:
             writer = csv.writer(csvfile)
-            for energy in energies:
-                writer.writerow([energy])
-    return target_atoms.get_potential_energy()
+            for step in result.steps:
+                writer.writerow([float(step.potential_energy)])
+    return result.potential_energy

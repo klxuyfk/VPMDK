@@ -24,6 +24,11 @@ dependencies = [
   "pymatgen",
 ]
 
+[project.optional-dependencies]
+test = [
+  "pytest",
+]
+
 [project.urls]
 Homepage = "https://github.com/klxuyfk/VPMDK"
 Source = "https://github.com/klxuyfk/VPMDK"
