@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -548,6 +549,7 @@ def test_nequix_uses_checkpoint_path_and_torch_device(
             self._capacity_multiplier = kwargs["capacity_multiplier"]
 
     monkeypatch.setattr(vpmdk, "NequixCalculator", FakeNequixCalculator)
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(device=lambda value: value))
 
     calc = vpmdk._build_nequix_calculator(
         {
