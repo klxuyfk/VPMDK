@@ -177,8 +177,10 @@ Included examples:
 - If `BCAR` is omitted, VPMDK defaults to `MLP=CHGNET`.
 - `WRITE_CHGCAR=1` runs a separate charge-density prediction step after the main
   calculation.
-- NEB-like directory layouts are supported for compatibility workflows, but
-  VPMDK does not implement spring-coupled NEB forces internally.
+- VTST-style NEB directory layouts (`00`, `01`, ...) run through ASE NEB when
+  `NSW > 0` and `IBRION != 0`, including spring-coupled band forces, climbing
+  images via `LCLIMB`, and VASP-like image/parent outputs. Dimer/Lanczos TS
+  modes are not implemented.
 
 ## License
 

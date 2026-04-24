@@ -64,7 +64,10 @@ SUPPORTED_INCAR_TAGS = {
     "NHC_NCHAINS",
     "MAGMOM",
     "IMAGES",
+    "ICHAIN",
+    "IOPT",
     "LCLIMB",
+    "LNEBCELL",
     "SPRING",
 }
 
