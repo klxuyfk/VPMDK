@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Mapping
 from typing import Any
 
 from .compat.vasp import VaspCompatConfig
@@ -44,6 +43,16 @@ def _derive_structure_from_atoms(atoms, structure=None):
         except Exception:
             return None
     return None
+
+
+def _require_backend_config(backend: object) -> BackendConfig:
+    """Return a validated public backend config."""
+
+    if not isinstance(backend, BackendConfig):
+        raise TypeError(
+            "Public Python API backend arguments must be BackendConfig instances."
+        )
+    return backend
 
 
 _BASE_CAPABILITIES: dict[str, BackendCapabilities] = {
@@ -219,31 +228,29 @@ def get_backend_capabilities(
 
 
 def build_calculator(
-    backend: BackendConfig | Mapping[str, Any],
+    backend: BackendConfig,
     *,
     structure=None,
 ):
-    """Build an ASE calculator from ``BackendConfig`` or a BCAR-like mapping."""
+    """Build an ASE calculator from ``BackendConfig``."""
 
-    if isinstance(backend, Mapping) and not isinstance(backend, BackendConfig):
-        return _root()._build_calculator_from_tags(dict(backend), structure=structure)
-    config = coerce_backend_config(backend)
+    config = coerce_backend_config(_require_backend_config(backend))
     return _root()._build_calculator_from_tags(config.to_legacy_tags(), structure=structure)
 
 
 def get_calculator(
-    backend: BackendConfig | Mapping[str, Any],
+    backend: BackendConfig,
     *,
     structure=None,
 ):
-    """Backward-compatible calculator constructor."""
+    """Return an ASE calculator from ``BackendConfig``."""
 
     return build_calculator(backend, structure=structure)
 
 
 def single_point(
     atoms,
-    backend: BackendConfig | dict[str, Any] | None = None,
+    backend: BackendConfig | None = None,
     *,
     calculator=None,
     structure=None,
@@ -276,7 +283,7 @@ def single_point(
 
 def relax(
     atoms,
-    backend: BackendConfig | dict[str, Any] | None = None,
+    backend: BackendConfig | None = None,
     *,
     calculator=None,
     structure=None,
@@ -320,7 +327,7 @@ def relax(
 
 def md(
     atoms,
-    backend: BackendConfig | dict[str, Any] | None = None,
+    backend: BackendConfig | None = None,
     *,
     calculator=None,
     structure=None,

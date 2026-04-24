@@ -144,7 +144,7 @@ class BackendConfig:
         *,
         default_mlp: str = "CHGNET",
     ) -> "BackendConfig":
-        """Build backend config from a BCAR-like mapping."""
+        """Build backend config from a mapping of backend fields and options."""
 
         normalized = _normalize_backend_options(values)
         mlp_value = normalized.get("MLP", normalized.get("NNP", default_mlp))
@@ -164,7 +164,7 @@ class BackendConfig:
         *,
         default_mlp: str = "CHGNET",
     ) -> "BackendConfig":
-        """Backward-compatible alias of :meth:`from_mapping`."""
+        """Legacy alias of :meth:`from_mapping` kept for internal compatibility."""
 
         return cls.from_mapping(values, default_mlp=default_mlp)
 

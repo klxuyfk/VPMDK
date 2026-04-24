@@ -76,7 +76,8 @@ Useful rules:
 - backend option keys are normalized to uppercase BCAR-style names
 - booleans in `options` are stringified as `1`/`0` before reaching the legacy
   builders
-- BCAR-like mappings remain accepted only as a compatibility input path
+- the public Python API does not accept BCAR-like mappings; that compatibility
+  path is reserved for the CLI and internal adapters
 
 ## Running Single-Point Calculations
 
@@ -97,7 +98,8 @@ Notes:
 
 - the returned calculator is the resolved ASE calculator, not necessarily the
   wrapper object you passed in
-- `SinglePointConfig(isif=...)` can request stress formatting semantics
+- advanced VASP metadata for single-point formatting lives under
+  `vpmdk.compat.vasp.VaspSinglePointConfig`
 
 ## Running Relaxations
 

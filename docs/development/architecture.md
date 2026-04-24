@@ -87,9 +87,9 @@ Backends are selected by `MLP` / `NNP`, normalized to uppercase, then routed to
 the corresponding builder in `backends/`.
 
 Most builders consume a legacy string-based BCAR mapping because the project
-grew from the CLI first. `BackendConfig` is now the primary public object, and
-BCAR-like mappings remain as a compatibility input path that still feeds those
-builders.
+grew from the CLI first. `BackendConfig` is now the primary public object; the
+BCAR mapping path remains an internal/CLI compatibility mechanism that still
+feeds those builders.
 
 ## Relaxation and MD Semantics
 

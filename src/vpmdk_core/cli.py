@@ -91,7 +91,7 @@ def main():
             atoms.wrap()
             root._apply_initial_magnetization(atoms, incar)
             with root._working_directory(workdir_abs):
-                calculator = root.get_calculator(bcar, structure=structure)
+                calculator = root._build_calculator_from_tags(bcar, structure=structure)
 
             if settings.nsw <= 0 or settings.ibrion < 0:
                 with root._working_directory(workdir_abs):

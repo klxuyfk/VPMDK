@@ -100,10 +100,11 @@ def test_public_wrappers_do_not_override_backend_mlp_with_default(
     monkeypatch.setattr(api_module, "build_calculator", fake_build_calculator)
     monkeypatch.setattr(api_module, execute_name, lambda *args, **kwargs: sentinel)
 
-    result = getattr(vpmdk, call_name)(atoms, backend={"MLP": "MACE"})
+    backend = vpmdk.BackendConfig(mlp="MACE")
+    result = getattr(vpmdk, call_name)(atoms, backend=backend)
 
     assert result is sentinel
-    assert captured["backend"] == {"MLP": "MACE"}
+    assert captured["backend"] is backend
 
 
 @pytest.mark.parametrize(
@@ -148,7 +149,7 @@ def test_public_wrappers_derive_structure_from_atoms_for_structure_backends(
     assert captured["backend"].mlp == "ALPHANET"
 
 
-def test_public_build_calculator_accepts_bcar_like_mapping(monkeypatch: pytest.MonkeyPatch):
+def test_public_build_calculator_requires_backend_config(monkeypatch: pytest.MonkeyPatch):
     captured: dict[str, object] = {}
 
     def fake_builder(tags, *, structure=None):
@@ -158,10 +159,34 @@ def test_public_build_calculator_accepts_bcar_like_mapping(monkeypatch: pytest.M
 
     monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", fake_builder)
 
-    calculator = vpmdk.build_calculator({"MLP": "MACE", "MODEL": "small"})
+    calculator = vpmdk.build_calculator(
+        vpmdk.BackendConfig(mlp="MACE", model="small")
+    )
 
     assert calculator == "calc"
     assert captured["tags"] == {"MLP": "MACE", "MODEL": "small"}
+
+
+@pytest.mark.parametrize(
+    ("callable_obj", "args", "kwargs"),
+    [
+        (lambda: vpmdk.get_calculator({"MLP": "MACE"}), (), {}),
+        (lambda atoms: vpmdk.single_point(atoms, {"MLP": "MACE"}), ("atoms",), {}),
+        (lambda atoms: vpmdk.relax(atoms, {"MLP": "MACE"}), ("atoms",), {}),
+        (lambda atoms: vpmdk.md(atoms, {"MLP": "MACE"}), ("atoms",), {}),
+    ],
+)
+def test_public_api_rejects_mapping_backends(
+    load_atoms,
+    callable_obj,
+    args,
+    kwargs,
+):
+    atoms = load_atoms()
+    resolved_args = tuple(atoms if arg == "atoms" else arg for arg in args)
+
+    with pytest.raises(TypeError, match="BackendConfig"):
+        callable_obj(*resolved_args, **kwargs)
 
 
 def test_get_backend_capabilities_reflects_matris_task():

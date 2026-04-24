@@ -11,13 +11,12 @@ All public symbols are re-exported through `vpmdk`.
 Builds and returns an ASE calculator from:
 
 - a `BackendConfig`
-- a BCAR-like mapping kept for compatibility
 
 Accepted high-level arguments:
 
 | Argument | Meaning | Default |
 |----------|---------|---------|
-| `backend` | `BackendConfig` or BCAR-like mapping | required |
+| `backend` | `BackendConfig` | required |
 | `structure` | optional pymatgen structure for backends that benefit from it | `None` |
 
 ### `build_calculator(...)`
@@ -36,7 +35,7 @@ Key parameters:
 | Parameter | Meaning | Default |
 |-----------|---------|---------|
 | `atoms` | ASE atoms object | required |
-| `backend` | `BackendConfig` or BCAR-like mapping | `None` |
+| `backend` | `BackendConfig` | `None` |
 | `calculator` | prebuilt calculator or calculator wrapper | `None` |
 | `structure` | optional pymatgen structure | `None` |
 | `config` | `SinglePointConfig` | `SinglePointConfig()` |
@@ -154,7 +153,6 @@ Behavior:
 Class helpers:
 
 - `from_mapping(...)`
-- `from_bcar(...)`
 - `with_options(...)`
 
 ### `SinglePointConfig`
