@@ -510,7 +510,8 @@ def _run_ase_neb_relaxation(
         potcar_path_abs=potcar_path_abs,
     )
     _validate_neb_path(images)
-    neb_method = _select_neb_method(images)
+    with root._working_directory(workdir_abs):
+        neb_method = _select_neb_method(images)
     spring_constant = root._parse_neb_spring_constant(incar)
     climb = root._is_truthy_flag(getattr(incar, "get", lambda *_: None)("LCLIMB"))
     optimizer_cls, optimizer_name = root._select_neb_optimizer(incar, settings.ibrion)
@@ -550,10 +551,11 @@ def _run_ase_neb_relaxation(
     )
     dyn = optimizer_cls(neb, logfile=None)
     dyn.attach(record_step)
-    converged = bool(dyn.run(fmax=fmax, steps=settings.nsw))
 
-    if step_count == 0:
-        record_step()
+    with root._working_directory(workdir_abs):
+        converged = bool(dyn.run(fmax=fmax, steps=settings.nsw))
+        if step_count == 0:
+            record_step()
 
     _finalize_neb_image_outputs(
         image_dirs=image_dirs,

@@ -1400,6 +1400,50 @@ def test_main_neb_runner_initializes_calculator_from_run_dir_for_relative_model_
     assert seen_models == ["./model/nequip.pth"] * 3
 
 
+def test_main_neb_runner_evaluates_ase_neb_calculators_from_run_dir(
+    tmp_path: Path, prepare_inputs
+):
+    run_dir = tmp_path / "runs" / "neb_eval"
+    run_dir.mkdir(parents=True)
+    prepare_inputs(
+        run_dir,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "2", "IMAGES": "1"},
+    )
+
+    _write_numbered_neb_poscars(run_dir)
+
+    seen_cwds: list[Path] = []
+
+    class CwdRecordingCalculator(DummyCalculator):
+        def calculate(self, atoms=None, properties=("energy",), system_changes=()):
+            seen_cwds.append(Path.cwd())
+            super().calculate(
+                atoms=atoms,
+                properties=properties,
+                system_changes=system_changes,
+            )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        vpmdk,
+        "_build_calculator_from_tags",
+        lambda *_, **__: CwdRecordingCalculator(),
+    )
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
+    monkeypatch.setattr(vpmdk, "_collect_neb_image_results", lambda *_, **__: [])
+    monkeypatch.setattr(vpmdk, "_write_neb_parent_aggregate_outputs", lambda **_: None)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", "runs/neb_eval"])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen_cwds
+    assert set(seen_cwds) == {run_dir}
+
+
 def test_main_neb_runner_passes_absolute_potcar_to_collect_results(
     tmp_path: Path, prepare_inputs
 ):
