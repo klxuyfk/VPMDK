@@ -160,7 +160,7 @@ VPMDK considers an `INCAR` NEB-like when any of the following is true:
 That detection only controls the CLI compatibility workflow; it does not create
 NEB outputs unless numbered image directories are present.
 
-With numbered image directories and `NSW > 0`, `IBRION != 0`, and `ICHAIN=0` or
+With numbered image directories and `NSW > 0`, `IBRION > 0`, and `ICHAIN=0` or
 unset, VPMDK runs a spring-coupled ASE NEB optimization. It writes VASP-like
 outputs in each image directory and parent aggregate `OUTCAR`, `OSZICAR`, and
 `vasprun.xml` files from the final band. `NSW <= 0`/`IBRION < 0` still runs

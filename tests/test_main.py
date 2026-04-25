@@ -1125,6 +1125,41 @@ def test_main_neb_runner_dispatches_single_point_when_nsw_is_zero(
     assert [item["has_next"] for item in seen] == [True, True, False]
 
 
+def test_main_neb_runner_dispatches_single_point_when_ibrion_is_negative(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "2", "IBRION": "-1", "IMAGES": "1"},
+    )
+
+    _write_numbered_neb_poscars(tmp_path)
+
+    seen: list[str] = []
+
+    def fake_run_single_point(atoms, calculator, **kwargs):
+        seen.append(Path.cwd().name)
+        return 0.0
+
+    def fail(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("Negative IBRION NEB setup should stay single-point")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "run_single_point", fake_run_single_point)
+    monkeypatch.setattr(vpmdk, "run_md", fail)
+    monkeypatch.setattr(vpmdk, "run_relaxation", fail)
+    monkeypatch.setattr(vpmdk, "BFGS", fail)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen == ["00", "01", "02"]
+
+
 def test_main_neb_runner_single_point_writes_neb_projection_lines(
     tmp_path: Path, prepare_inputs
 ):

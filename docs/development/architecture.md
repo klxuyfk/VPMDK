@@ -51,7 +51,7 @@ The root and `src/` shims both re-export `vpmdk_core`, so user code can import
 The CLI always opts into compatibility observers.
 
 `run_neb_images` handles VTST-style numbered image directories. For
-`NSW > 0`, `IBRION != 0`, and `ICHAIN=0` or unset, it builds one ASE `NEB`
+`NSW > 0`, `IBRION > 0`, and `ICHAIN=0` or unset, it builds one ASE `NEB`
 object across all images and optimizes the moving images with spring-coupled
 band forces. Single-point and MD NEB layouts remain independent per-image
 compatibility workflows.

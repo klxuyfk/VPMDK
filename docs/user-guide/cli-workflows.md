@@ -63,7 +63,7 @@ The CLI chooses one execution path:
 4. Parse `INCAR` into settings.
 5. Select one of:
    - spring-coupled ASE NEB if numbered image directories exist, `NSW > 0`,
-     and `IBRION != 0`
+     and `IBRION > 0`
    - independent NEB image single points if `NSW <= 0` or `IBRION < 0`
    - independent NEB image MD if numbered image directories exist and
      `IBRION == 0`
@@ -133,7 +133,7 @@ Additional behavior:
 
 When `INCAR` suggests NEB and directories such as `00`, `01`, `02`, ... exist,
 VPMDK reads those directories as a VTST-style NEB band. For normal NEB
-optimization (`NSW > 0`, `IBRION != 0`, `ICHAIN=0` or unset), VPMDK constructs
+optimization (`NSW > 0`, `IBRION > 0`, `ICHAIN=0` or unset), VPMDK constructs
 an ASE `NEB` object, attaches one backend calculator per image, applies
 spring-coupled band forces, and optimizes the moving images in one band-level
 optimizer.

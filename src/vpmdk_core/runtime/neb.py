@@ -607,7 +607,7 @@ def run_neb_images(
             )
 
     with root._active_pseudo_scf_settings(pseudo_scf_settings), root._active_vasp_input_paths(input_paths):
-        if settings.nsw > 0 and settings.ibrion != 0:
+        if settings.nsw > 0 and settings.ibrion > 0:
             _run_ase_neb_relaxation(
                 image_dirs=image_dirs,
                 workdir_abs=workdir_abs,
