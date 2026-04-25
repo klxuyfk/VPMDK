@@ -608,6 +608,12 @@ def run_neb_images(
 
     with root._active_pseudo_scf_settings(pseudo_scf_settings), root._active_vasp_input_paths(input_paths):
         if settings.nsw > 0 and settings.ibrion > 0:
+            if len(image_dirs) < 3:
+                raise RuntimeError(
+                    "ASE NEB optimization requires at least three numbered image "
+                    "directories: initial, one moving image, and final "
+                    "(for example 00, 01, 02)."
+                )
             _run_ase_neb_relaxation(
                 image_dirs=image_dirs,
                 workdir_abs=workdir_abs,

@@ -1160,6 +1160,47 @@ def test_main_neb_runner_dispatches_single_point_when_ibrion_is_negative(
     assert seen == ["00", "01", "02"]
 
 
+def test_main_neb_runner_rejects_ase_neb_without_moving_images(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "2", "IBRION": "2", "IMAGES": "1"},
+    )
+
+    poscar_text = (tmp_path / "POSCAR").read_text()
+    for image, delta in zip(("00", "01"), (0.0, 0.02)):
+        image_dir = tmp_path / image
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(
+            _shift_first_direct_position(poscar_text, delta)
+        )
+
+    def fail(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("ASE NEB should be rejected before optimizer setup")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "BFGS", fail)
+    try:
+        incar = vpmdk._load_incar(str(tmp_path / "INCAR"))
+        with pytest.raises(RuntimeError, match="requires at least three"):
+            vpmdk.run_neb_images(
+                workdir=str(tmp_path),
+                incar=incar,
+                settings=vpmdk._load_incar_settings(incar),
+                bcar={"MLP": "CHGNET"},
+                potcar_path=None,
+                write_energy_csv=False,
+                write_lammps_traj=False,
+                lammps_traj_interval=1,
+                oszicar_pseudo_scf=False,
+            )
+    finally:
+        monkeypatch.undo()
+
+
 def test_main_neb_runner_single_point_writes_neb_projection_lines(
     tmp_path: Path, prepare_inputs
 ):

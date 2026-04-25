@@ -165,7 +165,8 @@ unset, VPMDK runs a spring-coupled ASE NEB optimization. It writes VASP-like
 outputs in each image directory and parent aggregate `OUTCAR`, `OSZICAR`, and
 `vasprun.xml` files from the final band. `NSW <= 0`/`IBRION < 0` still runs
 independent image single points, and `IBRION == 0` still runs independent image
-MD for compatibility.
+MD for compatibility. ASE NEB optimization requires at least three numbered
+directories: initial, one moving image, and final.
 
 ## Pseudo-SCF Compatibility Tags
 

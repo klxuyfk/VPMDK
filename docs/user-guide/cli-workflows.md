@@ -153,6 +153,8 @@ Current limitations:
 - `LNEBCELL` and NEB cell relaxation are not implemented; image cells stay fixed
 - if `NSW <= 0` or `IBRION < 0`, VPMDK still runs independent image single
   points for compatibility; if `IBRION == 0`, it runs independent image MD
+- ASE NEB optimization requires at least three numbered directories: initial,
+  one moving image, and final
 
 Additional NEB behavior:
 
