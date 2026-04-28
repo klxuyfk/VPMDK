@@ -1444,6 +1444,43 @@ def test_main_neb_runner_evaluates_ase_neb_calculators_from_run_dir(
     assert set(seen_cwds) == {run_dir}
 
 
+def test_main_neb_runner_resolves_wrapped_calculators_for_ase_neb(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "2", "IMAGES": "1"},
+    )
+
+    _write_numbered_neb_poscars(tmp_path)
+
+    inner_calculators: list[DummyCalculator] = []
+
+    class Wrapper:
+        def __init__(self, calculator):
+            self.calculator = calculator
+
+    def fake_get_calculator(*args, **kwargs):
+        calculator = DummyCalculator()
+        inner_calculators.append(calculator)
+        return Wrapper(calculator)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", fake_get_calculator)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
+    monkeypatch.setattr(vpmdk, "_collect_neb_image_results", lambda *_, **__: [])
+    monkeypatch.setattr(vpmdk, "_write_neb_parent_aggregate_outputs", lambda **_: None)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert len(inner_calculators) == 3
+    assert all(calculator.called > 0 for calculator in inner_calculators)
+
+
 def test_main_neb_runner_passes_absolute_potcar_to_collect_results(
     tmp_path: Path, prepare_inputs
 ):

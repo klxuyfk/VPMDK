@@ -206,7 +206,8 @@ def _build_neb_images(
         atoms.wrap()
         root._apply_initial_magnetization(atoms, incar)
         with root._working_directory(workdir_abs):
-            atoms.calc = root._build_calculator_from_tags(bcar, structure=structure)
+            calculator = root._build_calculator_from_tags(bcar, structure=structure)
+            atoms.calc = root._resolve_calculator(calculator)
         images.append(atoms)
     return images
 
