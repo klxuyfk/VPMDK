@@ -203,7 +203,6 @@ def _build_neb_images(
         structure_path = root._resolve_neb_image_structure_path(image_dir)
         structure = root.read_structure(structure_path, potcar_path_abs)
         atoms = root.AseAtomsAdaptor.get_atoms(structure)
-        atoms.wrap()
         root._apply_initial_magnetization(atoms, incar)
         with root._working_directory(workdir_abs):
             calculator = root._build_calculator_from_tags(bcar, structure=structure)

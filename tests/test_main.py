@@ -30,6 +30,22 @@ def _shift_first_direct_position(poscar_text: str, delta: float) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _set_first_direct_position(poscar_text: str, value: float) -> str:
+    lines = poscar_text.splitlines()
+    coord_start = None
+    for index, line in enumerate(lines):
+        if line.strip().lower().startswith(("direct", "cart")):
+            coord_start = index + 1
+            break
+    if coord_start is None:
+        raise AssertionError("test POSCAR does not contain a coordinate mode line")
+
+    parts = lines[coord_start].split()
+    parts[0] = f"{value:.9f}"
+    lines[coord_start] = "     " + "         ".join(parts)
+    return "\n".join(lines) + "\n"
+
+
 def _write_numbered_neb_poscars(run_dir: Path) -> None:
     poscar_text = (run_dir / "POSCAR").read_text()
     for image, delta in zip(("00", "01", "02"), (0.0, 0.01, 0.02)):
@@ -1479,6 +1495,47 @@ def test_main_neb_runner_resolves_wrapped_calculators_for_ase_neb(
 
     assert len(inner_calculators) == 3
     assert all(calculator.called > 0 for calculator in inner_calculators)
+
+
+def test_main_neb_runner_preserves_unwrapped_image_coordinates_for_ase_neb(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "2", "IMAGES": "1"},
+    )
+
+    poscar_text = (tmp_path / "POSCAR").read_text()
+    for image, x_position in zip(("00", "01", "02"), (0.95, 1.0, 1.05)):
+        image_dir = tmp_path / image
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(
+            _set_first_direct_position(poscar_text, x_position)
+        )
+
+    seen_scaled_x: list[float] = []
+
+    class RecordingNEBOptimizer(DummyNEBOptimizer):
+        def __init__(self, obj, logfile=None):
+            super().__init__(obj, logfile=logfile)
+            seen_scaled_x.extend(
+                float(image.get_scaled_positions(wrap=False)[0, 0])
+                for image in obj.images
+            )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "BFGS", RecordingNEBOptimizer)
+    monkeypatch.setattr(vpmdk, "_collect_neb_image_results", lambda *_, **__: [])
+    monkeypatch.setattr(vpmdk, "_write_neb_parent_aggregate_outputs", lambda **_: None)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen_scaled_x == pytest.approx([0.95, 1.0, 1.05])
 
 
 def test_main_neb_runner_passes_absolute_potcar_to_collect_results(
