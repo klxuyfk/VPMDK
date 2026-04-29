@@ -106,11 +106,7 @@ def _parse_neb_ichain(incar) -> int:
     """Return VTST ``ICHAIN`` with the NEB default."""
 
     root = _root()
-    raw_value = getattr(incar, "get", lambda *_: 0)("ICHAIN", 0)
-    parsed = root._parse_optional_float(raw_value, key="ICHAIN")
-    if parsed is None:
-        return 0
-    return int(parsed)
+    return root._parse_vtst_ichain(incar)
 
 
 def _parse_neb_iopt(incar) -> int:
@@ -607,6 +603,8 @@ def run_neb_images(
                 f"Warning: IMAGES={images_hint} implies {expected_dirs} image directories, "
                 f"but found {len(image_dirs)} under {workdir_abs}. Proceeding with discovered directories."
             )
+
+    root._reject_unsupported_vtst_modes(incar)
 
     with root._active_pseudo_scf_settings(pseudo_scf_settings), root._active_vasp_input_paths(input_paths):
         if settings.nsw > 0 and settings.ibrion > 0:

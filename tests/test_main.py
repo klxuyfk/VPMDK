@@ -1217,6 +1217,53 @@ def test_main_neb_runner_rejects_ase_neb_without_moving_images(
         monkeypatch.undo()
 
 
+def test_main_neb_runner_rejects_unsupported_vtst_ts_mode_without_numbered_images(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "2", "IBRION": "2", "ICHAIN": "2"},
+    )
+
+    def fail(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("Unsupported VTST TS mode should not run relaxation")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", fail)
+    monkeypatch.setattr(vpmdk, "run_relaxation", fail)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        with pytest.raises(NotImplementedError, match="ICHAIN=2"):
+            vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+
+def test_main_neb_runner_rejects_unsupported_vtst_ts_mode_before_per_image_dispatch(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0", "IMAGES": "1", "ICHAIN": "2"},
+    )
+
+    _write_numbered_neb_poscars(tmp_path)
+
+    def fail(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("Unsupported VTST TS mode should not dispatch images")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "run_single_point", fail)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        with pytest.raises(NotImplementedError, match="ICHAIN=2"):
+            vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+
 def test_main_neb_runner_single_point_writes_neb_projection_lines(
     tmp_path: Path, prepare_inputs
 ):

@@ -577,6 +577,8 @@ from .settings.incar import (
     _normalize_isif,
     _parse_neb_image_count,
     _parse_optional_float,
+    _parse_vtst_ichain,
+    _reject_unsupported_vtst_modes,
     _should_write_chgcar,
     _should_write_energy_csv,
     _should_write_lammps_trajectory,
