@@ -58,11 +58,16 @@ Behavior:
 The CLI chooses one execution path:
 
 1. Detect NEB-like input from `IMAGES`, `SPRING`, or truthy `LCLIMB`.
-2. If numbered image directories exist, run NEB image mode.
+2. If numbered image directories exist, run NEB mode.
 3. Otherwise require `POSCAR`.
 4. Parse `INCAR` into settings.
 5. Select one of:
-   - single point if `NSW <= 0` or `IBRION < 0`
+   - spring-coupled ASE NEB if numbered image directories exist, `NSW > 0`,
+     and `IBRION > 0`
+   - independent NEB image single points if `NSW <= 0` or `IBRION < 0`
+   - independent NEB image MD if numbered image directories exist and
+     `IBRION == 0`
+   - otherwise, single point if `NSW <= 0` or `IBRION < 0`
    - molecular dynamics if `IBRION == 0`
    - relaxation otherwise
 
@@ -127,13 +132,29 @@ Additional behavior:
 ## NEB-Like Directory Layouts
 
 When `INCAR` suggests NEB and directories such as `00`, `01`, `02`, ... exist,
-VPMDK runs them as independent image calculations.
+VPMDK reads those directories as a VTST-style NEB band. For normal NEB
+optimization (`NSW > 0`, `IBRION > 0`, `ICHAIN=0` or unset), VPMDK constructs
+an ASE `NEB` object, attaches one backend calculator per image, applies
+spring-coupled band forces, and optimizes the moving images in one band-level
+optimizer.
 
-Important limitation:
+Supported NEB controls:
 
-- VPMDK does not apply spring-coupled NEB forces.
-- The mode is compatibility-oriented: it executes each image, writes image-level
-  outputs, and emits VTST-style projection lines for post-processing.
+- `SPRING` sets the NEB spring magnitude; VASP/VTST negative values are accepted
+  and converted to a positive ASE spring constant
+- truthy `LCLIMB` enables climbing-image NEB
+- `IOPT=1`, `3`, `5`, or `7` select ASE LBFGS, Quick-Min-like MDMin, BFGS, or
+  FIRE respectively; other VTST optimizer values fall back to BFGS with a
+  warning
+
+Current limitations:
+
+- only `ICHAIN=0` NEB is implemented; dimer/Lanczos TS modes are rejected
+- `LNEBCELL` and NEB cell relaxation are not implemented; image cells stay fixed
+- if `NSW <= 0` or `IBRION < 0`, VPMDK still runs independent image single
+  points for compatibility; if `IBRION == 0`, it runs independent image MD
+- ASE NEB optimization requires at least three numbered directories: initial,
+  one moving image, and final
 
 Additional NEB behavior:
 
@@ -142,6 +163,8 @@ Additional NEB behavior:
 - parent aggregate `OUTCAR`, `OSZICAR`, and `vasprun.xml` are synthesized from
   the final image results
 - a top-level `POSCAR` is optional in this mode
+- adjacent image geometries must differ; duplicate adjacent POSCAR/CONTCAR files
+  cannot define a NEB tangent and produce an explicit error
 
 ## Output Files
 

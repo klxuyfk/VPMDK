@@ -14,6 +14,64 @@ import vpmdk.compat.vasp as vasp_compat
 from tests.conftest import DummyCalculator
 
 
+def _shift_first_direct_position(poscar_text: str, delta: float) -> str:
+    lines = poscar_text.splitlines()
+    coord_start = None
+    for index, line in enumerate(lines):
+        if line.strip().lower().startswith(("direct", "cart")):
+            coord_start = index + 1
+            break
+    if coord_start is None:
+        raise AssertionError("test POSCAR does not contain a coordinate mode line")
+
+    parts = lines[coord_start].split()
+    parts[0] = f"{(float(parts[0]) + delta) % 1.0:.9f}"
+    lines[coord_start] = "     " + "         ".join(parts)
+    return "\n".join(lines) + "\n"
+
+
+def _set_first_direct_position(poscar_text: str, value: float) -> str:
+    lines = poscar_text.splitlines()
+    coord_start = None
+    for index, line in enumerate(lines):
+        if line.strip().lower().startswith(("direct", "cart")):
+            coord_start = index + 1
+            break
+    if coord_start is None:
+        raise AssertionError("test POSCAR does not contain a coordinate mode line")
+
+    parts = lines[coord_start].split()
+    parts[0] = f"{value:.9f}"
+    lines[coord_start] = "     " + "         ".join(parts)
+    return "\n".join(lines) + "\n"
+
+
+def _write_numbered_neb_poscars(run_dir: Path) -> None:
+    poscar_text = (run_dir / "POSCAR").read_text()
+    for image, delta in zip(("00", "01", "02"), (0.0, 0.01, 0.02)):
+        image_dir = run_dir / image
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(
+            _shift_first_direct_position(poscar_text, delta)
+        )
+
+
+class DummyNEBOptimizer:
+    def __init__(self, obj, logfile=None):
+        self.obj = obj
+        self._callbacks = []
+
+    def attach(self, callback, *args, **kwargs):
+        self._callbacks.append((callback, args, kwargs))
+
+    def run(self, *args, **kwargs):
+        positions = self.obj.get_positions()
+        self.obj.set_positions(positions + 0.01)
+        for callback, cb_args, cb_kwargs in self._callbacks:
+            callback(*cb_args, **cb_kwargs)
+        return False
+
+
 @pytest.mark.parametrize(
     "potential",
     [
@@ -915,51 +973,33 @@ def test_main_runs_neb_images_from_numbered_directories(tmp_path: Path, prepare_
     prepare_inputs(
         tmp_path,
         potential="CHGNET",
-        incar_overrides={"NSW": "2", "IMAGES": "1"},
+        incar_overrides={"NSW": "2", "ISIF": "2", "IMAGES": "1"},
     )
 
-    poscar_text = (tmp_path / "POSCAR").read_text()
-    for image in ("00", "01", "02"):
-        image_dir = tmp_path / image
-        image_dir.mkdir()
-        (image_dir / "POSCAR").write_text(poscar_text)
+    _write_numbered_neb_poscars(tmp_path)
 
-    seen: list[dict[str, object]] = []
-
-    def fake_run_relaxation(
-        atoms,
-        calculator,
-        steps,
-        fmax,
-        write_energy_csv=False,
-        isif=2,
-        pstress=None,
-        energy_tolerance=None,
-        ibrion=2,
-        stress_isif=None,
-        neb_mode=False,
-        neb_prev_positions=None,
-        neb_next_positions=None,
-        oszicar_pseudo_scf=False,
-    ):
-        seen.append(
-            {
-                "cwd": Path.cwd().name,
-                "steps": steps,
-                "neb_mode": neb_mode,
-                "has_prev": neb_prev_positions is not None,
-                "has_next": neb_next_positions is not None,
-                "oszicar_pseudo_scf": oszicar_pseudo_scf,
-            }
-        )
-        return 0.0
+    seen: dict[str, object] = {}
 
     def fail(*args, **kwargs):  # pragma: no cover - defensive guard
-        raise AssertionError("NEB runner should dispatch to relaxation for this setup")
+        raise AssertionError("NEB relaxation should use the ASE NEB optimizer")
+
+    class RecordingNEBOptimizer(DummyNEBOptimizer):
+        def __init__(self, obj, logfile=None):
+            super().__init__(obj, logfile=logfile)
+            seen["optimizable_atoms"] = len(obj)
+            seen["nimages"] = obj.nimages
+            seen["spring"] = list(obj.k)
+            seen["climb"] = obj.climb
+
+        def run(self, *args, **kwargs):
+            seen["steps"] = kwargs.get("steps")
+            seen["fmax"] = kwargs.get("fmax")
+            return super().run(*args, **kwargs)
 
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
-    monkeypatch.setattr(vpmdk, "run_relaxation", fake_run_relaxation)
+    monkeypatch.setattr(vpmdk, "BFGS", RecordingNEBOptimizer)
+    monkeypatch.setattr(vpmdk, "run_relaxation", fail)
     monkeypatch.setattr(vpmdk, "run_single_point", fail)
     monkeypatch.setattr(vpmdk, "run_md", fail)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
@@ -968,12 +1008,15 @@ def test_main_runs_neb_images_from_numbered_directories(tmp_path: Path, prepare_
     finally:
         monkeypatch.undo()
 
-    assert [item["cwd"] for item in seen] == ["00", "01", "02"]
-    assert all(item["neb_mode"] is True for item in seen)
-    assert all(item["steps"] == 2 for item in seen)
-    assert [item["has_prev"] for item in seen] == [False, True, True]
-    assert [item["has_next"] for item in seen] == [True, True, False]
-    assert all(item["oszicar_pseudo_scf"] is False for item in seen)
+    assert seen["optimizable_atoms"] == 2
+    assert seen["nimages"] == 3
+    assert seen["spring"] == [5.0, 5.0]
+    assert seen["climb"] is False
+    assert seen["steps"] == 2
+    assert seen["fmax"] == pytest.approx(0.01)
+    for image in ("00", "01", "02"):
+        assert (tmp_path / image / "OUTCAR").exists()
+        assert (tmp_path / image / "CONTCAR").exists()
 
 
 def test_run_neb_images_uses_parent_incar_for_pseudo_scf_settings(
@@ -992,11 +1035,7 @@ def test_run_neb_images_uses_parent_incar_for_pseudo_scf_settings(
         },
     )
 
-    poscar_text = (tmp_path / "POSCAR").read_text()
-    for image in ("00", "01", "02"):
-        image_dir = tmp_path / image
-        image_dir.mkdir()
-        (image_dir / "POSCAR").write_text(poscar_text)
+    _write_numbered_neb_poscars(tmp_path)
 
     incar = vpmdk._load_incar(str(tmp_path / "INCAR"))
     settings = vpmdk._load_incar_settings(incar)
@@ -1033,47 +1072,29 @@ def test_main_neb_runner_allows_missing_top_level_poscar(tmp_path: Path, prepare
     prepare_inputs(
         tmp_path,
         potential="CHGNET",
-        incar_overrides={"NSW": "2", "IMAGES": "1"},
+        incar_overrides={"NSW": "2", "ISIF": "2", "IMAGES": "1"},
     )
 
     poscar_text = (tmp_path / "POSCAR").read_text()
-    (tmp_path / "POSCAR").unlink()
-    for image in ("00", "01", "02"):
+    for image, delta in zip(("00", "01", "02"), (0.0, 0.01, 0.02)):
         image_dir = tmp_path / image
         image_dir.mkdir()
-        (image_dir / "POSCAR").write_text(poscar_text)
-
-    seen: list[str] = []
-
-    def fake_run_relaxation(
-        atoms,
-        calculator,
-        steps,
-        fmax,
-        write_energy_csv=False,
-        isif=2,
-        pstress=None,
-        energy_tolerance=None,
-        ibrion=2,
-        stress_isif=None,
-        neb_mode=False,
-        neb_prev_positions=None,
-        neb_next_positions=None,
-        oszicar_pseudo_scf=False,
-    ):
-        seen.append(Path.cwd().name)
-        return 0.0
+        (image_dir / "POSCAR").write_text(
+            _shift_first_direct_position(poscar_text, delta)
+        )
+    (tmp_path / "POSCAR").unlink()
 
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
-    monkeypatch.setattr(vpmdk, "run_relaxation", fake_run_relaxation)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
     try:
         vpmdk.main()
     finally:
         monkeypatch.undo()
 
-    assert seen == ["00", "01", "02"]
+    for image in ("00", "01", "02"):
+        assert (tmp_path / image / "OUTCAR").exists()
 
 
 def test_main_neb_runner_dispatches_single_point_when_nsw_is_zero(
@@ -1085,11 +1106,7 @@ def test_main_neb_runner_dispatches_single_point_when_nsw_is_zero(
         incar_overrides={"NSW": "0", "IMAGES": "1"},
     )
 
-    poscar_text = (tmp_path / "POSCAR").read_text()
-    for image in ("00", "01", "02"):
-        image_dir = tmp_path / image
-        image_dir.mkdir()
-        (image_dir / "POSCAR").write_text(poscar_text)
+    _write_numbered_neb_poscars(tmp_path)
 
     seen: list[dict[str, object]] = []
 
@@ -1122,6 +1139,129 @@ def test_main_neb_runner_dispatches_single_point_when_nsw_is_zero(
     assert all(item["neb_mode"] is True for item in seen)
     assert [item["has_prev"] for item in seen] == [False, True, True]
     assert [item["has_next"] for item in seen] == [True, True, False]
+
+
+def test_main_neb_runner_dispatches_single_point_when_ibrion_is_negative(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "2", "IBRION": "-1", "IMAGES": "1"},
+    )
+
+    _write_numbered_neb_poscars(tmp_path)
+
+    seen: list[str] = []
+
+    def fake_run_single_point(atoms, calculator, **kwargs):
+        seen.append(Path.cwd().name)
+        return 0.0
+
+    def fail(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("Negative IBRION NEB setup should stay single-point")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "run_single_point", fake_run_single_point)
+    monkeypatch.setattr(vpmdk, "run_md", fail)
+    monkeypatch.setattr(vpmdk, "run_relaxation", fail)
+    monkeypatch.setattr(vpmdk, "BFGS", fail)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen == ["00", "01", "02"]
+
+
+def test_main_neb_runner_rejects_ase_neb_without_moving_images(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "2", "IBRION": "2", "IMAGES": "1"},
+    )
+
+    poscar_text = (tmp_path / "POSCAR").read_text()
+    for image, delta in zip(("00", "01"), (0.0, 0.02)):
+        image_dir = tmp_path / image
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(
+            _shift_first_direct_position(poscar_text, delta)
+        )
+
+    def fail(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("ASE NEB should be rejected before optimizer setup")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "BFGS", fail)
+    try:
+        incar = vpmdk._load_incar(str(tmp_path / "INCAR"))
+        with pytest.raises(RuntimeError, match="requires at least three"):
+            vpmdk.run_neb_images(
+                workdir=str(tmp_path),
+                incar=incar,
+                settings=vpmdk._load_incar_settings(incar),
+                bcar={"MLP": "CHGNET"},
+                potcar_path=None,
+                write_energy_csv=False,
+                write_lammps_traj=False,
+                lammps_traj_interval=1,
+                oszicar_pseudo_scf=False,
+            )
+    finally:
+        monkeypatch.undo()
+
+
+def test_main_neb_runner_rejects_unsupported_vtst_ts_mode_without_numbered_images(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "2", "IBRION": "2", "ICHAIN": "2"},
+    )
+
+    def fail(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("Unsupported VTST TS mode should not run relaxation")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", fail)
+    monkeypatch.setattr(vpmdk, "run_relaxation", fail)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        with pytest.raises(NotImplementedError, match="ICHAIN=2"):
+            vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+
+def test_main_neb_runner_rejects_unsupported_vtst_ts_mode_before_per_image_dispatch(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0", "IMAGES": "1", "ICHAIN": "2"},
+    )
+
+    _write_numbered_neb_poscars(tmp_path)
+
+    def fail(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("Unsupported VTST TS mode should not dispatch images")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "run_single_point", fail)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        with pytest.raises(NotImplementedError, match="ICHAIN=2"):
+            vpmdk.main()
+    finally:
+        monkeypatch.undo()
 
 
 def test_main_neb_runner_single_point_writes_neb_projection_lines(
@@ -1220,34 +1360,16 @@ def test_main_neb_runner_writes_parent_aggregate_outputs(tmp_path: Path, prepare
         incar_overrides={"NSW": "1", "IBRION": "2", "ISIF": "2", "IMAGES": "1"},
     )
 
-    poscar_text = (tmp_path / "POSCAR").read_text()
-    for image in ("00", "01", "02"):
-        image_dir = tmp_path / image
-        image_dir.mkdir()
-        (image_dir / "POSCAR").write_text(poscar_text)
+    _write_numbered_neb_poscars(tmp_path)
 
     class StressDummyCalculator(DummyCalculator):
         def calculate(self, atoms=None, properties=("energy",), system_changes=()):
             super().calculate(atoms=atoms, properties=properties, system_changes=system_changes)
             self.results["stress"] = np.zeros(6, dtype=float)
 
-    class DummyBFGS:
-        def __init__(self, obj, logfile=None):
-            self.obj = obj
-            self._callbacks = []
-
-        def attach(self, callback, *args, **kwargs):
-            self._callbacks.append(callback)
-
-        def run(self, *args, **kwargs):
-            target = getattr(self.obj, "atoms", self.obj)
-            target.positions += 0.01
-            for callback in self._callbacks:
-                callback()
-
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: StressDummyCalculator())
-    monkeypatch.setattr(vpmdk, "BFGS", DummyBFGS)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
     try:
         vpmdk.main()
@@ -1275,35 +1397,17 @@ def test_main_neb_runner_parent_aggregate_supports_relative_workdir(
         incar_overrides={"NSW": "1", "IBRION": "2", "ISIF": "2", "IMAGES": "1"},
     )
 
-    poscar_text = (run_dir / "POSCAR").read_text()
-    for image in ("00", "01", "02"):
-        image_dir = run_dir / image
-        image_dir.mkdir()
-        (image_dir / "POSCAR").write_text(poscar_text)
+    _write_numbered_neb_poscars(run_dir)
 
     class StressDummyCalculator(DummyCalculator):
         def calculate(self, atoms=None, properties=("energy",), system_changes=()):
             super().calculate(atoms=atoms, properties=properties, system_changes=system_changes)
             self.results["stress"] = np.zeros(6, dtype=float)
 
-    class DummyBFGS:
-        def __init__(self, obj, logfile=None):
-            self.obj = obj
-            self._callbacks = []
-
-        def attach(self, callback, *args, **kwargs):
-            self._callbacks.append(callback)
-
-        def run(self, *args, **kwargs):
-            target = getattr(self.obj, "atoms", self.obj)
-            target.positions += 0.01
-            for callback in self._callbacks:
-                callback()
-
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: StressDummyCalculator())
-    monkeypatch.setattr(vpmdk, "BFGS", DummyBFGS)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", "runs/neb1"])
     try:
         vpmdk.main()
@@ -1329,11 +1433,7 @@ def test_main_neb_runner_initializes_calculator_from_run_dir_for_relative_model_
         extra_bcar={"MODEL": "./model/nequip.pth"},
     )
 
-    poscar_text = (run_dir / "POSCAR").read_text()
-    for image in ("00", "01", "02"):
-        image_dir = run_dir / image
-        image_dir.mkdir()
-        (image_dir / "POSCAR").write_text(poscar_text)
+    _write_numbered_neb_poscars(run_dir)
 
     model_dir = run_dir / "model"
     model_dir.mkdir()
@@ -1347,28 +1447,10 @@ def test_main_neb_runner_initializes_calculator_from_run_dir_for_relative_model_
         seen_models.append(tags.get("MODEL"))
         return DummyCalculator()
 
-    def fake_run_relaxation(
-        atoms,
-        calculator,
-        steps,
-        fmax,
-        write_energy_csv=False,
-        isif=2,
-        pstress=None,
-        energy_tolerance=None,
-        ibrion=2,
-        stress_isif=None,
-        neb_mode=False,
-        neb_prev_positions=None,
-        neb_next_positions=None,
-        oszicar_pseudo_scf=False,
-    ):
-        return 0.0
-
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", fake_get_calculator)
-    monkeypatch.setattr(vpmdk, "run_relaxation", fake_run_relaxation)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
     monkeypatch.setattr(vpmdk, "_collect_neb_image_results", lambda *_, **__: [])
     monkeypatch.setattr(vpmdk, "_write_neb_parent_aggregate_outputs", lambda **_: None)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", "runs/neb_model"])
@@ -1379,6 +1461,128 @@ def test_main_neb_runner_initializes_calculator_from_run_dir_for_relative_model_
 
     assert seen_cwds == [run_dir, run_dir, run_dir]
     assert seen_models == ["./model/nequip.pth"] * 3
+
+
+def test_main_neb_runner_evaluates_ase_neb_calculators_from_run_dir(
+    tmp_path: Path, prepare_inputs
+):
+    run_dir = tmp_path / "runs" / "neb_eval"
+    run_dir.mkdir(parents=True)
+    prepare_inputs(
+        run_dir,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "2", "IMAGES": "1"},
+    )
+
+    _write_numbered_neb_poscars(run_dir)
+
+    seen_cwds: list[Path] = []
+
+    class CwdRecordingCalculator(DummyCalculator):
+        def calculate(self, atoms=None, properties=("energy",), system_changes=()):
+            seen_cwds.append(Path.cwd())
+            super().calculate(
+                atoms=atoms,
+                properties=properties,
+                system_changes=system_changes,
+            )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        vpmdk,
+        "_build_calculator_from_tags",
+        lambda *_, **__: CwdRecordingCalculator(),
+    )
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
+    monkeypatch.setattr(vpmdk, "_collect_neb_image_results", lambda *_, **__: [])
+    monkeypatch.setattr(vpmdk, "_write_neb_parent_aggregate_outputs", lambda **_: None)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", "runs/neb_eval"])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen_cwds
+    assert set(seen_cwds) == {run_dir}
+
+
+def test_main_neb_runner_resolves_wrapped_calculators_for_ase_neb(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "2", "IMAGES": "1"},
+    )
+
+    _write_numbered_neb_poscars(tmp_path)
+
+    inner_calculators: list[DummyCalculator] = []
+
+    class Wrapper:
+        def __init__(self, calculator):
+            self.calculator = calculator
+
+    def fake_get_calculator(*args, **kwargs):
+        calculator = DummyCalculator()
+        inner_calculators.append(calculator)
+        return Wrapper(calculator)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", fake_get_calculator)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
+    monkeypatch.setattr(vpmdk, "_collect_neb_image_results", lambda *_, **__: [])
+    monkeypatch.setattr(vpmdk, "_write_neb_parent_aggregate_outputs", lambda **_: None)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert len(inner_calculators) == 3
+    assert all(calculator.called > 0 for calculator in inner_calculators)
+
+
+def test_main_neb_runner_preserves_unwrapped_image_coordinates_for_ase_neb(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "2", "IMAGES": "1"},
+    )
+
+    poscar_text = (tmp_path / "POSCAR").read_text()
+    for image, x_position in zip(("00", "01", "02"), (0.95, 1.0, 1.05)):
+        image_dir = tmp_path / image
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(
+            _set_first_direct_position(poscar_text, x_position)
+        )
+
+    seen_scaled_x: list[float] = []
+
+    class RecordingNEBOptimizer(DummyNEBOptimizer):
+        def __init__(self, obj, logfile=None):
+            super().__init__(obj, logfile=logfile)
+            seen_scaled_x.extend(
+                float(image.get_scaled_positions(wrap=False)[0, 0])
+                for image in obj.images
+            )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "BFGS", RecordingNEBOptimizer)
+    monkeypatch.setattr(vpmdk, "_collect_neb_image_results", lambda *_, **__: [])
+    monkeypatch.setattr(vpmdk, "_write_neb_parent_aggregate_outputs", lambda **_: None)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen_scaled_x == pytest.approx([0.95, 1.0, 1.05])
 
 
 def test_main_neb_runner_passes_absolute_potcar_to_collect_results(
@@ -1393,31 +1597,9 @@ def test_main_neb_runner_passes_absolute_potcar_to_collect_results(
     )
     (run_dir / "POTCAR").write_text("Si\n")
 
-    poscar_text = (run_dir / "POSCAR").read_text()
-    for image in ("00", "01", "02"):
-        image_dir = run_dir / image
-        image_dir.mkdir()
-        (image_dir / "POSCAR").write_text(poscar_text)
+    _write_numbered_neb_poscars(run_dir)
 
     seen: dict[str, object] = {}
-
-    def fake_run_relaxation(
-        atoms,
-        calculator,
-        steps,
-        fmax,
-        write_energy_csv=False,
-        isif=2,
-        pstress=None,
-        energy_tolerance=None,
-        ibrion=2,
-        stress_isif=None,
-        neb_mode=False,
-        neb_prev_positions=None,
-        neb_next_positions=None,
-        oszicar_pseudo_scf=False,
-    ):
-        return 0.0
 
     def fake_collect(image_dirs, *, potcar_path=None):
         seen["cwd"] = Path.cwd()
@@ -1428,7 +1610,7 @@ def test_main_neb_runner_passes_absolute_potcar_to_collect_results(
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
-    monkeypatch.setattr(vpmdk, "run_relaxation", fake_run_relaxation)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
     monkeypatch.setattr(vpmdk, "_collect_neb_image_results", fake_collect)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", "runs/neb2"])
     try:

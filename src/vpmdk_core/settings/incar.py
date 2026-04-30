@@ -64,7 +64,10 @@ SUPPORTED_INCAR_TAGS = {
     "NHC_NCHAINS",
     "MAGMOM",
     "IMAGES",
+    "ICHAIN",
+    "IOPT",
     "LCLIMB",
+    "LNEBCELL",
     "SPRING",
 }
 
@@ -112,6 +115,27 @@ def _warn_for_unsupported_incar_tags(
             continue
         if key not in supported_tags:
             print(f"INCAR tag {key} is not supported and will be ignored")
+
+
+def _parse_vtst_ichain(incar) -> int:
+    """Return VTST ``ICHAIN`` with the NEB default."""
+
+    raw_value = getattr(incar, "get", lambda *_: 0)("ICHAIN", 0)
+    parsed = _parse_optional_float(raw_value, key="ICHAIN")
+    if parsed is None:
+        return 0
+    return int(parsed)
+
+
+def _reject_unsupported_vtst_modes(incar) -> None:
+    """Reject VTST transition-state modes that VPMDK does not implement."""
+
+    ichain = _parse_vtst_ichain(incar)
+    if ichain != 0:
+        raise NotImplementedError(
+            "VPMDK currently implements VTST-style NEB for ICHAIN=0 only. "
+            f"ICHAIN={ichain} TS methods such as dimer/lanczos are not implemented."
+        )
 
 
 def _is_truthy_flag(value) -> bool:

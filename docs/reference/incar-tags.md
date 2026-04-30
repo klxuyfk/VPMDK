@@ -25,7 +25,10 @@ Supported tags:
 - `NHC_NCHAINS`
 - `MAGMOM`
 - `IMAGES`
+- `ICHAIN`
+- `IOPT`
 - `LCLIMB`
+- `LNEBCELL`
 - `SPRING`
 
 ## Parsing Defaults
@@ -66,8 +69,11 @@ The parsed `IncarSettings` defaults are:
 | `NHC_NCHAINS` | Nose-Hoover chain length | used with `MDALGO=2` or `4` |
 | `MAGMOM` | Initial magnetic moments | VASP-like parsing including `N*value` |
 | `IMAGES` | NEB image count hint | also triggers NEB-like mode detection |
-| `LCLIMB` | NEB climbing-image hint | truthy values trigger NEB-like detection |
-| `SPRING` | NEB spring hint | presence triggers NEB-like detection |
+| `ICHAIN` | VTST chain method selector | only `0`/unset NEB is implemented |
+| `IOPT` | VTST optimizer selector | maps selected values to ASE optimizers |
+| `LCLIMB` | NEB climbing-image flag | truthy values enable climbing-image ASE NEB |
+| `LNEBCELL` | VTST NEB cell-relaxation flag | recognized but not implemented; fixed-cell NEB is used |
+| `SPRING` | NEB spring constant | negative VTST values are converted to positive ASE spring magnitudes |
 
 ## ISIF Mapping
 
@@ -152,7 +158,15 @@ VPMDK considers an `INCAR` NEB-like when any of the following is true:
 - `LCLIMB` is truthy (`T`, `TRUE`, `1`, `YES`, `Y`)
 
 That detection only controls the CLI compatibility workflow; it does not create
-real spring-coupled NEB forces by itself.
+NEB outputs unless numbered image directories are present.
+
+With numbered image directories and `NSW > 0`, `IBRION > 0`, and `ICHAIN=0` or
+unset, VPMDK runs a spring-coupled ASE NEB optimization. It writes VASP-like
+outputs in each image directory and parent aggregate `OUTCAR`, `OSZICAR`, and
+`vasprun.xml` files from the final band. `NSW <= 0`/`IBRION < 0` still runs
+independent image single points, and `IBRION == 0` still runs independent image
+MD for compatibility. ASE NEB optimization requires at least three numbered
+directories: initial, one moving image, and final.
 
 ## Pseudo-SCF Compatibility Tags
 

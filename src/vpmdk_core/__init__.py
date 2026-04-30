@@ -183,7 +183,11 @@ from ase.calculators.singlepoint import SinglePointCalculator
 from ase.io import write
 from ase.io.lammpsdata import Prism
 from ase.io.vasp import write_vasp_xdatcar
-from ase.optimize import BFGS
+try:
+    from ase.mep import NEB
+except ImportError:
+    from ase.neb import NEB  # type: ignore
+from ase.optimize import BFGS, FIRE, LBFGS, MDMin
 
 try:
     from ase.constraints import FixAtoms, StrainFilter, UnitCellFilter
@@ -536,9 +540,13 @@ from .runtime.md import _estimate_tdamp, _rescale_velocities, _select_md_dynamic
 from .runtime.neb import (
     _collect_neb_image_results,
     _discover_neb_image_directories,
+    _parse_neb_ichain,
+    _parse_neb_spring_constant,
     _parse_vasprun_varray_rows,
     _read_last_vasprun_step,
+    _run_ase_neb_relaxation,
     _resolve_neb_image_structure_path,
+    _select_neb_optimizer,
     _write_neb_parent_aggregate_outputs,
     run_neb_images,
 )
@@ -569,6 +577,8 @@ from .settings.incar import (
     _normalize_isif,
     _parse_neb_image_count,
     _parse_optional_float,
+    _parse_vtst_ichain,
+    _reject_unsupported_vtst_modes,
     _should_write_chgcar,
     _should_write_energy_csv,
     _should_write_lammps_trajectory,

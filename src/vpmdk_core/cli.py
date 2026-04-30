@@ -76,6 +76,8 @@ def main():
                     print("Calculation completed.")
                     return
 
+            root._reject_unsupported_vtst_modes(incar)
+
             if not os.path.exists(poscar_path):
                 if neb_mode:
                     print(
