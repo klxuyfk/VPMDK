@@ -1,0 +1,3 @@
+MLP=SEVENNET
+MODEL=7net-0
+DEVICE=cuda

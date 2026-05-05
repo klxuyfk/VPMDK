@@ -1,0 +1,4 @@
+IBRION = 8
+NSW = 1
+ISIF = 2
+SYMPREC = 1E-5

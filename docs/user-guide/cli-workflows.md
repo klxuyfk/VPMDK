@@ -67,6 +67,7 @@ The CLI chooses one execution path:
    - independent NEB image single points if `NSW <= 0` or `IBRION < 0`
    - independent NEB image MD if numbered image directories exist and
      `IBRION == 0`
+   - force-constant output if `IBRION=5`, `6`, `7`, or `8`
    - otherwise, single point if `NSW <= 0` or `IBRION < 0`
    - molecular dynamics if `IBRION == 0`
    - relaxation otherwise
@@ -85,6 +86,27 @@ Stress output still depends on `ISIF` semantics:
 - `ISIF <= 0`: no stress block
 - `ISIF = 1`: trace-only pressure-style stress output
 - `ISIF >= 2`: full stress tensor block
+
+## Force Constants
+
+`IBRION=5`, `IBRION=6`, `IBRION=7`, or `IBRION=8` writes a VASP-like `dynmat`
+Hessian block into `vasprun.xml`. The values are generated from central finite
+differences of MLP forces and mass-normalized in the format expected by
+phonopy's VASP interface, so `phonopy --fc vasprun.xml` can create
+`FORCE_CONSTANTS`.
+
+For `IBRION=5` and `IBRION=6`, `POTIM` in `INCAR` controls the displacement in
+Angstrom. `NFREE=1`, `NFREE=2`, and `NFREE=4` are supported; omitted `NFREE`
+uses `2`. For `IBRION=7` and `IBRION=8`, `FORCE_CONSTANTS_DISPLACEMENT` in
+`BCAR` controls the numerical displacement; if omitted, VPMDK uses `0.01`.
+
+`IBRION=6` and `IBRION=8` reduce atom displacements using ASE/spglib symmetry
+operations and reconstruct the remaining force-constant columns. `IBRION=7`
+and `IBRION=8` also print a warning because VPMDK writes finite-difference
+compatibility data rather than running electronic DFPT.
+
+Implementation details, formulas, and compatibility limits are documented in
+[VASP Force-Constants Compatibility](../development/force-constants.md).
 
 ## Relaxations
 
