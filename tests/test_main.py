@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 import numpy as np
+from ase.calculators.calculator import Calculator, all_changes
 
 import vpmdk
 import vpmdk.compat.vasp as vasp_compat
@@ -44,6 +45,29 @@ def _set_first_direct_position(poscar_text: str, value: float) -> str:
     parts[0] = f"{value:.9f}"
     lines[coord_start] = "     " + "         ".join(parts)
     return "\n".join(lines) + "\n"
+
+
+def _reconstruct_force_constants_from_vasprun(path: Path, num_atoms: int = 2):
+    root = ET.parse(path).getroot()
+    hessian_rows = [
+        [float(value) for value in row.text.split()]
+        for row in root.findall("./dynmat/varray[@name='hessian']/v")
+    ]
+    atomtype_rows = root.findall("./atominfo/array[@name='atomtypes']/set/rc")
+    masses: list[float] = []
+    for row in atomtype_rows:
+        cells = row.findall("c")
+        masses.extend([float(cells[2].text)] * int(cells[0].text))
+
+    reconstructed = np.zeros((num_atoms, num_atoms, 3, 3), dtype=float)
+    hessian = np.asarray(hessian_rows, dtype=float)
+    for i in range(num_atoms):
+        for j in range(num_atoms):
+            reconstructed[i, j] = (
+                -hessian[i * 3 : (i + 1) * 3, j * 3 : (j + 1) * 3]
+                * np.sqrt(masses[i] * masses[j])
+            )
+    return reconstructed
 
 
 def _write_numbered_neb_poscars(run_dir: Path) -> None:
@@ -378,6 +402,373 @@ def test_main_negative_ibrion_forces_single_point(tmp_path: Path, prepare_inputs
         monkeypatch.undo()
 
     assert seen.get("single_point") == 1
+
+
+def test_main_ibrion7_writes_vasp_dynmat_for_phonopy_fc(
+    tmp_path: Path, prepare_inputs
+):
+    stiffness = 3.25
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "7", "ISIF": "2"},
+        extra_bcar={"FORCE_CONSTANTS_DISPLACEMENT": "0.02"},
+    )
+
+    class HarmonicCalculator(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+            super().calculate(atoms, properties, system_changes)
+            positions = atoms.get_positions()
+            self.results = {
+                "energy": 0.5 * stiffness * float(np.sum(positions * positions)),
+                "forces": -stiffness * positions,
+                "stress": np.zeros(6),
+            }
+
+    def fail(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("IBRION=7 should use force-constants mode")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: HarmonicCalculator())
+    monkeypatch.setattr(vpmdk, "run_single_point", fail)
+    monkeypatch.setattr(vpmdk, "run_relaxation", fail)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    hessian_rows = [
+        [float(value) for value in row.text.split()]
+        for row in root.findall("./dynmat/varray[@name='hessian']/v")
+    ]
+    assert np.asarray(hessian_rows).shape == (6, 6)
+
+    atomtype_rows = root.findall("./atominfo/array[@name='atomtypes']/set/rc")
+    masses: list[float] = []
+    for row in atomtype_rows:
+        cells = row.findall("c")
+        masses.extend([float(cells[2].text)] * int(cells[0].text))
+
+    reconstructed = np.zeros((2, 2, 3, 3), dtype=float)
+    hessian = np.asarray(hessian_rows, dtype=float)
+    for i in range(2):
+        for j in range(2):
+            reconstructed[i, j] = (
+                -hessian[i * 3 : (i + 1) * 3, j * 3 : (j + 1) * 3]
+                * np.sqrt(masses[i] * masses[j])
+            )
+
+    expected = np.zeros((2, 2, 3, 3), dtype=float)
+    for atom_index in range(2):
+        expected[atom_index, atom_index] = np.eye(3) * stiffness
+    assert reconstructed == pytest.approx(expected)
+
+
+def test_main_ibrion5_uses_potim_and_nfree2_for_finite_difference_fc(
+    tmp_path: Path, prepare_inputs, monkeypatch
+):
+    stiffness = 2.5
+    cubic = 7.0
+    displacement = 0.04
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={
+            "NSW": "1",
+            "IBRION": "5",
+            "ISIF": "2",
+            "POTIM": str(displacement),
+            "NFREE": "2",
+        },
+        extra_bcar={"FORCE_CONSTANTS_DISPLACEMENT": "0.001"},
+    )
+
+    class AnharmonicCalculator(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+            super().calculate(atoms, properties, system_changes)
+            positions = atoms.get_positions()
+            self.results = {
+                "energy": float(
+                    0.5 * stiffness * np.sum(positions * positions)
+                    + 0.25 * cubic * np.sum(positions**4)
+                ),
+                "forces": -stiffness * positions - cubic * positions**3,
+                "stress": np.zeros(6),
+            }
+
+    def fail(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("IBRION=5 should use finite-difference force-constants mode")
+
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: AnharmonicCalculator())
+    monkeypatch.setattr(vpmdk, "run_single_point", fail)
+    monkeypatch.setattr(vpmdk, "run_relaxation", fail)
+    monkeypatch.setattr(vpmdk, "run_md", fail)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    vpmdk.main()
+
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    assert root.findtext("./incar/i[@name='IBRION']") == "5"
+    assert float(root.findtext("./incar/i[@name='POTIM']")) == pytest.approx(displacement)
+    assert root.findtext("./incar/i[@name='NFREE']") == "2"
+
+    hessian_rows = [
+        [float(value) for value in row.text.split()]
+        for row in root.findall("./dynmat/varray[@name='hessian']/v")
+    ]
+    atomtype_rows = root.findall("./atominfo/array[@name='atomtypes']/set/rc")
+    masses: list[float] = []
+    for row in atomtype_rows:
+        cells = row.findall("c")
+        masses.extend([float(cells[2].text)] * int(cells[0].text))
+
+    reconstructed = np.zeros((2, 2, 3, 3), dtype=float)
+    hessian = np.asarray(hessian_rows, dtype=float)
+    for i in range(2):
+        for j in range(2):
+            reconstructed[i, j] = (
+                -hessian[i * 3 : (i + 1) * 3, j * 3 : (j + 1) * 3]
+                * np.sqrt(masses[i] * masses[j])
+            )
+
+    structure = vpmdk.read_structure(str(tmp_path / "POSCAR"), None)
+    atoms = vpmdk.AseAtomsAdaptor.get_atoms(structure)
+    atoms.wrap()
+    positions = atoms.get_positions()
+    expected = np.zeros((2, 2, 3, 3), dtype=float)
+    for atom_index in range(2):
+        for axis in range(3):
+            expected[atom_index, atom_index, axis, axis] = (
+                stiffness + cubic * (3.0 * positions[atom_index, axis] ** 2 + displacement**2)
+            )
+    assert reconstructed == pytest.approx(expected)
+
+
+def test_main_ibrion5_rejects_unsupported_nfree(
+    tmp_path: Path, prepare_inputs, monkeypatch
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "5", "POTIM": "0.02", "NFREE": "3"},
+    )
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+
+    with pytest.raises(NotImplementedError, match="NFREE=1, NFREE=2, and NFREE=4"):
+        vpmdk.main()
+
+
+@pytest.mark.parametrize(
+    ("nfree", "expected_diagonal"),
+    [
+        (
+            1,
+            lambda stiffness, cubic, positions, displacement, atom_index, axis: (
+                stiffness
+                + cubic
+                * (
+                    3.0 * positions[atom_index, axis] ** 2
+                    + 3.0 * positions[atom_index, axis] * displacement
+                    + displacement**2
+                )
+            ),
+        ),
+        (
+            4,
+            lambda stiffness, cubic, positions, displacement, atom_index, axis: (
+                stiffness + 3.0 * cubic * positions[atom_index, axis] ** 2
+            ),
+        ),
+    ],
+)
+def test_main_ibrion5_supports_nfree1_and_nfree4_stencils(
+    tmp_path: Path, prepare_inputs, monkeypatch, nfree, expected_diagonal
+):
+    stiffness = 2.5
+    cubic = 7.0
+    displacement = 0.04
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={
+            "NSW": "1",
+            "IBRION": "5",
+            "ISIF": "2",
+            "POTIM": str(displacement),
+            "NFREE": str(nfree),
+        },
+    )
+
+    class AnharmonicCalculator(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+            super().calculate(atoms, properties, system_changes)
+            positions = atoms.get_positions()
+            self.results = {
+                "energy": float(
+                    0.5 * stiffness * np.sum(positions * positions)
+                    + 0.25 * cubic * np.sum(positions**4)
+                ),
+                "forces": -stiffness * positions - cubic * positions**3,
+                "stress": np.zeros(6),
+            }
+
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: AnharmonicCalculator())
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    vpmdk.main()
+
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    assert root.findtext("./incar/i[@name='NFREE']") == str(nfree)
+    reconstructed = _reconstruct_force_constants_from_vasprun(tmp_path / "vasprun.xml")
+    structure = vpmdk.read_structure(str(tmp_path / "POSCAR"), None)
+    atoms = vpmdk.AseAtomsAdaptor.get_atoms(structure)
+    atoms.wrap()
+    positions = atoms.get_positions()
+
+    expected = np.zeros((2, 2, 3, 3), dtype=float)
+    for atom_index in range(2):
+        for axis in range(3):
+            expected[atom_index, atom_index, axis, axis] = expected_diagonal(
+                stiffness,
+                cubic,
+                positions,
+                displacement,
+                atom_index,
+                axis,
+            )
+    assert reconstructed == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("nfree", "max_force_calls"),
+    [(1, 3), (2, 4), (4, 6)],
+)
+def test_main_ibrion6_uses_symmetry_reduced_atom_displacements(
+    tmp_path: Path, prepare_inputs, monkeypatch, nfree, max_force_calls
+):
+    stiffness = 1.75
+    calls = {"count": 0}
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={
+            "NSW": "1",
+            "IBRION": "6",
+            "ISIF": "2",
+            "POTIM": "0.03",
+            "NFREE": str(nfree),
+            "SYMPREC": "1e-5",
+        },
+    )
+
+    class CountingHarmonicCalculator(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+            super().calculate(atoms, properties, system_changes)
+            calls["count"] += 1
+            positions = atoms.get_positions()
+            self.results = {
+                "energy": 0.5 * stiffness * float(np.sum(positions * positions)),
+                "forces": -stiffness * positions,
+                "stress": np.zeros(6),
+            }
+
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: CountingHarmonicCalculator())
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    vpmdk.main()
+
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    assert root.findtext("./incar/i[@name='IBRION']") == "6"
+    assert root.findtext("./incar/i[@name='NFREE']") == str(nfree)
+    assert calls["count"] <= max_force_calls
+
+    hessian_rows = [
+        [float(value) for value in row.text.split()]
+        for row in root.findall("./dynmat/varray[@name='hessian']/v")
+    ]
+    atomtype_rows = root.findall("./atominfo/array[@name='atomtypes']/set/rc")
+    masses: list[float] = []
+    for row in atomtype_rows:
+        cells = row.findall("c")
+        masses.extend([float(cells[2].text)] * int(cells[0].text))
+
+    reconstructed = np.zeros((2, 2, 3, 3), dtype=float)
+    hessian = np.asarray(hessian_rows, dtype=float)
+    for i in range(2):
+        for j in range(2):
+            reconstructed[i, j] = (
+                -hessian[i * 3 : (i + 1) * 3, j * 3 : (j + 1) * 3]
+                * np.sqrt(masses[i] * masses[j])
+            )
+
+    expected = np.zeros((2, 2, 3, 3), dtype=float)
+    for atom_index in range(2):
+        expected[atom_index, atom_index] = np.eye(3) * stiffness
+    assert reconstructed == pytest.approx(expected, abs=1e-8)
+
+
+def test_main_ibrion7_warns_that_dfpt_is_finite_difference_compatibility(
+    tmp_path: Path, prepare_inputs, monkeypatch, capsys
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "7", "ISIF": "2"},
+    )
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    vpmdk.main()
+
+    captured = capsys.readouterr()
+    assert "IBRION=7/8 are VASP DFPT modes" in captured.out
+    assert "finite-difference dynmat/hessian" in captured.out
+
+
+def test_main_ibrion8_warns_and_uses_symmetry_reduction(
+    tmp_path: Path, prepare_inputs, monkeypatch, capsys
+):
+    calls = {"count": 0}
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "8", "ISIF": "2", "SYMPREC": "1e-5"},
+        extra_bcar={"FORCE_CONSTANTS_DISPLACEMENT": "0.025"},
+    )
+
+    class CountingZeroForceCalculator(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+            super().calculate(atoms, properties, system_changes)
+            calls["count"] += 1
+            forces = atoms.get_positions() * 0.0
+            self.results = {
+                "energy": 0.5,
+                "forces": forces,
+                "stress": np.zeros(6),
+            }
+
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: CountingZeroForceCalculator())
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    vpmdk.main()
+
+    captured = capsys.readouterr()
+    assert "IBRION=7/8 are VASP DFPT modes" in captured.out
+    assert calls["count"] <= 4
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    hessian_rows = [
+        [float(value) for value in row.text.split()]
+        for row in root.findall("./dynmat/varray[@name='hessian']/v")
+    ]
+    assert np.asarray(hessian_rows) == pytest.approx(np.zeros((6, 6)))
 
 
 def test_build_grace_calculator_prefers_checkpoint(tmp_path: Path):

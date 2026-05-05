@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, List
 
 import numpy as np
+from ase.data import atomic_masses, atomic_numbers
 
 
 def _root():
@@ -72,6 +73,7 @@ class _VaspCompatRecorder:
     ibrion: int
     potim: float | None
     mdalgo: int | None
+    nfree: int | None = None
     isif: int | None = None
     stress_mode: str = "none"
     neb_mode: bool = False
@@ -82,6 +84,7 @@ class _VaspCompatRecorder:
     started_at: float = field(default_factory=time.perf_counter)
     previous_energy: float | None = None
     steps: List[_VasprunStep] = field(default_factory=list)
+    force_constants: list[list[list[list[float]]]] | None = None
 
 
 @dataclass
@@ -125,13 +128,26 @@ def _matrix_to_nested_list(values) -> list[list[float]]:
     return np.asarray(values, dtype=float).tolist()
 
 
-def _safe_get_forces(atoms) -> np.ndarray:
+def _safe_get_forces(atoms, *, strict: bool = False) -> np.ndarray:
     """Return per-atom forces or zeros when unavailable."""
 
     try:
-        return np.asarray(atoms.get_forces(), dtype=float)
-    except Exception:
+        forces = np.asarray(atoms.get_forces(), dtype=float)
+    except Exception as exc:
+        if strict:
+            raise RuntimeError(
+                "VASP-compatible force output requires an ASE calculator that "
+                "returns per-atom forces."
+            ) from exc
         return np.zeros((len(atoms), 3), dtype=float)
+    if forces.shape != (len(atoms), 3):
+        if strict:
+            raise RuntimeError(
+                "VASP-compatible force output expected force shape "
+                f"({len(atoms)}, 3), got {forces.shape}."
+            )
+        return np.zeros((len(atoms), 3), dtype=float)
+    return forces
 
 
 def _stress_mode_from_isif(isif: int | None) -> str:
@@ -438,6 +454,7 @@ def _initialize_vasp_compat_outputs(
     *,
     ibrion: int,
     potim: float | None = None,
+    nfree: int | None = None,
     mdalgo: int | None = None,
     isif: int | None = None,
     neb_mode: bool = False,
@@ -463,6 +480,7 @@ def _initialize_vasp_compat_outputs(
         initial_scaled_positions=initial_scaled_positions,
         ibrion=ibrion,
         potim=potim,
+        nfree=nfree,
         mdalgo=mdalgo,
         isif=isif,
         stress_mode=_stress_mode_from_isif(isif),
@@ -481,6 +499,8 @@ def _initialize_vasp_compat_outputs(
             handle.write(f"   MDALGO = {mdalgo:6d}\n")
         if potim is not None:
             handle.write(f"   POTIM  = {potim:6.4f}    time-step for ionic-motion\n")
+        if nfree is not None:
+            handle.write(f"   NFREE  = {nfree:6d}\n")
         if pseudo_scf.enabled:
             handle.write(" Electronic Relaxation 1\n")
             handle.write(
@@ -695,10 +715,11 @@ def _record_vasp_compat_step(
     temperature: float = 0.0,
     sc_time: float = 0.0,
     neb_chain: _NebChainApproximation | None = None,
+    strict_forces: bool = False,
 ) -> None:
     """Capture step data and append compatibility records."""
 
-    forces = _safe_get_forces(atoms)
+    forces = _safe_get_forces(atoms, strict=strict_forces)
     stress_matrix = _safe_get_stress_matrix(atoms, mode=recorder.stress_mode)
     if recorder.neb_mode and neb_chain is None:
         neb_chain = _estimate_neb_chain_approximation(
@@ -815,12 +836,63 @@ def _build_atominfo_xml(parent, symbols: List[str]) -> None:
     ET.SubElement(type_array, "field", {"type": "string"}).text = "pseudopotential"
     type_set = ET.SubElement(type_array, "set")
     for symbol, count in counts.items():
+        atomic_number = atomic_numbers.get(symbol, 0)
+        mass = (
+            float(atomic_masses[atomic_number])
+            if atomic_number > 0
+            else 1.0
+        )
         row = ET.SubElement(type_set, "rc")
         ET.SubElement(row, "c").text = str(count)
         ET.SubElement(row, "c").text = symbol
-        ET.SubElement(row, "c").text = f"{1.0:8.4f}"
+        ET.SubElement(row, "c").text = f"{mass:8.4f}"
         ET.SubElement(row, "c").text = f"{0.0:8.4f}"
         ET.SubElement(row, "c").text = f"PAW_PBE {symbol}"
+
+
+def _mass_normalized_hessian(
+    force_constants: np.ndarray,
+    symbols: list[str],
+) -> np.ndarray:
+    """Return VASP-style mass-normalized Hessian from force constants."""
+
+    fc = np.asarray(force_constants, dtype=float)
+    num_atoms = len(symbols)
+    expected_shape = (num_atoms, num_atoms, 3, 3)
+    if fc.shape != expected_shape:
+        raise ValueError(
+            "force constants must have shape "
+            f"{expected_shape}, got {fc.shape}."
+        )
+
+    masses = []
+    for symbol in symbols:
+        atomic_number = atomic_numbers.get(symbol, 0)
+        masses.append(float(atomic_masses[atomic_number]) if atomic_number > 0 else 1.0)
+
+    hessian = np.zeros((num_atoms * 3, num_atoms * 3), dtype=float)
+    for i in range(num_atoms):
+        for j in range(num_atoms):
+            scale = np.sqrt(masses[i] * masses[j])
+            hessian[i * 3 : (i + 1) * 3, j * 3 : (j + 1) * 3] = (
+                -fc[i, j] / scale
+            )
+    return hessian
+
+
+def _append_dynmat_xml(parent, recorder: _VaspCompatRecorder) -> None:
+    """Append VASP-like dynamical-matrix data for phonopy ``--fc`` parsing."""
+
+    if recorder.force_constants is None:
+        return
+    hessian = _mass_normalized_hessian(
+        np.asarray(recorder.force_constants, dtype=float),
+        recorder.symbols,
+    )
+    dynmat = ET.SubElement(parent, "dynmat")
+    varray = ET.SubElement(dynmat, "varray", {"name": "hessian"})
+    for row in hessian:
+        ET.SubElement(varray, "v").text = " ".join(f"{value:18.10f}" for value in row)
 
 
 def _append_pseudo_scf_xml_step(parent, step: _VasprunStep) -> None:
@@ -859,6 +931,8 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
         )
     if recorder.potim is not None:
         ET.SubElement(incar, "i", {"name": "POTIM", "type": "float"}).text = f"{recorder.potim:.6f}"
+    if recorder.nfree is not None:
+        ET.SubElement(incar, "i", {"name": "NFREE", "type": "int"}).text = str(recorder.nfree)
     if recorder.mdalgo is not None:
         ET.SubElement(incar, "i", {"name": "MDALGO", "type": "int"}).text = str(recorder.mdalgo)
 
@@ -899,8 +973,11 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
     ET.SubElement(ionic, "i", {"name": "NSW", "type": "int"}).text = str(len(recorder.steps))
     if recorder.potim is not None:
         ET.SubElement(ionic, "i", {"name": "POTIM", "type": "float"}).text = f"{recorder.potim:.6f}"
+    if recorder.nfree is not None:
+        ET.SubElement(ionic, "i", {"name": "NFREE", "type": "int"}).text = str(recorder.nfree)
 
     _build_atominfo_xml(root, recorder.symbols)
+    _append_dynmat_xml(root, recorder)
     _append_structure_xml(
         root,
         name="initialpos",

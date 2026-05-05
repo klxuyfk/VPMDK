@@ -26,6 +26,8 @@ class IncarSettings:
     tebeg: float = 300.0
     teend: float = 300.0
     potim: float = 2.0
+    nfree: int | None = None
+    symprec: float = 1e-5
     mdalgo: int = 0
     smass: float | None = None
     thermostat_params: Dict[str, float] = field(default_factory=dict)
@@ -56,6 +58,8 @@ SUPPORTED_INCAR_TAGS = {
     "TEBEG",
     "TEEND",
     "POTIM",
+    "NFREE",
+    "SYMPREC",
     "MDALGO",
     "SMASS",
     "ANDERSEN_PROB",
@@ -266,7 +270,26 @@ def _load_incar_settings(incar) -> IncarSettings:
     teend_value = incar.get("TEEND", tebeg)
     parsed_teend = _parse_optional_float(teend_value, key="TEEND")
     teend = parsed_teend if parsed_teend is not None else tebeg
-    potim = float(incar.get("POTIM", 2.0))
+    if "POTIM" in incar:
+        potim = float(incar.get("POTIM", 2.0))
+    elif ibrion in {5, 6}:
+        potim = 0.015
+    else:
+        potim = 2.0
+    nfree = None
+    if "NFREE" in incar:
+        parsed_nfree = _parse_optional_float(incar.get("NFREE"), key="NFREE")
+        if parsed_nfree is not None:
+            if not float(parsed_nfree).is_integer():
+                raise ValueError("NFREE must be an integer.")
+            nfree = int(parsed_nfree)
+    symprec = 1e-5
+    if "SYMPREC" in incar:
+        parsed_symprec = _parse_optional_float(incar.get("SYMPREC"), key="SYMPREC")
+        if parsed_symprec is not None:
+            if parsed_symprec <= 0.0:
+                raise ValueError("SYMPREC must be positive.")
+            symprec = float(parsed_symprec)
     smass = (
         _parse_optional_float(incar.get("SMASS"), key="SMASS")
         if "SMASS" in incar
@@ -296,6 +319,8 @@ def _load_incar_settings(incar) -> IncarSettings:
         tebeg=tebeg,
         teend=teend,
         potim=potim,
+        nfree=nfree,
+        symprec=symprec,
         mdalgo=mdalgo,
         smass=smass,
         thermostat_params=thermostat_params,

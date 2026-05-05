@@ -484,6 +484,7 @@ from .io.vasp_compat import (
     _active_pseudo_scf_settings,
     _active_vasp_input_paths,
     _append_kpoints_xml,
+    _append_dynmat_xml,
     _append_oszicar_compat_step,
     _append_outcar_compat_step,
     _append_outcar_footer,
@@ -498,6 +499,7 @@ from .io.vasp_compat import (
     _full_to_voigt_stress,
     _initialize_vasp_compat_outputs,
     _matrix_to_nested_list,
+    _mass_normalized_hessian,
     _pseudo_scf_settings_from_incar,
     _read_non_comment_lines,
     _record_vasp_compat_step,
@@ -563,7 +565,12 @@ from .runtime.relax import (
     _temporarily_freeze_atoms,
     run_relaxation,
 )
-from .runtime.single import run_single_point
+from .runtime.single import (
+    _finite_difference_force_constants,
+    _force_constants_displacement_from_bcar,
+    run_force_constants,
+    run_single_point,
+)
 from .settings.incar import (
     KBAR_TO_EV_PER_A3,
     IncarSettings,

@@ -17,6 +17,8 @@ Supported tags:
 - `TEBEG`
 - `TEEND`
 - `POTIM`
+- `NFREE`
+- `SYMPREC`
 - `MDALGO`
 - `SMASS`
 - `ANDERSEN_PROB`
@@ -54,13 +56,15 @@ The parsed `IncarSettings` defaults are:
 | Tag | Meaning | Default / Behavior |
 |-----|---------|--------------------|
 | `NSW` | Ionic or MD step count | `0` |
-| `IBRION` | Run mode selector | `<0` single point, `0` MD, `>0` relaxation |
+| `IBRION` | Run mode selector | `<0` single point, `0` MD, `5`/`6` finite-difference force constants, `7`/`8` force-constants compatibility output, other `>0` relaxation |
 | `EDIFFG` | Relaxation stop criterion | `<0` force threshold, `>0` energy threshold |
 | `ISIF` | Cell/stress mode | normalized to VPMDK-supported modes |
 | `PSTRESS` | External scalar pressure in kBar | only used when cell degrees of freedom are active |
 | `TEBEG` | Initial MD temperature | `300.0` |
 | `TEEND` | Final MD temperature | defaults to `TEBEG` |
-| `POTIM` | MD time step in fs | `2.0` |
+| `POTIM` | MD time step in fs, or finite-difference displacement in Angstrom for `IBRION=5`/`6` | `2.0`, except `0.015` for `IBRION=5`/`6` when omitted |
+| `NFREE` | finite-difference displacement stencil for `IBRION=5`/`6` | omitted values use `2`; supported values are `1`, `2`, and `4` |
+| `SYMPREC` | symmetry tolerance for `IBRION=6`/`8` atom-orbit reduction | `1e-5` |
 | `MDALGO` | MD integrator / thermostat selection | `0` |
 | `SMASS` | Thermostat mass / fallback selector | can auto-promote `MDALGO` |
 | `ANDERSEN_PROB` | Andersen collision probability | used only with `MDALGO=1` |
@@ -74,6 +78,9 @@ The parsed `IncarSettings` defaults are:
 | `LCLIMB` | NEB climbing-image flag | truthy values enable climbing-image ASE NEB |
 | `LNEBCELL` | VTST NEB cell-relaxation flag | recognized but not implemented; fixed-cell NEB is used |
 | `SPRING` | NEB spring constant | negative VTST values are converted to positive ASE spring magnitudes |
+
+For the `IBRION=5`/`6`/`7`/`8` force-constants compatibility path, see
+[VASP Force-Constants Compatibility](../development/force-constants.md).
 
 ## ISIF Mapping
 
