@@ -128,11 +128,23 @@ def _matrix_to_nested_list(values) -> list[list[float]]:
     return np.asarray(values, dtype=float).tolist()
 
 
-def _safe_get_forces(atoms, *, strict: bool = False) -> np.ndarray:
+def _safe_get_forces(
+    atoms,
+    *,
+    strict: bool = False,
+    apply_constraint: bool = True,
+) -> np.ndarray:
     """Return per-atom forces or zeros when unavailable."""
 
     try:
-        forces = np.asarray(atoms.get_forces(), dtype=float)
+        try:
+            raw_forces = atoms.get_forces(apply_constraint=apply_constraint)
+        except TypeError:
+            if not apply_constraint and getattr(atoms, "calc", None) is not None:
+                raw_forces = atoms.calc.get_forces(atoms)
+            else:
+                raw_forces = atoms.get_forces()
+        forces = np.asarray(raw_forces, dtype=float)
     except Exception as exc:
         if strict:
             raise RuntimeError(
@@ -716,10 +728,15 @@ def _record_vasp_compat_step(
     sc_time: float = 0.0,
     neb_chain: _NebChainApproximation | None = None,
     strict_forces: bool = False,
+    apply_force_constraints: bool = True,
 ) -> None:
     """Capture step data and append compatibility records."""
 
-    forces = _safe_get_forces(atoms, strict=strict_forces)
+    forces = _safe_get_forces(
+        atoms,
+        strict=strict_forces,
+        apply_constraint=apply_force_constraints,
+    )
     stress_matrix = _safe_get_stress_matrix(atoms, mode=recorder.stress_mode)
     if recorder.neb_mode and neb_chain is None:
         neb_chain = _estimate_neb_chain_approximation(

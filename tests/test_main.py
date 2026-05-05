@@ -8,7 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 import numpy as np
+from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
+from ase.constraints import FixAtoms
 
 import vpmdk
 import vpmdk.compat.vasp as vasp_compat
@@ -527,6 +529,52 @@ Direct
     for atom_index in range(3):
         expected[atom_index, atom_index] = np.eye(3) * stiffness
     assert reconstructed == pytest.approx(expected)
+
+
+def test_run_force_constants_uses_raw_forces_with_constraints(
+    tmp_path: Path, monkeypatch
+):
+    stiffness = 2.0
+    atoms = Atoms(
+        "H2",
+        positions=[[0.0, 0.0, 0.0], [1.0, 0.2, 0.0]],
+        cell=[6.0, 6.0, 6.0],
+        pbc=True,
+    )
+    atoms.set_constraint(FixAtoms(indices=[1]))
+
+    class HarmonicCalculator(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+            super().calculate(atoms, properties, system_changes)
+            positions = atoms.get_positions()
+            self.results = {
+                "energy": 0.5 * stiffness * float(np.sum(positions * positions)),
+                "forces": -stiffness * positions,
+                "stress": np.zeros(6),
+            }
+
+    monkeypatch.chdir(tmp_path)
+    force_constants = vpmdk.run_force_constants(
+        atoms,
+        HarmonicCalculator(),
+        displacement=0.02,
+        nfree=2,
+        ibrion=7,
+    )
+
+    expected = np.zeros((2, 2, 3, 3), dtype=float)
+    for atom_index in range(2):
+        expected[atom_index, atom_index] = np.eye(3) * stiffness
+    assert force_constants == pytest.approx(expected)
+
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    recorded_forces = [
+        [float(value) for value in row.text.split()]
+        for row in root.findall("./calculation/varray[@name='forces']/v")
+    ]
+    assert recorded_forces[1] == pytest.approx([-stiffness, -0.2 * stiffness, 0.0])
 
 
 def test_main_ibrion5_uses_potim_and_nfree2_for_finite_difference_fc(

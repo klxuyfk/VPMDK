@@ -209,7 +209,10 @@ phonopy so VPMDK does not hide backend force inconsistencies.
 The implementation also does not apply selective-dynamics filtering to the
 finite-difference Hessian. VASP supports selective dynamics only for
 `IBRION=5`, with Cartesian semantics for the Hessian components. That remains a
-future compatibility item.
+future compatibility item. Until that filtering exists, VPMDK displaces all
+Cartesian components and reads raw backend forces with ASE constraint projection
+disabled, so selective-dynamics flags cannot silently zero rows of the numerical
+Hessian.
 
 ## VASP XML Convention
 

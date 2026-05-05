@@ -73,7 +73,11 @@ def _forces_for_displacement(reference, displaced_atom_index: int, direction, di
     displaced = reference.copy()
     displaced.positions[displaced_atom_index] += np.asarray(direction, dtype=float) * distance
     displaced.calc = reference.calc
-    return _root()._safe_get_forces(displaced, strict=True)
+    return _root()._safe_get_forces(
+        displaced,
+        strict=True,
+        apply_constraint=False,
+    )
 
 
 def _finite_difference_force_response(
@@ -93,7 +97,11 @@ def _finite_difference_force_response(
 
     if nfree == 1:
         forces_reference = (
-            _root()._safe_get_forces(reference, strict=True)
+            _root()._safe_get_forces(
+                reference,
+                strict=True,
+                apply_constraint=False,
+            )
             if reference_forces is None
             else np.asarray(reference_forces, dtype=float)
         )
@@ -163,7 +171,11 @@ def _finite_difference_force_constants(atoms, calculator, *, displacement: float
     num_atoms = len(reference)
     force_constants = np.zeros((num_atoms, num_atoms, 3, 3), dtype=float)
     reference_forces = (
-        root._safe_get_forces(reference, strict=True)
+        root._safe_get_forces(
+            reference,
+            strict=True,
+            apply_constraint=False,
+        )
         if nfree == 1
         else None
     )
@@ -299,7 +311,11 @@ def _symmetry_reduced_finite_difference_force_constants(
     atom_maps = [mapping for _rotation, mapping in operations]
     representatives = _representative_atoms_from_mappings(num_atoms, atom_maps)
     reference_forces = (
-        root._safe_get_forces(reference, strict=True)
+        root._safe_get_forces(
+            reference,
+            strict=True,
+            apply_constraint=False,
+        )
         if nfree == 1
         else None
     )
@@ -401,6 +417,7 @@ def run_force_constants(
         potential_energy=energy,
         total_energy=energy,
         strict_forces=True,
+        apply_force_constraints=False,
     )
     if use_symmetry:
         force_constants = _symmetry_reduced_finite_difference_force_constants(
