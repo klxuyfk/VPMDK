@@ -165,6 +165,7 @@ Included examples:
 - `examples/neb_nequip_vtst`
 - `examples/api_chgnet`
 - `examples/chgcar_charge3net`
+- `examples/bader_chgcar_charge3net`
 - `examples/uspex_9_4_4_si`
 
 ## Compatibility Notes
