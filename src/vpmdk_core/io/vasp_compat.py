@@ -816,10 +816,14 @@ def _build_atominfo_xml(parent, symbols: List[str]) -> None:
     atominfo = ET.SubElement(parent, "atominfo")
     ET.SubElement(atominfo, "atoms").text = str(len(symbols))
 
-    counts: OrderedDict[str, int] = OrderedDict()
+    type_runs: list[tuple[str, int]] = []
     for symbol in symbols:
-        counts[symbol] = counts.get(symbol, 0) + 1
-    ET.SubElement(atominfo, "types").text = str(len(counts))
+        if type_runs and type_runs[-1][0] == symbol:
+            previous_symbol, previous_count = type_runs[-1]
+            type_runs[-1] = (previous_symbol, previous_count + 1)
+        else:
+            type_runs.append((symbol, 1))
+    ET.SubElement(atominfo, "types").text = str(len(type_runs))
 
     atom_array = ET.SubElement(atominfo, "array", {"name": "atoms"})
     ET.SubElement(atom_array, "field", {"type": "string"}).text = "element"
@@ -835,7 +839,7 @@ def _build_atominfo_xml(parent, symbols: List[str]) -> None:
     ET.SubElement(type_array, "field", {"type": "float"}).text = "valence"
     ET.SubElement(type_array, "field", {"type": "string"}).text = "pseudopotential"
     type_set = ET.SubElement(type_array, "set")
-    for symbol, count in counts.items():
+    for symbol, count in type_runs:
         atomic_number = atomic_numbers.get(symbol, 0)
         mass = (
             float(atomic_masses[atomic_number])

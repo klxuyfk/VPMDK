@@ -468,6 +468,67 @@ def test_main_ibrion7_writes_vasp_dynmat_for_phonopy_fc(
     assert reconstructed == pytest.approx(expected)
 
 
+def test_main_ibrion7_preserves_noncontiguous_atomtype_mass_order(
+    tmp_path: Path, monkeypatch
+):
+    stiffness = 1.5
+    (tmp_path / "POSCAR").write_text(
+        """H_He_H
+1.0
+8.0 0.0 0.0
+0.0 8.0 0.0
+0.0 0.0 8.0
+H He H
+1 1 1
+Direct
+0.0 0.0 0.0
+0.25 0.25 0.25
+0.5 0.5 0.5
+"""
+    )
+    (tmp_path / "INCAR").write_text("NSW = 1\nIBRION = 7\nISIF = 2\n")
+    (tmp_path / "BCAR").write_text(
+        "MLP=CHGNET\nFORCE_CONSTANTS_DISPLACEMENT=0.02\n"
+    )
+
+    class HarmonicCalculator(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+            super().calculate(atoms, properties, system_changes)
+            positions = atoms.get_positions()
+            self.results = {
+                "energy": 0.5 * stiffness * float(np.sum(positions * positions)),
+                "forces": -stiffness * positions,
+                "stress": np.zeros(6),
+            }
+
+    monkeypatch.setattr(
+        vpmdk,
+        "_build_calculator_from_tags",
+        lambda *_, **__: HarmonicCalculator(),
+    )
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    vpmdk.main()
+
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    atomtype_rows = root.findall("./atominfo/array[@name='atomtypes']/set/rc")
+    atomtypes = [
+        (int(row.findall("c")[0].text), row.findall("c")[1].text)
+        for row in atomtype_rows
+    ]
+    assert atomtypes == [(1, "H"), (1, "He"), (1, "H")]
+
+    reconstructed = _reconstruct_force_constants_from_vasprun(
+        tmp_path / "vasprun.xml",
+        num_atoms=3,
+    )
+    expected = np.zeros((3, 3, 3, 3), dtype=float)
+    for atom_index in range(3):
+        expected[atom_index, atom_index] = np.eye(3) * stiffness
+    assert reconstructed == pytest.approx(expected)
+
+
 def test_main_ibrion5_uses_potim_and_nfree2_for_finite_difference_fc(
     tmp_path: Path, prepare_inputs, monkeypatch
 ):
