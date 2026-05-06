@@ -42,6 +42,10 @@ keep the charge-backend paths inside the example input deck.
 Outputs are copied to `examples/bader_chgcar_charge3net/output/`, including
 `CHGCAR`, `ACF.dat`, `BCF.dat`, and `bader.log`.
 
+`reference/` contains a representative run with local paths and timing text
+sanitized. Treat the charge-density and Bader numbers as model/checkpoint
+specific, not as validation baselines.
+
 ## Notes
 
 - The generated `CHGCAR` contains the ML-predicted volumetric density. It does

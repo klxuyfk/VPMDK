@@ -1,6 +1,6 @@
 # VPMDK Examples
 
-CLI-oriented examples plus Python API examples. Some directories include `reference/` outputs; charge-density examples intentionally do not, because results depend on the local ChargE3Net environment and checkpoint you provide.
+CLI-oriented examples plus Python API examples. Some directories include `reference/` outputs. Generated `output/` directories are ignored; charge-density references are representative only, because numerical values depend on the local charge-density backend and checkpoint you provide.
 
 ## Examples
 
@@ -46,6 +46,7 @@ python ./examples/chgcar_charge3net/predict_api.py
 - `api_chgnet` does not use `BCAR` or `INCAR`; it demonstrates the stable Python API directly.
 - `chgcar_charge3net` requires a working charge-density backend environment. For the bundled example values that means ChargE3Net plus `VPMDK_CHARGE_SOURCE_DIR`, `VPMDK_CHARGE_PYTHON`, and optionally `VPMDK_CHARGE_MODEL`. To try DeepDFT or DeepCDP instead, change `CHARGE_MLP` and backend-specific model settings in `BCAR`.
 - `bader_chgcar_charge3net` additionally requires Henkelman's `bader` executable on `PATH` or `BADER_BIN=/path/to/bader`.
+- `bader_chgcar_charge3net/reference` contains representative VPMDK and Bader outputs with local paths and timing text sanitized.
 - `chgcar_charge3net/INCAR` uses an explicit small fine FFT grid so the example stays runnable; for production-style inputs you would usually let `PREC`/`ENCUT` decide the grid.
 - The phonopy examples require `phonopy` on `PATH`. They intentionally use
   different backend families: MACE, SevenNet, ORB, NequIP, and Allegro.
