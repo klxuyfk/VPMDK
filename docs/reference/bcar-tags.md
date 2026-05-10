@@ -38,6 +38,11 @@ backend or helper explicitly consumes them.
 | `WRITE_PSEUDO_SCF` | echo pseudo electronic-step blocks into compatibility files | `0` |
 | `WRITE_OSZICAR_PSEUDO_SCF` | legacy alias of `WRITE_PSEUDO_SCF` | none |
 | `WRITE_CHGCAR` | run charge-density prediction after the main run | `0` |
+| `FORCE_CONSTANTS_DISPLACEMENT` | VPMDK finite-difference displacement in Angstrom for `IBRION=7`/`8`; `IBRION=5`/`6` use `POTIM` instead | `0.01` |
+
+See
+[VASP Force-Constants Compatibility](../development/force-constants.md) for the
+finite-difference formula and `vasprun.xml` Hessian convention.
 
 ## Shared Backend Tuning Tags
 

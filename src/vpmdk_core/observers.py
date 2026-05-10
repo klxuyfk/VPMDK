@@ -127,6 +127,7 @@ class VaspCompatObserver(RunObserver):
             thermostat_kinetic=step.thermostat_kinetic,
             temperature=step.temperature,
             sc_time=step.sc_time,
+            strict_forces=config.strict_forces,
         )
         if context.mode == "md":
             if config.write_xdatcar and step.advanced:

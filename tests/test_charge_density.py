@@ -353,6 +353,22 @@ def test_write_chgcar_roundtrips_density(tmp_path: Path, load_atoms):
     assert np.allclose(reread.chg[-1], density)
 
 
+def test_write_chgcar_uses_bader_compatible_header_precision(tmp_path: Path, load_atoms):
+    atoms = load_atoms()
+    density = np.ones((2, 2, 2), dtype=float)
+    path = tmp_path / "CHGCAR"
+
+    vasp_compat.write_chgcar(path, atoms, density)
+
+    lines = path.read_text().splitlines()
+    scale = float(lines[1])
+    cell = np.array([[float(value) for value in line.split()] for line in lines[2:5]])
+    assert scale == pytest.approx(1.0)
+    assert np.allclose(cell, atoms.cell.array)
+    assert lines[5].split() == [atoms[0].symbol]
+    assert lines[6].split() == [str(len(atoms))]
+
+
 def test_public_predict_charge_density_uses_backend_runner(
     monkeypatch: pytest.MonkeyPatch,
 ):

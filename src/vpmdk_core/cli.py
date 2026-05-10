@@ -76,6 +76,8 @@ def main():
                     print("Calculation completed.")
                     return
 
+            root._reject_unsupported_vtst_modes(incar)
+
             if not os.path.exists(poscar_path):
                 if neb_mode:
                     print(
@@ -93,7 +95,39 @@ def main():
             with root._working_directory(workdir_abs):
                 calculator = root._build_calculator_from_tags(bcar, structure=structure)
 
-            if settings.nsw <= 0 or settings.ibrion < 0:
+            if settings.ibrion in {5, 6}:
+                with root._working_directory(workdir_abs):
+                    root.run_force_constants(
+                        atoms,
+                        calculator,
+                        displacement=settings.potim,
+                        nfree=settings.nfree if settings.nfree is not None else 2,
+                        potim=settings.potim,
+                        isif=settings.stress_isif,
+                        ibrion=settings.ibrion,
+                        use_symmetry=settings.ibrion == 6,
+                        symprec=settings.symprec,
+                        oszicar_pseudo_scf=write_pseudo_scf,
+                    )
+            elif settings.ibrion in {7, 8}:
+                print(
+                    "Warning: IBRION=7/8 are VASP DFPT modes. VPMDK cannot run "
+                    "electronic DFPT; it will write a phonopy-compatible "
+                    "finite-difference dynmat/hessian from MLP forces."
+                )
+                with root._working_directory(workdir_abs):
+                    root.run_force_constants(
+                        atoms,
+                        calculator,
+                        displacement=root._force_constants_displacement_from_bcar(bcar),
+                        nfree=2,
+                        isif=settings.stress_isif,
+                        ibrion=settings.ibrion,
+                        use_symmetry=settings.ibrion == 8,
+                        symprec=settings.symprec,
+                        oszicar_pseudo_scf=write_pseudo_scf,
+                    )
+            elif settings.nsw <= 0 or settings.ibrion < 0:
                 with root._working_directory(workdir_abs):
                     root.run_single_point(
                         atoms,
