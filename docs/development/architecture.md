@@ -45,10 +45,17 @@ The root and `src/` shims both re-export `vpmdk_core`, so user code can import
 3. warns about unsupported or ignored inputs
 4. selects NEB, single-point, relaxation, or MD mode
 5. builds the backend calculator
-6. routes into `run_single_point`, `run_relaxation`, `run_md`, or `run_neb_images`
+6. routes into `run_single_point`, `run_force_constants`, `run_relaxation`,
+   `run_md`, or `run_neb_images`
 7. optionally runs charge-density prediction and writes `CHGCAR`
 
 The CLI always opts into compatibility observers.
+
+`run_neb_images` handles VTST-style numbered image directories. For
+`NSW > 0`, `IBRION > 0`, and `ICHAIN=0` or unset, it builds one ASE `NEB`
+object across all images and optimizes the moving images with spring-coupled
+band forces. Single-point and MD NEB layouts remain independent per-image
+compatibility workflows.
 
 ### Public API
 
@@ -75,6 +82,10 @@ That split is important:
 - file writing is optional and attached from the CLI or explicit Python code
 
 Compatibility state is stored in `_VaspCompatRecorder`.
+
+The `IBRION=5`/`6`/`7`/`8` force-constants compatibility path is documented separately
+in [VASP Force-Constants Compatibility](force-constants.md), including the
+finite-difference formula and VASP `dynmat` Hessian convention.
 
 ## Backend Registry
 

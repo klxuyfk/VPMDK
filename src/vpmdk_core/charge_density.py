@@ -999,3 +999,67 @@ def write_chgcar(
     if spin_array is not None:
         charge.chgdiff.append(spin_array)
     charge.write(str(path), format="chgcar")
+    _rewrite_chgcar_header_precision(path, atoms)
+
+
+def _rewrite_chgcar_header_precision(path: str | os.PathLike[str], atoms) -> None:
+    """Write a VASP-equivalent header that Henkelman bader reads reliably."""
+
+    cell = np.asarray(atoms.cell.array, dtype=float)
+    if cell.shape != (3, 3):
+        return
+    if not np.all(np.isfinite(cell)):
+        return
+
+    lines = Path(path).read_text().splitlines()
+    if len(lines) < 5:
+        return
+
+    lines[1] = "   1.0000000000000000"
+    for index, vector in enumerate(cell, start=2):
+        lines[index] = "".join(f"{component:13.8f}" for component in vector)
+    count_line_index = 5
+    if len(lines) >= 7:
+        symbol_fields = lines[5].split()
+        count_fields = lines[6].split()
+        symbols_are_counts = all(_is_integer_token(field) for field in symbol_fields)
+        next_line_is_counts = all(_is_integer_token(field) for field in count_fields)
+        if symbol_fields and count_fields and not symbols_are_counts and next_line_is_counts:
+            count_line_index = 6
+    _rewrite_chgcar_coordinate_precision(lines, count_line_index)
+    Path(path).write_text("\n".join(lines) + "\n")
+
+
+def _is_integer_token(value: str) -> bool:
+    try:
+        int(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _rewrite_chgcar_coordinate_precision(lines: list[str], count_line_index: int) -> None:
+    if count_line_index >= len(lines):
+        return
+    try:
+        atom_count = sum(int(value) for value in lines[count_line_index].split())
+    except ValueError:
+        return
+
+    coordinate_mode_index = count_line_index + 1
+    if coordinate_mode_index >= len(lines):
+        return
+    if lines[coordinate_mode_index].strip().lower().startswith("s"):
+        coordinate_mode_index += 1
+    atom_start = coordinate_mode_index + 1
+    for index in range(atom_start, min(atom_start + atom_count, len(lines))):
+        fields = lines[index].split()
+        if len(fields) < 3:
+            continue
+        try:
+            coordinates = [float(value) for value in fields[:3]]
+        except ValueError:
+            continue
+        suffix = fields[3:]
+        prefix = "".join(f"{value:12.6f}" for value in coordinates)
+        lines[index] = f"{prefix}{(' ' + ' '.join(suffix)) if suffix else ''}"
