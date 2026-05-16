@@ -8,6 +8,8 @@ authors:
     orcid: "https://orcid.org/0009-0005-8266-3557"
     affiliation: "Corteo Co., Ltd., Japan"
 version: 0.4.2
+doi: 10.5281/zenodo.20236618
+date-released: "2026-05-16"
 license: BSD-3-Clause
 repository-code: "https://github.com/klxuyfk/VPMDK"
 repository-artifact: "https://pypi.org/project/vpmdk/"
