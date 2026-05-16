@@ -62,11 +62,12 @@ Typical settings:
 export HF_HOME=/path/to/hf-cache
 ```
 
-VPMDK's no-`MODEL` default for FAIRChem v2 follows the validated UMA smoke path:
+VPMDK's no-`MODEL` default for FAIRChem v2 uses the UMA registry name present in
+both the 2.13.0 validation environment and current 2.x releases:
 
 ```text
 MLP=FAIRCHEM_V2
-MODEL=uma-s-1
+MODEL=uma-s-1p1
 FAIRCHEM_TASK=omat
 ```
 

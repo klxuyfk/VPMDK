@@ -1405,7 +1405,7 @@ def test_fairchem_default_uses_validated_uma_model_and_task(
 
     assert calc == "fairchem"
     assert seen == {
-        "model": "uma-s-1",
+        "model": "uma-s-1p1",
         "task": "omat",
         "settings": "default",
         "device": None,
