@@ -73,6 +73,8 @@ def _build_fairchem_calculator(bcar_tags: Dict[str, str]):
 
     model_name = bcar_tags.get("MODEL") or root.DEFAULT_FAIRCHEM_MODEL
     task_name = bcar_tags.get("FAIRCHEM_TASK")
+    if task_name is None and model_name == root.DEFAULT_FAIRCHEM_MODEL:
+        task_name = root.DEFAULT_FAIRCHEM_TASK
     inference_settings = bcar_tags.get("FAIRCHEM_INFERENCE_SETTINGS") or "default"
     device = bcar_tags.get("DEVICE")
 

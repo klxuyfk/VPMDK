@@ -62,9 +62,12 @@ Typical settings:
 export HF_HOME=/path/to/hf-cache
 ```
 
+VPMDK's no-`MODEL` default for FAIRChem v2 uses the UMA registry name present in
+both the 2.13.0 validation environment and current 2.x releases:
+
 ```text
 MLP=FAIRCHEM_V2
-MODEL=uma-s-1
+MODEL=uma-s-1p1
 FAIRCHEM_TASK=omat
 ```
 
@@ -152,8 +155,9 @@ Guidance:
   visible via `CUDA_HOME`
 
 `MLP=EQUFLASH` uses the same SevenNet + FlashTP runtime path, but requires a
-local EquFlash-compatible checkpoint. The public `equflash-29M-oam` metadata
-records the checkpoint as unreleased, so it is not a downloadable named model.
+local EquFlash-compatible checkpoint. Treat it as a checkpoint-dependent
+adapter: the public `equflash-29M-oam` metadata records the checkpoint as
+unreleased, so it is not a downloadable named model.
 
 ## ORB
 

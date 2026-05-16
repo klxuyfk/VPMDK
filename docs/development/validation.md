@@ -8,10 +8,12 @@ optional integration tests under `tests/integration/`.
 
 The most recent sweep below was run manually because several backends require
 mutually incompatible Python, PyTorch, TensorFlow, DGL, JAX, or CUDA dependency
-sets.  Passing means the VPMDK wrapper built the real ASE calculator and
-completed one single-point energy/force/stress evaluation.  It is a runnable
-backend smoke validation, not a benchmark-quality comparison against reference
-DFT data.
+sets.  A passed single-point entry means the VPMDK wrapper built the real ASE
+calculator and completed one evaluation of energy and forces, and stress where
+exposed by the upstream calculator.  It is a runnable backend smoke validation,
+not a benchmark-quality comparison against reference DFT data.  Blocked entries
+record adapter behavior or missing public artifacts rather than successful
+calculator evaluation.
 
 ## 2026-05-16 Real Backend Sweep
 
@@ -42,12 +44,12 @@ DFT data.
 | `FLASHTP` | Manual real-backend single point | torch 2.5.1+cu121, sevenn 0.12.1, flashTP_e3nn 0.1.0 | upstream SevenNet `7net-0` | not applicable | passed | `flashTP_e3nn` built from SNU-ARC/flashTP `0fbbbbae1061afc9285092a939d3f9abd851a758` with `CUDA_ARCH_LIST=70` |
 | `NEQUIP` | Manual real-backend single point | torch 2.5.1+cu121, nequip 0.16.2 | local `NequIP-OAM-L-0.1.nequip.pth` | passed | passed | stress returned |
 | `ALLEGRO` | Manual real-backend single point | torch 2.5.1+cu121, allegro 1.1.0 | local `Allegro-OAM-L-0.1.nequip.pth` | passed | passed | stress returned |
-| `ORB` | Manual real-backend single point | torch 2.6.0+cu124, orb-models 0.5.5 | local `orb-v3-conservative-20-omat-20250404.ckpt` | passed | passed | CPU/CUDA numerical values differed strongly; runnable smoke only |
+| `ORB` | Manual real-backend single point | torch 2.6.0+cu124, orb-models 0.5.5 | local `orb-v3-conservative-20-omat-20250404.ckpt` | passed | passed | CPU/CUDA numerical values differed strongly; runnable smoke only; numerical parity not asserted |
 | `UPET` | Manual real-backend single point | torch 2.6.0+cu124, upet 0.1.2 | local `pet-oam-xl-v1.0.0.ckpt` | passed | passed | CUDA uses model on GPU with metatomic/vesin neighbor-list construction forced to CPU by default |
 | `TACE` | Manual real-backend single point | torch 2.6.0+cu124, TACE 0.1.0 | upstream `TACE-v1-OMat24-M` cache | passed | passed | downloaded through TACE foundation model registry |
-| `EQUFLASH` | Metadata-backed checkpoint audit and builder smoke | torch 2.5.1+cu121, sevenn 0.12.1, flashTP_e3nn 0.1.0 | `equflash-29M-oam` public metadata; no released checkpoint | not applicable | blocked | VPMDK now routes through SevenNet + FlashTP and requires a local checkpoint; named metadata-only model gives an explicit error |
+| `EQUFLASH` | Metadata-backed checkpoint audit and builder smoke | torch 2.5.1+cu121, sevenn 0.12.1, flashTP_e3nn 0.1.0 | `equflash-29M-oam` public metadata; no released checkpoint | not applicable | blocked | checkpoint-dependent SevenNet + FlashTP adapter; named metadata-only model gives an explicit error until a local checkpoint is supplied |
 | `FAIRCHEM_V1` | Manual real-backend single point | torch 2.4.1+cu121, fairchem-core 1.10.0 | local `schnet_200k.pt` | passed | passed | stress unavailable for this calculator; forces were zero for this Si2 smoke case |
-| `FAIRCHEM_V2` | Manual real-backend single point | torch 2.8.0+cu128, fairchem-core 2.13.0 | `uma-s-1`, `FAIRCHEM_TASK=omat` | passed | passed | VPMDK default `esen-sm-direct-all-oc25` is not a valid model name in fairchem-core 2.13.0 |
+| `FAIRCHEM_V2` | Manual real-backend single point | torch 2.8.0+cu128, fairchem-core 2.13.0 | `uma-s-1`, `FAIRCHEM_TASK=omat` | passed | passed | VPMDK default uses `uma-s-1p1`, which is present in fairchem-core 2.13.0 and current 2.x registries |
 | `FAIRCHEM` | Manual real-backend single point | same as `FAIRCHEM_V2` | `uma-s-1`, `FAIRCHEM_TASK=omat` | passed | passed | alias path covered separately |
 | `ESEN` | Manual real-backend single point | same as `FAIRCHEM_V2` | `uma-s-1`, `FAIRCHEM_TASK=omat` | passed | passed | alias path covered separately; OC25 ESEN checkpoints require gated HF access |
 | `GRACE` | Manual real-backend single point | tensorflow 2.19.1, tensorpotential 0.5.7 | local `GRACE-2L-MP-r6` | passed | passed | CPU required hiding CUDA; CUDA used `XLA_FLAGS=--xla_gpu_cuda_data_dir=...` |
@@ -58,6 +60,8 @@ DFT data.
 
 The following values are the direct single-point outputs for the Si2 smoke
 structure.  They are recorded for reproducibility and sanity checking only.
+For `ORB`, the CPU/CUDA values are runnable smoke outputs only; numerical parity
+is not asserted by this sweep.
 
 | Backend | CPU energy (eV) | CPU max force (eV/A) | CUDA energy (eV) | CUDA max force (eV/A) |
 | --- | ---: | ---: | ---: | ---: |
