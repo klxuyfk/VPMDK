@@ -125,6 +125,11 @@ Backend-specific overrides win over the shared graph-converter tags.
 
 - `MATRIS_TASK`
 
+### MatterSim
+
+- `MATTERSIM_COMPUTE_STRESS`
+- `MATTERSIM_STRESS_WEIGHT`
+
 ### AlphaNet
 
 - `ALPHANET_CONFIG`
@@ -156,6 +161,8 @@ Backend-specific overrides win over the shared graph-converter tags.
 
 - `UPET_VERSION`
 - `UPET_NON_CONSERVATIVE`
+- `UPET_NEIGHBORLIST_DEVICE`
+- `UPET_NL_DEVICE`
 
 ### TACE
 

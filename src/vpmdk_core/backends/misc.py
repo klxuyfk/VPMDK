@@ -118,21 +118,250 @@ def _build_orb_calculator(bcar_tags: Dict[str, str]):
     return root.ORBCalculator(model, device=device)
 
 
+def _build_mattersim_calculator(bcar_tags: Dict[str, str]):
+    """Create the MatterSim ASE calculator configured from BCAR tags."""
+
+    root = _root()
+    if root.MatterSimCalculator is None:
+        raise RuntimeError(
+            "MatterSimCalculator not available. Install mattersim and dependencies."
+        )
+
+    device = root._resolve_device(bcar_tags.get("DEVICE"))
+    kwargs: Dict[str, object] = {}
+    if device is not None and root._callable_supports_parameter(
+        root.MatterSimCalculator, "device"
+    ):
+        kwargs["device"] = device
+
+    compute_stress = root._parse_optional_bool_tag(
+        bcar_tags, "MATTERSIM_COMPUTE_STRESS"
+    )
+    if compute_stress is not None and root._callable_supports_parameter(
+        root.MatterSimCalculator, "compute_stress"
+    ):
+        kwargs["compute_stress"] = compute_stress
+
+    stress_weight = root._parse_optional_float(
+        bcar_tags.get("MATTERSIM_STRESS_WEIGHT"), key="MATTERSIM_STRESS_WEIGHT"
+    )
+    if stress_weight is not None and root._callable_supports_parameter(
+        root.MatterSimCalculator, "stress_weight"
+    ):
+        kwargs["stress_weight"] = stress_weight
+
+    model_value = bcar_tags.get("MODEL")
+    if model_value and os.path.exists(model_value):
+        from_checkpoint = getattr(root.MatterSimCalculator, "from_checkpoint", None)
+        if callable(from_checkpoint):
+            if device is not None and root._callable_supports_parameter(
+                from_checkpoint, "device"
+            ):
+                kwargs.setdefault("device", device)
+            return from_checkpoint(model_value, **kwargs)
+        return root.MatterSimCalculator(model_value, **kwargs)
+    if model_value and root._looks_like_filesystem_path(
+        model_value,
+        suffixes=(".pt", ".pth", ".ckpt"),
+    ):
+        raise FileNotFoundError(f"MatterSim model not found: {model_value}")
+
+    return root.MatterSimCalculator(**kwargs)
+
+
+def _normalize_upet_neighborlist_device(
+    value: str | None, model_device: str | None
+) -> str | None:
+    """Return the UPET neighbor-list execution device policy."""
+
+    requested_model_device = str(model_device or "").strip().lower()
+    if value is None or str(value).strip().lower() == "auto":
+        return "cpu" if requested_model_device.startswith("cuda") else None
+
+    normalized = str(value).strip().lower()
+    if normalized in {"cpu", "host"}:
+        return "cpu"
+    if normalized in {"cuda", "model", "device", "same"}:
+        return None
+    raise ValueError(f"Invalid UPET_NEIGHBORLIST_DEVICE value: {value!r}")
+
+
+def _run_with_upet_neighborlist_device(
+    calculator, neighborlist_device: str, call, *args, **kwargs
+):
+    """Run a UPET calculation with metatomic/vesin neighbor lists on a fixed device."""
+
+    if neighborlist_device != "cpu":
+        return call(*args, **kwargs)
+
+    root = _root()
+    patches: list[tuple[object, str, object]] = []
+
+    def _devices(systems):
+        return [system.device for system in systems]
+
+    def _to_device(systems, device):
+        return [system.to(device=device) for system in systems]
+
+    def _restore_devices(systems, devices):
+        return [
+            system.to(device=device)
+            for system, device in zip(systems, devices, strict=True)
+        ]
+
+    def _patch(target, attr: str, replacement) -> None:
+        original = getattr(target, attr, None)
+        if original is None:
+            return
+        setattr(target, attr, replacement(original))
+        patches.append((target, attr, original))
+
+    try:
+        current_neighbors = root.importlib.import_module("metatomic_ase._neighbors")
+    except Exception:
+        current_neighbors = None
+
+    if current_neighbors is not None:
+        all_neighbors_calculator = getattr(
+            current_neighbors, "AllNeighborsCalculator", None
+        )
+        if all_neighbors_calculator is not None:
+            def _wrap_compute(original):
+                def compute_with_cpu_neighbors(self, systems):
+                    devices = _devices(systems)
+                    cpu_systems = _to_device(systems, "cpu")
+                    return _restore_devices(original(self, cpu_systems), devices)
+
+                return compute_with_cpu_neighbors
+
+            _patch(all_neighbors_calculator, "compute", _wrap_compute)
+
+        def _wrap_current_vesin(original):
+            def cpu_neighbor_lists(systems, calculators, *args, **kwargs):
+                devices = _devices(systems)
+                cpu_systems = _to_device(systems, "cpu")
+                return _restore_devices(
+                    original(cpu_systems, calculators, *args, **kwargs),
+                    devices,
+                )
+
+            return cpu_neighbor_lists
+
+        _patch(
+            current_neighbors,
+            "_compute_requested_neighbors_vesin",
+            _wrap_current_vesin,
+        )
+
+    try:
+        legacy_calculator = root.importlib.import_module("metatomic.torch.ase_calculator")
+    except Exception:
+        legacy_calculator = None
+
+    if legacy_calculator is not None:
+        def _wrap_legacy_vesin(original):
+            def cpu_neighbor_lists(systems, requested_options, check_consistency=False):
+                devices = _devices(systems)
+                cpu_systems = _to_device(systems, "cpu")
+                computed_systems = original(
+                    cpu_systems,
+                    requested_options,
+                    check_consistency=check_consistency,
+                )
+                if computed_systems is None:
+                    computed_systems = cpu_systems
+                return _restore_devices(computed_systems, devices)
+
+            return cpu_neighbor_lists
+
+        _patch(
+            legacy_calculator,
+            "_compute_requested_neighbors_vesin",
+            _wrap_legacy_vesin,
+        )
+
+    if not patches:
+        return call(*args, **kwargs)
+
+    try:
+        return call(*args, **kwargs)
+    finally:
+        for target, attr, original in reversed(patches):
+            setattr(target, attr, original)
+
+
+class _UPETNeighborListDeviceProxy:
+    """Proxy a UPET calculator while forcing metatomic neighbor lists to CPU."""
+
+    def __init__(self, calculator, neighborlist_device: str):
+        self.calculator = calculator
+        self.neighborlist_device = neighborlist_device
+        self.implemented_properties = getattr(calculator, "implemented_properties", [])
+
+    def __getattr__(self, name):
+        return getattr(self.calculator, name)
+
+    @property
+    def results(self):
+        return getattr(self.calculator, "results", {})
+
+    @results.setter
+    def results(self, value):
+        setattr(self.calculator, "results", value)
+
+    @property
+    def atoms(self):
+        return getattr(self.calculator, "atoms", None)
+
+    @atoms.setter
+    def atoms(self, value):
+        setattr(self.calculator, "atoms", value)
+
+    def _call(self, method_name: str, *args, **kwargs):
+        method = getattr(self.calculator, method_name)
+        return _run_with_upet_neighborlist_device(
+            self.calculator,
+            self.neighborlist_device,
+            method,
+            *args,
+            **kwargs,
+        )
+
+    def calculate(self, *args, **kwargs):
+        return self._call("calculate", *args, **kwargs)
+
+    def get_potential_energy(self, *args, **kwargs):
+        return self._call("get_potential_energy", *args, **kwargs)
+
+    def get_forces(self, *args, **kwargs):
+        return self._call("get_forces", *args, **kwargs)
+
+    def get_stress(self, *args, **kwargs):
+        return self._call("get_stress", *args, **kwargs)
+
+
 def _build_upet_calculator(bcar_tags: Dict[str, str]):
     """Create the UPET ASE calculator configured from BCAR tags."""
 
     root = _root()
     if root.UPETCalculator is None:
-        raise RuntimeError("UPET calculator not available. Install upet and dependencies.")
+        raise RuntimeError(
+            "UPET calculator not available. Install upet and dependencies."
+        )
 
     model_value = bcar_tags.get("MODEL")
     if not model_value:
         raise ValueError(
-            "UPET requires MODEL set to a checkpoint path or a named model such as pet-oam-xl."
+            "UPET requires MODEL set to a checkpoint path or a named model such as "
+            "pet-oam-xl."
         )
 
     device = root._resolve_device(bcar_tags.get("DEVICE"))
     kwargs: Dict[str, object] = {"device": device}
+    neighborlist_device = _normalize_upet_neighborlist_device(
+        bcar_tags.get("UPET_NEIGHBORLIST_DEVICE") or bcar_tags.get("UPET_NL_DEVICE"),
+        device,
+    )
 
     version = bcar_tags.get("UPET_VERSION")
     if version:
@@ -145,45 +374,47 @@ def _build_upet_calculator(bcar_tags: Dict[str, str]):
         )
 
     if os.path.exists(model_value):
-        return root.UPETCalculator(checkpoint_path=model_value, **kwargs)
-
-    if root._looks_like_filesystem_path(model_value, suffixes=(".ckpt", ".pt", ".pth")):
+        calculator = root.UPETCalculator(checkpoint_path=model_value, **kwargs)
+    elif root._looks_like_filesystem_path(
+        model_value, suffixes=(".ckpt", ".pt", ".pth")
+    ):
         raise FileNotFoundError(f"UPET model not found: {model_value}")
+    else:
+        calculator = root.UPETCalculator(model=model_value, **kwargs)
 
-    return root.UPETCalculator(model=model_value, **kwargs)
+    if neighborlist_device is None or not hasattr(calculator, "get_potential_energy"):
+        return calculator
+    return _UPETNeighborListDeviceProxy(calculator, neighborlist_device)
 
 
-def _get_equflash_calculator_cls():
-    """Return the optional EquFlash ASE calculator class when installed."""
-
-    root = _root()
-    for module_name in ("GGNN.common.calculator", "ggnn.common.calculator"):
-        try:
-            module = root.importlib.import_module(module_name)
-        except Exception:
-            continue
-        calculator_cls = getattr(module, "UCalculator", None)
-        if calculator_cls is not None:
-            return calculator_cls
-    return None
+def _is_equflash_unreleased_named_model(model_value: str | None) -> bool:
+    if not model_value:
+        return False
+    normalized = model_value.strip().casefold().replace("_", "-")
+    return normalized in {"equflash-29m-oam", "equflash"}
 
 
 def _build_equflash_calculator(bcar_tags: Dict[str, str]):
     """Create the EquFlash ASE calculator configured from BCAR tags."""
 
     root = _root()
-    calculator_cls = root._get_equflash_calculator_cls()
-    if calculator_cls is None:
+    if root.SevenNetCalculator is None or not root._is_sevennet_flash_available():
         raise RuntimeError(
-            "EquFlash calculator not available. Install the EquFlash/GGNN package "
-            "that exposes GGNN.common.calculator.UCalculator and its dependencies."
+            "EquFlash requires sevenn plus flashTP_e3nn support. Install FlashTP and "
+            "ensure CUDA is visible."
         )
 
     model_value = bcar_tags.get("MODEL")
     if not model_value:
         raise ValueError(
-            "EquFlash requires MODEL pointing to a local checkpoint file. "
-            "Public checkpoints are not currently bundled."
+            "EquFlash requires MODEL pointing to a local SevenNet/EquFlash checkpoint. "
+            "The public matbench-discovery metadata for equflash-29M-oam lists "
+            "checkpoint_url: missing."
+        )
+    if _is_equflash_unreleased_named_model(model_value):
+        raise ValueError(
+            "EquFlash named model 'equflash-29M-oam' has public metadata but no "
+            "released checkpoint. Set MODEL to a local SevenNet/EquFlash checkpoint."
         )
     if not os.path.exists(model_value):
         if root._looks_like_filesystem_path(
@@ -192,17 +423,14 @@ def _build_equflash_calculator(bcar_tags: Dict[str, str]):
         ):
             raise FileNotFoundError(f"EquFlash model not found: {model_value}")
         raise ValueError(
-            "EquFlash currently requires MODEL pointing to a local checkpoint file."
+            "EquFlash currently requires MODEL pointing to a local SevenNet/EquFlash "
+            "checkpoint file."
         )
 
-    device = root._resolve_device(bcar_tags.get("DEVICE")) or "cpu"
-    cpu_flag = str(device).strip().lower().startswith("cpu")
-    kwargs: Dict[str, object] = {"checkpoint_path": model_value}
-    if root._callable_supports_parameter(calculator_cls, "cpu"):
-        kwargs["cpu"] = cpu_flag
-    if root._callable_supports_parameter(calculator_cls, "device"):
-        kwargs["device"] = device
-    return calculator_cls(**kwargs)
+    tags = dict(bcar_tags)
+    tags.setdefault("DEVICE", "cuda")
+    tags.setdefault("SEVENNET_FILE_TYPE", "checkpoint")
+    return root._build_sevennet_family_calculator(tags, force_flash=True)
 
 
 def _build_tace_calculator(bcar_tags: Dict[str, str]):
@@ -210,7 +438,9 @@ def _build_tace_calculator(bcar_tags: Dict[str, str]):
 
     root = _root()
     if root.TACEAseCalc is None:
-        raise RuntimeError("TACE calculator not available. Install TACE and dependencies.")
+        raise RuntimeError(
+            "TACE calculator not available. Install TACE and dependencies."
+        )
 
     model_value = bcar_tags.get("MODEL")
     if not model_value:

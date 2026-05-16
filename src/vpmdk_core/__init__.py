@@ -412,10 +412,11 @@ from .backends.misc import (
     _build_equflash_calculator,
     _build_grace_calculator,
     _build_matlantis_calculator,
+    _build_mattersim_calculator,
     _build_orb_calculator,
     _build_tace_calculator,
     _build_upet_calculator,
-    _get_equflash_calculator_cls,
+    _normalize_upet_neighborlist_device,
     _list_matlantis_calc_modes,
     _resolve_matlantis_calc_mode,
 )

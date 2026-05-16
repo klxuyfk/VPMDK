@@ -147,6 +147,13 @@ Guidance:
   acceleration forced on
 - make sure the installed SevenNet build actually exposes the requested
   accelerator flags
+- on the 2026-05-16 TITAN V validation host, `flashTP_e3nn` needed to be built
+  from the FlashTP source tree with `CUDA_ARCH_LIST=70` and CUDA 12.6 headers
+  visible via `CUDA_HOME`
+
+`MLP=EQUFLASH` uses the same SevenNet + FlashTP runtime path, but requires a
+local EquFlash-compatible checkpoint. The public `equflash-29M-oam` metadata
+records the checkpoint as unreleased, so it is not a downloadable named model.
 
 ## ORB
 

@@ -125,10 +125,14 @@ def _backend_available(name: str) -> bool:
         "FLASHTP": lambda: root._is_sevennet_flash_available(),
         "ALLEGRO": lambda: root.NequIPCalculator is not None,
         "NEQUIP": lambda: root.NequIPCalculator is not None,
-        "ORB": lambda: root.ORBCalculator is not None and root.ORB_PRETRAINED_MODELS is not None,
+        "ORB": lambda: (
+            root.ORBCalculator is not None and root.ORB_PRETRAINED_MODELS is not None
+        ),
         "UPET": lambda: root.UPETCalculator is not None,
         "TACE": lambda: root.TACEAseCalc is not None,
-        "EQUFLASH": lambda: root._get_equflash_calculator_cls() is not None,
+        "EQUFLASH": lambda: (
+            root.SevenNetCalculator is not None and root._is_sevennet_flash_available()
+        ),
         "FAIRCHEM": lambda: root.FAIRChemCalculator is not None,
         "FAIRCHEM_V2": lambda: root.FAIRChemCalculator is not None,
         "ESEN": lambda: root.FAIRChemCalculator is not None,

@@ -67,7 +67,7 @@ Common packages:
 - `orb-models` for `MLP=ORB`
 - `upet` for `MLP=UPET`
 - `TACE` for `MLP=TACE`
-- an EquFlash / GGNN install exposing `GGNN.common.calculator.UCalculator` for `MLP=EQUFLASH`
+- `sevenn` plus `flashTP_e3nn` and a local EquFlash-compatible checkpoint for `MLP=EQUFLASH`
 - `fairchem-core>=2,<3` for `MLP=FAIRCHEM` / `FAIRCHEM_V2` / `ESEN`
 - `fairchem-core==1.10.0` as the documented baseline for `MLP=FAIRCHEM_V1`
 - `grace-tensorpotential` for `MLP=GRACE`

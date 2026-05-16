@@ -14,12 +14,7 @@ def _root():
     return sys.modules["vpmdk_core"]
 
 
-_SIMPLE_CALCULATORS: Dict[str, tuple[str, str]] = {
-    "MATTERSIM": (
-        "MatterSimCalculator",
-        "MatterSimCalculator not available. Install mattersim and dependencies.",
-    ),
-}
+_SIMPLE_CALCULATORS: Dict[str, tuple[str, str]] = {}
 
 
 _CALCULATOR_BUILDERS: Dict[str, str] = {
@@ -27,6 +22,7 @@ _CALCULATOR_BUILDERS: Dict[str, str] = {
     "MATGL": "_build_m3gnet_calculator",
     "M3GNET": "_build_m3gnet_calculator",
     "MACE": "_build_mace_calculator",
+    "MATTERSIM": "_build_mattersim_calculator",
     "EQNORM": "_build_eqnorm_calculator",
     "MATRIS": "_build_matris_calculator",
     "ALPHANET": "_build_alphanet_calculator",
