@@ -183,7 +183,11 @@ from ase.calculators.singlepoint import SinglePointCalculator
 from ase.io import write
 from ase.io.lammpsdata import Prism
 from ase.io.vasp import write_vasp_xdatcar
-from ase.optimize import BFGS
+try:
+    from ase.mep import NEB
+except ImportError:
+    from ase.neb import NEB  # type: ignore
+from ase.optimize import BFGS, FIRE, LBFGS, MDMin
 
 try:
     from ase.constraints import FixAtoms, StrainFilter, UnitCellFilter
@@ -481,6 +485,7 @@ from .io.vasp_compat import (
     _active_pseudo_scf_settings,
     _active_vasp_input_paths,
     _append_kpoints_xml,
+    _append_dynmat_xml,
     _append_oszicar_compat_step,
     _append_outcar_compat_step,
     _append_outcar_footer,
@@ -495,6 +500,7 @@ from .io.vasp_compat import (
     _full_to_voigt_stress,
     _initialize_vasp_compat_outputs,
     _matrix_to_nested_list,
+    _mass_normalized_hessian,
     _pseudo_scf_settings_from_incar,
     _read_non_comment_lines,
     _record_vasp_compat_step,
@@ -537,9 +543,13 @@ from .runtime.md import _estimate_tdamp, _rescale_velocities, _select_md_dynamic
 from .runtime.neb import (
     _collect_neb_image_results,
     _discover_neb_image_directories,
+    _parse_neb_ichain,
+    _parse_neb_spring_constant,
     _parse_vasprun_varray_rows,
     _read_last_vasprun_step,
+    _run_ase_neb_relaxation,
     _resolve_neb_image_structure_path,
+    _select_neb_optimizer,
     _write_neb_parent_aggregate_outputs,
     run_neb_images,
 )
@@ -556,7 +566,12 @@ from .runtime.relax import (
     _temporarily_freeze_atoms,
     run_relaxation,
 )
-from .runtime.single import run_single_point
+from .runtime.single import (
+    _finite_difference_force_constants,
+    _force_constants_displacement_from_bcar,
+    run_force_constants,
+    run_single_point,
+)
 from .settings.incar import (
     KBAR_TO_EV_PER_A3,
     IncarSettings,
@@ -570,6 +585,8 @@ from .settings.incar import (
     _normalize_isif,
     _parse_neb_image_count,
     _parse_optional_float,
+    _parse_vtst_ichain,
+    _reject_unsupported_vtst_modes,
     _should_write_chgcar,
     _should_write_energy_csv,
     _should_write_lammps_trajectory,

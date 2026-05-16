@@ -26,6 +26,8 @@ class IncarSettings:
     tebeg: float = 300.0
     teend: float = 300.0
     potim: float = 2.0
+    nfree: int | None = None
+    symprec: float = 1e-5
     mdalgo: int = 0
     smass: float | None = None
     thermostat_params: Dict[str, float] = field(default_factory=dict)
@@ -56,6 +58,8 @@ SUPPORTED_INCAR_TAGS = {
     "TEBEG",
     "TEEND",
     "POTIM",
+    "NFREE",
+    "SYMPREC",
     "MDALGO",
     "SMASS",
     "ANDERSEN_PROB",
@@ -64,7 +68,10 @@ SUPPORTED_INCAR_TAGS = {
     "NHC_NCHAINS",
     "MAGMOM",
     "IMAGES",
+    "ICHAIN",
+    "IOPT",
     "LCLIMB",
+    "LNEBCELL",
     "SPRING",
 }
 
@@ -112,6 +119,27 @@ def _warn_for_unsupported_incar_tags(
             continue
         if key not in supported_tags:
             print(f"INCAR tag {key} is not supported and will be ignored")
+
+
+def _parse_vtst_ichain(incar) -> int:
+    """Return VTST ``ICHAIN`` with the NEB default."""
+
+    raw_value = getattr(incar, "get", lambda *_: 0)("ICHAIN", 0)
+    parsed = _parse_optional_float(raw_value, key="ICHAIN")
+    if parsed is None:
+        return 0
+    return int(parsed)
+
+
+def _reject_unsupported_vtst_modes(incar) -> None:
+    """Reject VTST transition-state modes that VPMDK does not implement."""
+
+    ichain = _parse_vtst_ichain(incar)
+    if ichain != 0:
+        raise NotImplementedError(
+            "VPMDK currently implements VTST-style NEB for ICHAIN=0 only. "
+            f"ICHAIN={ichain} TS methods such as dimer/lanczos are not implemented."
+        )
 
 
 def _is_truthy_flag(value) -> bool:
@@ -242,7 +270,26 @@ def _load_incar_settings(incar) -> IncarSettings:
     teend_value = incar.get("TEEND", tebeg)
     parsed_teend = _parse_optional_float(teend_value, key="TEEND")
     teend = parsed_teend if parsed_teend is not None else tebeg
-    potim = float(incar.get("POTIM", 2.0))
+    if "POTIM" in incar:
+        potim = float(incar.get("POTIM", 2.0))
+    elif ibrion in {5, 6}:
+        potim = 0.015
+    else:
+        potim = 2.0
+    nfree = None
+    if "NFREE" in incar:
+        parsed_nfree = _parse_optional_float(incar.get("NFREE"), key="NFREE")
+        if parsed_nfree is not None:
+            if not float(parsed_nfree).is_integer():
+                raise ValueError("NFREE must be an integer.")
+            nfree = int(parsed_nfree)
+    symprec = 1e-5
+    if "SYMPREC" in incar:
+        parsed_symprec = _parse_optional_float(incar.get("SYMPREC"), key="SYMPREC")
+        if parsed_symprec is not None:
+            if parsed_symprec <= 0.0:
+                raise ValueError("SYMPREC must be positive.")
+            symprec = float(parsed_symprec)
     smass = (
         _parse_optional_float(incar.get("SMASS"), key="SMASS")
         if "SMASS" in incar
@@ -272,6 +319,8 @@ def _load_incar_settings(incar) -> IncarSettings:
         tebeg=tebeg,
         teend=teend,
         potim=potim,
+        nfree=nfree,
+        symprec=symprec,
         mdalgo=mdalgo,
         smass=smass,
         thermostat_params=thermostat_params,

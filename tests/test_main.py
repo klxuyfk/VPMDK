@@ -8,10 +8,94 @@ from types import SimpleNamespace
 
 import pytest
 import numpy as np
+from ase import Atoms
+from ase.calculators.calculator import Calculator, all_changes
+from ase.constraints import FixAtoms
 
 import vpmdk
 import vpmdk.compat.vasp as vasp_compat
 from tests.conftest import DummyCalculator
+
+
+def _shift_first_direct_position(poscar_text: str, delta: float) -> str:
+    lines = poscar_text.splitlines()
+    coord_start = None
+    for index, line in enumerate(lines):
+        if line.strip().lower().startswith(("direct", "cart")):
+            coord_start = index + 1
+            break
+    if coord_start is None:
+        raise AssertionError("test POSCAR does not contain a coordinate mode line")
+
+    parts = lines[coord_start].split()
+    parts[0] = f"{(float(parts[0]) + delta) % 1.0:.9f}"
+    lines[coord_start] = "     " + "         ".join(parts)
+    return "\n".join(lines) + "\n"
+
+
+def _set_first_direct_position(poscar_text: str, value: float) -> str:
+    lines = poscar_text.splitlines()
+    coord_start = None
+    for index, line in enumerate(lines):
+        if line.strip().lower().startswith(("direct", "cart")):
+            coord_start = index + 1
+            break
+    if coord_start is None:
+        raise AssertionError("test POSCAR does not contain a coordinate mode line")
+
+    parts = lines[coord_start].split()
+    parts[0] = f"{value:.9f}"
+    lines[coord_start] = "     " + "         ".join(parts)
+    return "\n".join(lines) + "\n"
+
+
+def _reconstruct_force_constants_from_vasprun(path: Path, num_atoms: int = 2):
+    root = ET.parse(path).getroot()
+    hessian_rows = [
+        [float(value) for value in row.text.split()]
+        for row in root.findall("./dynmat/varray[@name='hessian']/v")
+    ]
+    atomtype_rows = root.findall("./atominfo/array[@name='atomtypes']/set/rc")
+    masses: list[float] = []
+    for row in atomtype_rows:
+        cells = row.findall("c")
+        masses.extend([float(cells[2].text)] * int(cells[0].text))
+
+    reconstructed = np.zeros((num_atoms, num_atoms, 3, 3), dtype=float)
+    hessian = np.asarray(hessian_rows, dtype=float)
+    for i in range(num_atoms):
+        for j in range(num_atoms):
+            reconstructed[i, j] = (
+                -hessian[i * 3 : (i + 1) * 3, j * 3 : (j + 1) * 3]
+                * np.sqrt(masses[i] * masses[j])
+            )
+    return reconstructed
+
+
+def _write_numbered_neb_poscars(run_dir: Path) -> None:
+    poscar_text = (run_dir / "POSCAR").read_text()
+    for image, delta in zip(("00", "01", "02"), (0.0, 0.01, 0.02)):
+        image_dir = run_dir / image
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(
+            _shift_first_direct_position(poscar_text, delta)
+        )
+
+
+class DummyNEBOptimizer:
+    def __init__(self, obj, logfile=None):
+        self.obj = obj
+        self._callbacks = []
+
+    def attach(self, callback, *args, **kwargs):
+        self._callbacks.append((callback, args, kwargs))
+
+    def run(self, *args, **kwargs):
+        positions = self.obj.get_positions()
+        self.obj.set_positions(positions + 0.01)
+        for callback, cb_args, cb_kwargs in self._callbacks:
+            callback(*cb_args, **cb_kwargs)
+        return False
 
 
 @pytest.mark.parametrize(
@@ -320,6 +404,480 @@ def test_main_negative_ibrion_forces_single_point(tmp_path: Path, prepare_inputs
         monkeypatch.undo()
 
     assert seen.get("single_point") == 1
+
+
+def test_main_ibrion7_writes_vasp_dynmat_for_phonopy_fc(
+    tmp_path: Path, prepare_inputs
+):
+    stiffness = 3.25
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "7", "ISIF": "2"},
+        extra_bcar={"FORCE_CONSTANTS_DISPLACEMENT": "0.02"},
+    )
+
+    class HarmonicCalculator(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+            super().calculate(atoms, properties, system_changes)
+            positions = atoms.get_positions()
+            self.results = {
+                "energy": 0.5 * stiffness * float(np.sum(positions * positions)),
+                "forces": -stiffness * positions,
+                "stress": np.zeros(6),
+            }
+
+    def fail(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("IBRION=7 should use force-constants mode")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: HarmonicCalculator())
+    monkeypatch.setattr(vpmdk, "run_single_point", fail)
+    monkeypatch.setattr(vpmdk, "run_relaxation", fail)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    hessian_rows = [
+        [float(value) for value in row.text.split()]
+        for row in root.findall("./dynmat/varray[@name='hessian']/v")
+    ]
+    assert np.asarray(hessian_rows).shape == (6, 6)
+
+    atomtype_rows = root.findall("./atominfo/array[@name='atomtypes']/set/rc")
+    masses: list[float] = []
+    for row in atomtype_rows:
+        cells = row.findall("c")
+        masses.extend([float(cells[2].text)] * int(cells[0].text))
+
+    reconstructed = np.zeros((2, 2, 3, 3), dtype=float)
+    hessian = np.asarray(hessian_rows, dtype=float)
+    for i in range(2):
+        for j in range(2):
+            reconstructed[i, j] = (
+                -hessian[i * 3 : (i + 1) * 3, j * 3 : (j + 1) * 3]
+                * np.sqrt(masses[i] * masses[j])
+            )
+
+    expected = np.zeros((2, 2, 3, 3), dtype=float)
+    for atom_index in range(2):
+        expected[atom_index, atom_index] = np.eye(3) * stiffness
+    assert reconstructed == pytest.approx(expected)
+
+
+def test_main_ibrion7_preserves_noncontiguous_atomtype_mass_order(
+    tmp_path: Path, monkeypatch
+):
+    stiffness = 1.5
+    (tmp_path / "POSCAR").write_text(
+        """H_He_H
+1.0
+8.0 0.0 0.0
+0.0 8.0 0.0
+0.0 0.0 8.0
+H He H
+1 1 1
+Direct
+0.0 0.0 0.0
+0.25 0.25 0.25
+0.5 0.5 0.5
+"""
+    )
+    (tmp_path / "INCAR").write_text("NSW = 1\nIBRION = 7\nISIF = 2\n")
+    (tmp_path / "BCAR").write_text(
+        "MLP=CHGNET\nFORCE_CONSTANTS_DISPLACEMENT=0.02\n"
+    )
+
+    class HarmonicCalculator(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+            super().calculate(atoms, properties, system_changes)
+            positions = atoms.get_positions()
+            self.results = {
+                "energy": 0.5 * stiffness * float(np.sum(positions * positions)),
+                "forces": -stiffness * positions,
+                "stress": np.zeros(6),
+            }
+
+    monkeypatch.setattr(
+        vpmdk,
+        "_build_calculator_from_tags",
+        lambda *_, **__: HarmonicCalculator(),
+    )
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    vpmdk.main()
+
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    atomtype_rows = root.findall("./atominfo/array[@name='atomtypes']/set/rc")
+    atomtypes = [
+        (int(row.findall("c")[0].text), row.findall("c")[1].text)
+        for row in atomtype_rows
+    ]
+    assert atomtypes == [(1, "H"), (1, "He"), (1, "H")]
+
+    reconstructed = _reconstruct_force_constants_from_vasprun(
+        tmp_path / "vasprun.xml",
+        num_atoms=3,
+    )
+    expected = np.zeros((3, 3, 3, 3), dtype=float)
+    for atom_index in range(3):
+        expected[atom_index, atom_index] = np.eye(3) * stiffness
+    assert reconstructed == pytest.approx(expected)
+
+
+def test_run_force_constants_uses_raw_forces_with_constraints(
+    tmp_path: Path, monkeypatch
+):
+    stiffness = 2.0
+    atoms = Atoms(
+        "H2",
+        positions=[[0.0, 0.0, 0.0], [1.0, 0.2, 0.0]],
+        cell=[6.0, 6.0, 6.0],
+        pbc=True,
+    )
+    atoms.set_constraint(FixAtoms(indices=[1]))
+
+    class HarmonicCalculator(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+            super().calculate(atoms, properties, system_changes)
+            positions = atoms.get_positions()
+            self.results = {
+                "energy": 0.5 * stiffness * float(np.sum(positions * positions)),
+                "forces": -stiffness * positions,
+                "stress": np.zeros(6),
+            }
+
+    monkeypatch.chdir(tmp_path)
+    force_constants = vpmdk.run_force_constants(
+        atoms,
+        HarmonicCalculator(),
+        displacement=0.02,
+        nfree=2,
+        ibrion=7,
+    )
+
+    expected = np.zeros((2, 2, 3, 3), dtype=float)
+    for atom_index in range(2):
+        expected[atom_index, atom_index] = np.eye(3) * stiffness
+    assert force_constants == pytest.approx(expected)
+
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    recorded_forces = [
+        [float(value) for value in row.text.split()]
+        for row in root.findall("./calculation/varray[@name='forces']/v")
+    ]
+    assert recorded_forces[1] == pytest.approx([-stiffness, -0.2 * stiffness, 0.0])
+
+
+def test_main_ibrion5_uses_potim_and_nfree2_for_finite_difference_fc(
+    tmp_path: Path, prepare_inputs, monkeypatch
+):
+    stiffness = 2.5
+    cubic = 7.0
+    displacement = 0.04
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={
+            "NSW": "1",
+            "IBRION": "5",
+            "ISIF": "2",
+            "POTIM": str(displacement),
+            "NFREE": "2",
+        },
+        extra_bcar={"FORCE_CONSTANTS_DISPLACEMENT": "0.001"},
+    )
+
+    class AnharmonicCalculator(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+            super().calculate(atoms, properties, system_changes)
+            positions = atoms.get_positions()
+            self.results = {
+                "energy": float(
+                    0.5 * stiffness * np.sum(positions * positions)
+                    + 0.25 * cubic * np.sum(positions**4)
+                ),
+                "forces": -stiffness * positions - cubic * positions**3,
+                "stress": np.zeros(6),
+            }
+
+    def fail(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("IBRION=5 should use finite-difference force-constants mode")
+
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: AnharmonicCalculator())
+    monkeypatch.setattr(vpmdk, "run_single_point", fail)
+    monkeypatch.setattr(vpmdk, "run_relaxation", fail)
+    monkeypatch.setattr(vpmdk, "run_md", fail)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    vpmdk.main()
+
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    assert root.findtext("./incar/i[@name='IBRION']") == "5"
+    assert float(root.findtext("./incar/i[@name='POTIM']")) == pytest.approx(displacement)
+    assert root.findtext("./incar/i[@name='NFREE']") == "2"
+
+    hessian_rows = [
+        [float(value) for value in row.text.split()]
+        for row in root.findall("./dynmat/varray[@name='hessian']/v")
+    ]
+    atomtype_rows = root.findall("./atominfo/array[@name='atomtypes']/set/rc")
+    masses: list[float] = []
+    for row in atomtype_rows:
+        cells = row.findall("c")
+        masses.extend([float(cells[2].text)] * int(cells[0].text))
+
+    reconstructed = np.zeros((2, 2, 3, 3), dtype=float)
+    hessian = np.asarray(hessian_rows, dtype=float)
+    for i in range(2):
+        for j in range(2):
+            reconstructed[i, j] = (
+                -hessian[i * 3 : (i + 1) * 3, j * 3 : (j + 1) * 3]
+                * np.sqrt(masses[i] * masses[j])
+            )
+
+    structure = vpmdk.read_structure(str(tmp_path / "POSCAR"), None)
+    atoms = vpmdk.AseAtomsAdaptor.get_atoms(structure)
+    atoms.wrap()
+    positions = atoms.get_positions()
+    expected = np.zeros((2, 2, 3, 3), dtype=float)
+    for atom_index in range(2):
+        for axis in range(3):
+            expected[atom_index, atom_index, axis, axis] = (
+                stiffness + cubic * (3.0 * positions[atom_index, axis] ** 2 + displacement**2)
+            )
+    assert reconstructed == pytest.approx(expected)
+
+
+def test_main_ibrion5_rejects_unsupported_nfree(
+    tmp_path: Path, prepare_inputs, monkeypatch
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "5", "POTIM": "0.02", "NFREE": "3"},
+    )
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+
+    with pytest.raises(NotImplementedError, match="NFREE=1, NFREE=2, and NFREE=4"):
+        vpmdk.main()
+
+
+@pytest.mark.parametrize(
+    ("nfree", "expected_diagonal"),
+    [
+        (
+            1,
+            lambda stiffness, cubic, positions, displacement, atom_index, axis: (
+                stiffness
+                + cubic
+                * (
+                    3.0 * positions[atom_index, axis] ** 2
+                    + 3.0 * positions[atom_index, axis] * displacement
+                    + displacement**2
+                )
+            ),
+        ),
+        (
+            4,
+            lambda stiffness, cubic, positions, displacement, atom_index, axis: (
+                stiffness + 3.0 * cubic * positions[atom_index, axis] ** 2
+            ),
+        ),
+    ],
+)
+def test_main_ibrion5_supports_nfree1_and_nfree4_stencils(
+    tmp_path: Path, prepare_inputs, monkeypatch, nfree, expected_diagonal
+):
+    stiffness = 2.5
+    cubic = 7.0
+    displacement = 0.04
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={
+            "NSW": "1",
+            "IBRION": "5",
+            "ISIF": "2",
+            "POTIM": str(displacement),
+            "NFREE": str(nfree),
+        },
+    )
+
+    class AnharmonicCalculator(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+            super().calculate(atoms, properties, system_changes)
+            positions = atoms.get_positions()
+            self.results = {
+                "energy": float(
+                    0.5 * stiffness * np.sum(positions * positions)
+                    + 0.25 * cubic * np.sum(positions**4)
+                ),
+                "forces": -stiffness * positions - cubic * positions**3,
+                "stress": np.zeros(6),
+            }
+
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: AnharmonicCalculator())
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    vpmdk.main()
+
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    assert root.findtext("./incar/i[@name='NFREE']") == str(nfree)
+    reconstructed = _reconstruct_force_constants_from_vasprun(tmp_path / "vasprun.xml")
+    structure = vpmdk.read_structure(str(tmp_path / "POSCAR"), None)
+    atoms = vpmdk.AseAtomsAdaptor.get_atoms(structure)
+    atoms.wrap()
+    positions = atoms.get_positions()
+
+    expected = np.zeros((2, 2, 3, 3), dtype=float)
+    for atom_index in range(2):
+        for axis in range(3):
+            expected[atom_index, atom_index, axis, axis] = expected_diagonal(
+                stiffness,
+                cubic,
+                positions,
+                displacement,
+                atom_index,
+                axis,
+            )
+    assert reconstructed == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("nfree", "max_force_calls"),
+    [(1, 3), (2, 4), (4, 6)],
+)
+def test_main_ibrion6_uses_symmetry_reduced_atom_displacements(
+    tmp_path: Path, prepare_inputs, monkeypatch, nfree, max_force_calls
+):
+    stiffness = 1.75
+    calls = {"count": 0}
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={
+            "NSW": "1",
+            "IBRION": "6",
+            "ISIF": "2",
+            "POTIM": "0.03",
+            "NFREE": str(nfree),
+            "SYMPREC": "1e-5",
+        },
+    )
+
+    class CountingHarmonicCalculator(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+            super().calculate(atoms, properties, system_changes)
+            calls["count"] += 1
+            positions = atoms.get_positions()
+            self.results = {
+                "energy": 0.5 * stiffness * float(np.sum(positions * positions)),
+                "forces": -stiffness * positions,
+                "stress": np.zeros(6),
+            }
+
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: CountingHarmonicCalculator())
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    vpmdk.main()
+
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    assert root.findtext("./incar/i[@name='IBRION']") == "6"
+    assert root.findtext("./incar/i[@name='NFREE']") == str(nfree)
+    assert calls["count"] <= max_force_calls
+
+    hessian_rows = [
+        [float(value) for value in row.text.split()]
+        for row in root.findall("./dynmat/varray[@name='hessian']/v")
+    ]
+    atomtype_rows = root.findall("./atominfo/array[@name='atomtypes']/set/rc")
+    masses: list[float] = []
+    for row in atomtype_rows:
+        cells = row.findall("c")
+        masses.extend([float(cells[2].text)] * int(cells[0].text))
+
+    reconstructed = np.zeros((2, 2, 3, 3), dtype=float)
+    hessian = np.asarray(hessian_rows, dtype=float)
+    for i in range(2):
+        for j in range(2):
+            reconstructed[i, j] = (
+                -hessian[i * 3 : (i + 1) * 3, j * 3 : (j + 1) * 3]
+                * np.sqrt(masses[i] * masses[j])
+            )
+
+    expected = np.zeros((2, 2, 3, 3), dtype=float)
+    for atom_index in range(2):
+        expected[atom_index, atom_index] = np.eye(3) * stiffness
+    assert reconstructed == pytest.approx(expected, abs=1e-8)
+
+
+def test_main_ibrion7_warns_that_dfpt_is_finite_difference_compatibility(
+    tmp_path: Path, prepare_inputs, monkeypatch, capsys
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "7", "ISIF": "2"},
+    )
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    vpmdk.main()
+
+    captured = capsys.readouterr()
+    assert "IBRION=7/8 are VASP DFPT modes" in captured.out
+    assert "finite-difference dynmat/hessian" in captured.out
+
+
+def test_main_ibrion8_warns_and_uses_symmetry_reduction(
+    tmp_path: Path, prepare_inputs, monkeypatch, capsys
+):
+    calls = {"count": 0}
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "8", "ISIF": "2", "SYMPREC": "1e-5"},
+        extra_bcar={"FORCE_CONSTANTS_DISPLACEMENT": "0.025"},
+    )
+
+    class CountingZeroForceCalculator(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+            super().calculate(atoms, properties, system_changes)
+            calls["count"] += 1
+            forces = atoms.get_positions() * 0.0
+            self.results = {
+                "energy": 0.5,
+                "forces": forces,
+                "stress": np.zeros(6),
+            }
+
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: CountingZeroForceCalculator())
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    vpmdk.main()
+
+    captured = capsys.readouterr()
+    assert "IBRION=7/8 are VASP DFPT modes" in captured.out
+    assert calls["count"] <= 4
+    root = ET.parse(tmp_path / "vasprun.xml").getroot()
+    hessian_rows = [
+        [float(value) for value in row.text.split()]
+        for row in root.findall("./dynmat/varray[@name='hessian']/v")
+    ]
+    assert np.asarray(hessian_rows) == pytest.approx(np.zeros((6, 6)))
 
 
 def test_build_grace_calculator_prefers_checkpoint(tmp_path: Path):
@@ -915,51 +1473,33 @@ def test_main_runs_neb_images_from_numbered_directories(tmp_path: Path, prepare_
     prepare_inputs(
         tmp_path,
         potential="CHGNET",
-        incar_overrides={"NSW": "2", "IMAGES": "1"},
+        incar_overrides={"NSW": "2", "ISIF": "2", "IMAGES": "1"},
     )
 
-    poscar_text = (tmp_path / "POSCAR").read_text()
-    for image in ("00", "01", "02"):
-        image_dir = tmp_path / image
-        image_dir.mkdir()
-        (image_dir / "POSCAR").write_text(poscar_text)
+    _write_numbered_neb_poscars(tmp_path)
 
-    seen: list[dict[str, object]] = []
-
-    def fake_run_relaxation(
-        atoms,
-        calculator,
-        steps,
-        fmax,
-        write_energy_csv=False,
-        isif=2,
-        pstress=None,
-        energy_tolerance=None,
-        ibrion=2,
-        stress_isif=None,
-        neb_mode=False,
-        neb_prev_positions=None,
-        neb_next_positions=None,
-        oszicar_pseudo_scf=False,
-    ):
-        seen.append(
-            {
-                "cwd": Path.cwd().name,
-                "steps": steps,
-                "neb_mode": neb_mode,
-                "has_prev": neb_prev_positions is not None,
-                "has_next": neb_next_positions is not None,
-                "oszicar_pseudo_scf": oszicar_pseudo_scf,
-            }
-        )
-        return 0.0
+    seen: dict[str, object] = {}
 
     def fail(*args, **kwargs):  # pragma: no cover - defensive guard
-        raise AssertionError("NEB runner should dispatch to relaxation for this setup")
+        raise AssertionError("NEB relaxation should use the ASE NEB optimizer")
+
+    class RecordingNEBOptimizer(DummyNEBOptimizer):
+        def __init__(self, obj, logfile=None):
+            super().__init__(obj, logfile=logfile)
+            seen["optimizable_atoms"] = len(obj)
+            seen["nimages"] = obj.nimages
+            seen["spring"] = list(obj.k)
+            seen["climb"] = obj.climb
+
+        def run(self, *args, **kwargs):
+            seen["steps"] = kwargs.get("steps")
+            seen["fmax"] = kwargs.get("fmax")
+            return super().run(*args, **kwargs)
 
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
-    monkeypatch.setattr(vpmdk, "run_relaxation", fake_run_relaxation)
+    monkeypatch.setattr(vpmdk, "BFGS", RecordingNEBOptimizer)
+    monkeypatch.setattr(vpmdk, "run_relaxation", fail)
     monkeypatch.setattr(vpmdk, "run_single_point", fail)
     monkeypatch.setattr(vpmdk, "run_md", fail)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
@@ -968,12 +1508,15 @@ def test_main_runs_neb_images_from_numbered_directories(tmp_path: Path, prepare_
     finally:
         monkeypatch.undo()
 
-    assert [item["cwd"] for item in seen] == ["00", "01", "02"]
-    assert all(item["neb_mode"] is True for item in seen)
-    assert all(item["steps"] == 2 for item in seen)
-    assert [item["has_prev"] for item in seen] == [False, True, True]
-    assert [item["has_next"] for item in seen] == [True, True, False]
-    assert all(item["oszicar_pseudo_scf"] is False for item in seen)
+    assert seen["optimizable_atoms"] == 2
+    assert seen["nimages"] == 3
+    assert seen["spring"] == [5.0, 5.0]
+    assert seen["climb"] is False
+    assert seen["steps"] == 2
+    assert seen["fmax"] == pytest.approx(0.01)
+    for image in ("00", "01", "02"):
+        assert (tmp_path / image / "OUTCAR").exists()
+        assert (tmp_path / image / "CONTCAR").exists()
 
 
 def test_run_neb_images_uses_parent_incar_for_pseudo_scf_settings(
@@ -992,11 +1535,7 @@ def test_run_neb_images_uses_parent_incar_for_pseudo_scf_settings(
         },
     )
 
-    poscar_text = (tmp_path / "POSCAR").read_text()
-    for image in ("00", "01", "02"):
-        image_dir = tmp_path / image
-        image_dir.mkdir()
-        (image_dir / "POSCAR").write_text(poscar_text)
+    _write_numbered_neb_poscars(tmp_path)
 
     incar = vpmdk._load_incar(str(tmp_path / "INCAR"))
     settings = vpmdk._load_incar_settings(incar)
@@ -1033,47 +1572,29 @@ def test_main_neb_runner_allows_missing_top_level_poscar(tmp_path: Path, prepare
     prepare_inputs(
         tmp_path,
         potential="CHGNET",
-        incar_overrides={"NSW": "2", "IMAGES": "1"},
+        incar_overrides={"NSW": "2", "ISIF": "2", "IMAGES": "1"},
     )
 
     poscar_text = (tmp_path / "POSCAR").read_text()
-    (tmp_path / "POSCAR").unlink()
-    for image in ("00", "01", "02"):
+    for image, delta in zip(("00", "01", "02"), (0.0, 0.01, 0.02)):
         image_dir = tmp_path / image
         image_dir.mkdir()
-        (image_dir / "POSCAR").write_text(poscar_text)
-
-    seen: list[str] = []
-
-    def fake_run_relaxation(
-        atoms,
-        calculator,
-        steps,
-        fmax,
-        write_energy_csv=False,
-        isif=2,
-        pstress=None,
-        energy_tolerance=None,
-        ibrion=2,
-        stress_isif=None,
-        neb_mode=False,
-        neb_prev_positions=None,
-        neb_next_positions=None,
-        oszicar_pseudo_scf=False,
-    ):
-        seen.append(Path.cwd().name)
-        return 0.0
+        (image_dir / "POSCAR").write_text(
+            _shift_first_direct_position(poscar_text, delta)
+        )
+    (tmp_path / "POSCAR").unlink()
 
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
-    monkeypatch.setattr(vpmdk, "run_relaxation", fake_run_relaxation)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
     try:
         vpmdk.main()
     finally:
         monkeypatch.undo()
 
-    assert seen == ["00", "01", "02"]
+    for image in ("00", "01", "02"):
+        assert (tmp_path / image / "OUTCAR").exists()
 
 
 def test_main_neb_runner_dispatches_single_point_when_nsw_is_zero(
@@ -1085,11 +1606,7 @@ def test_main_neb_runner_dispatches_single_point_when_nsw_is_zero(
         incar_overrides={"NSW": "0", "IMAGES": "1"},
     )
 
-    poscar_text = (tmp_path / "POSCAR").read_text()
-    for image in ("00", "01", "02"):
-        image_dir = tmp_path / image
-        image_dir.mkdir()
-        (image_dir / "POSCAR").write_text(poscar_text)
+    _write_numbered_neb_poscars(tmp_path)
 
     seen: list[dict[str, object]] = []
 
@@ -1122,6 +1639,129 @@ def test_main_neb_runner_dispatches_single_point_when_nsw_is_zero(
     assert all(item["neb_mode"] is True for item in seen)
     assert [item["has_prev"] for item in seen] == [False, True, True]
     assert [item["has_next"] for item in seen] == [True, True, False]
+
+
+def test_main_neb_runner_dispatches_single_point_when_ibrion_is_negative(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "2", "IBRION": "-1", "IMAGES": "1"},
+    )
+
+    _write_numbered_neb_poscars(tmp_path)
+
+    seen: list[str] = []
+
+    def fake_run_single_point(atoms, calculator, **kwargs):
+        seen.append(Path.cwd().name)
+        return 0.0
+
+    def fail(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("Negative IBRION NEB setup should stay single-point")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "run_single_point", fake_run_single_point)
+    monkeypatch.setattr(vpmdk, "run_md", fail)
+    monkeypatch.setattr(vpmdk, "run_relaxation", fail)
+    monkeypatch.setattr(vpmdk, "BFGS", fail)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen == ["00", "01", "02"]
+
+
+def test_main_neb_runner_rejects_ase_neb_without_moving_images(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "2", "IBRION": "2", "IMAGES": "1"},
+    )
+
+    poscar_text = (tmp_path / "POSCAR").read_text()
+    for image, delta in zip(("00", "01"), (0.0, 0.02)):
+        image_dir = tmp_path / image
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(
+            _shift_first_direct_position(poscar_text, delta)
+        )
+
+    def fail(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("ASE NEB should be rejected before optimizer setup")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "BFGS", fail)
+    try:
+        incar = vpmdk._load_incar(str(tmp_path / "INCAR"))
+        with pytest.raises(RuntimeError, match="requires at least three"):
+            vpmdk.run_neb_images(
+                workdir=str(tmp_path),
+                incar=incar,
+                settings=vpmdk._load_incar_settings(incar),
+                bcar={"MLP": "CHGNET"},
+                potcar_path=None,
+                write_energy_csv=False,
+                write_lammps_traj=False,
+                lammps_traj_interval=1,
+                oszicar_pseudo_scf=False,
+            )
+    finally:
+        monkeypatch.undo()
+
+
+def test_main_neb_runner_rejects_unsupported_vtst_ts_mode_without_numbered_images(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "2", "IBRION": "2", "ICHAIN": "2"},
+    )
+
+    def fail(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("Unsupported VTST TS mode should not run relaxation")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", fail)
+    monkeypatch.setattr(vpmdk, "run_relaxation", fail)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        with pytest.raises(NotImplementedError, match="ICHAIN=2"):
+            vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+
+def test_main_neb_runner_rejects_unsupported_vtst_ts_mode_before_per_image_dispatch(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0", "IMAGES": "1", "ICHAIN": "2"},
+    )
+
+    _write_numbered_neb_poscars(tmp_path)
+
+    def fail(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("Unsupported VTST TS mode should not dispatch images")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "run_single_point", fail)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        with pytest.raises(NotImplementedError, match="ICHAIN=2"):
+            vpmdk.main()
+    finally:
+        monkeypatch.undo()
 
 
 def test_main_neb_runner_single_point_writes_neb_projection_lines(
@@ -1220,34 +1860,16 @@ def test_main_neb_runner_writes_parent_aggregate_outputs(tmp_path: Path, prepare
         incar_overrides={"NSW": "1", "IBRION": "2", "ISIF": "2", "IMAGES": "1"},
     )
 
-    poscar_text = (tmp_path / "POSCAR").read_text()
-    for image in ("00", "01", "02"):
-        image_dir = tmp_path / image
-        image_dir.mkdir()
-        (image_dir / "POSCAR").write_text(poscar_text)
+    _write_numbered_neb_poscars(tmp_path)
 
     class StressDummyCalculator(DummyCalculator):
         def calculate(self, atoms=None, properties=("energy",), system_changes=()):
             super().calculate(atoms=atoms, properties=properties, system_changes=system_changes)
             self.results["stress"] = np.zeros(6, dtype=float)
 
-    class DummyBFGS:
-        def __init__(self, obj, logfile=None):
-            self.obj = obj
-            self._callbacks = []
-
-        def attach(self, callback, *args, **kwargs):
-            self._callbacks.append(callback)
-
-        def run(self, *args, **kwargs):
-            target = getattr(self.obj, "atoms", self.obj)
-            target.positions += 0.01
-            for callback in self._callbacks:
-                callback()
-
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: StressDummyCalculator())
-    monkeypatch.setattr(vpmdk, "BFGS", DummyBFGS)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
     try:
         vpmdk.main()
@@ -1275,35 +1897,17 @@ def test_main_neb_runner_parent_aggregate_supports_relative_workdir(
         incar_overrides={"NSW": "1", "IBRION": "2", "ISIF": "2", "IMAGES": "1"},
     )
 
-    poscar_text = (run_dir / "POSCAR").read_text()
-    for image in ("00", "01", "02"):
-        image_dir = run_dir / image
-        image_dir.mkdir()
-        (image_dir / "POSCAR").write_text(poscar_text)
+    _write_numbered_neb_poscars(run_dir)
 
     class StressDummyCalculator(DummyCalculator):
         def calculate(self, atoms=None, properties=("energy",), system_changes=()):
             super().calculate(atoms=atoms, properties=properties, system_changes=system_changes)
             self.results["stress"] = np.zeros(6, dtype=float)
 
-    class DummyBFGS:
-        def __init__(self, obj, logfile=None):
-            self.obj = obj
-            self._callbacks = []
-
-        def attach(self, callback, *args, **kwargs):
-            self._callbacks.append(callback)
-
-        def run(self, *args, **kwargs):
-            target = getattr(self.obj, "atoms", self.obj)
-            target.positions += 0.01
-            for callback in self._callbacks:
-                callback()
-
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: StressDummyCalculator())
-    monkeypatch.setattr(vpmdk, "BFGS", DummyBFGS)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", "runs/neb1"])
     try:
         vpmdk.main()
@@ -1329,11 +1933,7 @@ def test_main_neb_runner_initializes_calculator_from_run_dir_for_relative_model_
         extra_bcar={"MODEL": "./model/nequip.pth"},
     )
 
-    poscar_text = (run_dir / "POSCAR").read_text()
-    for image in ("00", "01", "02"):
-        image_dir = run_dir / image
-        image_dir.mkdir()
-        (image_dir / "POSCAR").write_text(poscar_text)
+    _write_numbered_neb_poscars(run_dir)
 
     model_dir = run_dir / "model"
     model_dir.mkdir()
@@ -1347,28 +1947,10 @@ def test_main_neb_runner_initializes_calculator_from_run_dir_for_relative_model_
         seen_models.append(tags.get("MODEL"))
         return DummyCalculator()
 
-    def fake_run_relaxation(
-        atoms,
-        calculator,
-        steps,
-        fmax,
-        write_energy_csv=False,
-        isif=2,
-        pstress=None,
-        energy_tolerance=None,
-        ibrion=2,
-        stress_isif=None,
-        neb_mode=False,
-        neb_prev_positions=None,
-        neb_next_positions=None,
-        oszicar_pseudo_scf=False,
-    ):
-        return 0.0
-
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", fake_get_calculator)
-    monkeypatch.setattr(vpmdk, "run_relaxation", fake_run_relaxation)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
     monkeypatch.setattr(vpmdk, "_collect_neb_image_results", lambda *_, **__: [])
     monkeypatch.setattr(vpmdk, "_write_neb_parent_aggregate_outputs", lambda **_: None)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", "runs/neb_model"])
@@ -1379,6 +1961,128 @@ def test_main_neb_runner_initializes_calculator_from_run_dir_for_relative_model_
 
     assert seen_cwds == [run_dir, run_dir, run_dir]
     assert seen_models == ["./model/nequip.pth"] * 3
+
+
+def test_main_neb_runner_evaluates_ase_neb_calculators_from_run_dir(
+    tmp_path: Path, prepare_inputs
+):
+    run_dir = tmp_path / "runs" / "neb_eval"
+    run_dir.mkdir(parents=True)
+    prepare_inputs(
+        run_dir,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "2", "IMAGES": "1"},
+    )
+
+    _write_numbered_neb_poscars(run_dir)
+
+    seen_cwds: list[Path] = []
+
+    class CwdRecordingCalculator(DummyCalculator):
+        def calculate(self, atoms=None, properties=("energy",), system_changes=()):
+            seen_cwds.append(Path.cwd())
+            super().calculate(
+                atoms=atoms,
+                properties=properties,
+                system_changes=system_changes,
+            )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        vpmdk,
+        "_build_calculator_from_tags",
+        lambda *_, **__: CwdRecordingCalculator(),
+    )
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
+    monkeypatch.setattr(vpmdk, "_collect_neb_image_results", lambda *_, **__: [])
+    monkeypatch.setattr(vpmdk, "_write_neb_parent_aggregate_outputs", lambda **_: None)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", "runs/neb_eval"])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen_cwds
+    assert set(seen_cwds) == {run_dir}
+
+
+def test_main_neb_runner_resolves_wrapped_calculators_for_ase_neb(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "2", "IMAGES": "1"},
+    )
+
+    _write_numbered_neb_poscars(tmp_path)
+
+    inner_calculators: list[DummyCalculator] = []
+
+    class Wrapper:
+        def __init__(self, calculator):
+            self.calculator = calculator
+
+    def fake_get_calculator(*args, **kwargs):
+        calculator = DummyCalculator()
+        inner_calculators.append(calculator)
+        return Wrapper(calculator)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", fake_get_calculator)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
+    monkeypatch.setattr(vpmdk, "_collect_neb_image_results", lambda *_, **__: [])
+    monkeypatch.setattr(vpmdk, "_write_neb_parent_aggregate_outputs", lambda **_: None)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert len(inner_calculators) == 3
+    assert all(calculator.called > 0 for calculator in inner_calculators)
+
+
+def test_main_neb_runner_preserves_unwrapped_image_coordinates_for_ase_neb(
+    tmp_path: Path, prepare_inputs
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "2", "IMAGES": "1"},
+    )
+
+    poscar_text = (tmp_path / "POSCAR").read_text()
+    for image, x_position in zip(("00", "01", "02"), (0.95, 1.0, 1.05)):
+        image_dir = tmp_path / image
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(
+            _set_first_direct_position(poscar_text, x_position)
+        )
+
+    seen_scaled_x: list[float] = []
+
+    class RecordingNEBOptimizer(DummyNEBOptimizer):
+        def __init__(self, obj, logfile=None):
+            super().__init__(obj, logfile=logfile)
+            seen_scaled_x.extend(
+                float(image.get_scaled_positions(wrap=False)[0, 0])
+                for image in obj.images
+            )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(vpmdk, "BFGS", RecordingNEBOptimizer)
+    monkeypatch.setattr(vpmdk, "_collect_neb_image_results", lambda *_, **__: [])
+    monkeypatch.setattr(vpmdk, "_write_neb_parent_aggregate_outputs", lambda **_: None)
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert seen_scaled_x == pytest.approx([0.95, 1.0, 1.05])
 
 
 def test_main_neb_runner_passes_absolute_potcar_to_collect_results(
@@ -1393,31 +2097,9 @@ def test_main_neb_runner_passes_absolute_potcar_to_collect_results(
     )
     (run_dir / "POTCAR").write_text("Si\n")
 
-    poscar_text = (run_dir / "POSCAR").read_text()
-    for image in ("00", "01", "02"):
-        image_dir = run_dir / image
-        image_dir.mkdir()
-        (image_dir / "POSCAR").write_text(poscar_text)
+    _write_numbered_neb_poscars(run_dir)
 
     seen: dict[str, object] = {}
-
-    def fake_run_relaxation(
-        atoms,
-        calculator,
-        steps,
-        fmax,
-        write_energy_csv=False,
-        isif=2,
-        pstress=None,
-        energy_tolerance=None,
-        ibrion=2,
-        stress_isif=None,
-        neb_mode=False,
-        neb_prev_positions=None,
-        neb_next_positions=None,
-        oszicar_pseudo_scf=False,
-    ):
-        return 0.0
 
     def fake_collect(image_dirs, *, potcar_path=None):
         seen["cwd"] = Path.cwd()
@@ -1428,7 +2110,7 @@ def test_main_neb_runner_passes_absolute_potcar_to_collect_results(
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
-    monkeypatch.setattr(vpmdk, "run_relaxation", fake_run_relaxation)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
     monkeypatch.setattr(vpmdk, "_collect_neb_image_results", fake_collect)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", "runs/neb2"])
     try:

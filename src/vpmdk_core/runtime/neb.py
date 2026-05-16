@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import os
 import re
 import sys
@@ -12,6 +13,7 @@ import numpy as np
 
 
 _NEB_IMAGE_DIR_RE = re.compile(r"^\d+$")
+_DEFAULT_VTST_SPRING = -5.0
 
 
 def _root():
@@ -98,6 +100,266 @@ def _read_last_vasprun_step(path: str) -> tuple[float, np.ndarray | None, np.nda
         stress = None
 
     return energy_value, forces, stress
+
+
+def _parse_neb_ichain(incar) -> int:
+    """Return VTST ``ICHAIN`` with the NEB default."""
+
+    root = _root()
+    return root._parse_vtst_ichain(incar)
+
+
+def _parse_neb_iopt(incar) -> int:
+    """Return VTST ``IOPT`` with the VASP optimizer default."""
+
+    root = _root()
+    raw_value = getattr(incar, "get", lambda *_: 0)("IOPT", 0)
+    parsed = root._parse_optional_float(raw_value, key="IOPT")
+    if parsed is None:
+        return 0
+    return int(parsed)
+
+
+def _parse_neb_spring_constant(incar) -> float:
+    """Return ASE NEB spring magnitude from VASP/VTST ``SPRING``."""
+
+    root = _root()
+    raw_value = getattr(incar, "get", lambda *_: _DEFAULT_VTST_SPRING)(
+        "SPRING", _DEFAULT_VTST_SPRING
+    )
+    parsed = root._parse_optional_float(raw_value, key="SPRING")
+    if parsed is None:
+        parsed = _DEFAULT_VTST_SPRING
+    return abs(float(parsed))
+
+
+def _select_neb_optimizer(incar, ibrion: int):
+    """Return an ASE optimizer class approximating VTST ``IOPT``/``IBRION``."""
+
+    root = _root()
+    iopt = _parse_neb_iopt(incar)
+    if iopt == 1:
+        return root.LBFGS, "LBFGS"
+    if iopt == 3:
+        return root.MDMin, "Quick-Min"
+    if iopt == 5:
+        return root.BFGS, "BFGS"
+    if iopt == 7:
+        return root.FIRE, "FIRE"
+    if iopt in {2, 4, 6, 8}:
+        print(
+            f"Warning: VTST IOPT={iopt} has no exact ASE optimizer mapping in VPMDK; "
+            "using BFGS."
+        )
+        return root.BFGS, "BFGS"
+
+    if iopt != 0:
+        print(f"Warning: Unsupported VTST IOPT={iopt}; using BFGS.")
+        return root.BFGS, "BFGS"
+
+    if ibrion == 3:
+        return root.MDMin, "Quick-Min"
+    return root.BFGS, "BFGS"
+
+
+def _neb_force_limit(settings) -> float:
+    """Return an ASE ``fmax`` value for NEB optimization."""
+
+    ediffg = getattr(settings, "ediffg", None)
+    if ediffg is not None:
+        try:
+            ediffg_float = float(ediffg)
+        except (TypeError, ValueError):
+            ediffg_float = 0.0
+        if ediffg_float < 0.0:
+            return abs(ediffg_float)
+        if ediffg_float > 0.0:
+            print(
+                "Warning: NEB optimization uses force convergence; "
+                "EDIFFG should be negative. Using EDIFFG magnitude as fmax."
+            )
+            return abs(ediffg_float)
+    force_limit = float(getattr(settings, "force_limit", 0.05))
+    return force_limit if force_limit > 0.0 else 0.05
+
+
+def _build_neb_images(
+    *,
+    image_dirs: list[str],
+    workdir_abs: str,
+    incar,
+    bcar: Dict[str, str],
+    potcar_path_abs: str | None,
+):
+    """Read image structures and attach one calculator per image."""
+
+    root = _root()
+    images = []
+    for image_dir in image_dirs:
+        structure_path = root._resolve_neb_image_structure_path(image_dir)
+        structure = root.read_structure(structure_path, potcar_path_abs)
+        atoms = root.AseAtomsAdaptor.get_atoms(structure)
+        root._apply_initial_magnetization(atoms, incar)
+        with root._working_directory(workdir_abs):
+            calculator = root._build_calculator_from_tags(bcar, structure=structure)
+            atoms.calc = root._resolve_calculator(calculator)
+        images.append(atoms)
+    return images
+
+
+def _validate_neb_path(images) -> None:
+    """Raise a clear error when adjacent images cannot define a NEB tangent."""
+
+    for image_index, (left, right) in enumerate(zip(images, images[1:])):
+        displacement = np.asarray(right.get_positions(), dtype=float) - np.asarray(
+            left.get_positions(), dtype=float
+        )
+        if float(np.linalg.norm(displacement.ravel())) <= 1e-12:
+            raise RuntimeError(
+                "NEB path contains duplicate adjacent image geometries at "
+                f"indices {image_index} and {image_index + 1}; "
+                "provide distinct 00, intermediate, and final POSCAR/CONTCAR files."
+            )
+
+
+def _select_neb_method(images) -> str:
+    """Return the ASE NEB tangent method for the current band."""
+
+    energies: list[float] = []
+    for image in images:
+        try:
+            energies.append(float(image.get_potential_energy()))
+        except Exception:
+            return "improvedtangent"
+    if energies and max(energies) - min(energies) <= 1e-12:
+        print(
+            "Warning: initial NEB image energies are degenerate; "
+            "using ASE standard tangent to avoid undefined improved tangents."
+        )
+        return "aseneb"
+    return "improvedtangent"
+
+
+def _initialize_neb_image_recorders(
+    *,
+    image_dirs: list[str],
+    images,
+    settings,
+    oszicar_pseudo_scf: bool,
+) -> dict[str, Any]:
+    """Create VASP-compatible output recorders for every NEB image."""
+
+    root = _root()
+    recorders: dict[str, Any] = {}
+    image_positions = [np.asarray(image.get_positions(), dtype=float) for image in images]
+    total_images = len(images)
+    for image_index, (image_dir, atoms) in enumerate(zip(image_dirs, images)):
+        prev_positions = image_positions[image_index - 1] if image_index > 0 else None
+        next_positions = (
+            image_positions[image_index + 1]
+            if image_index + 1 < total_images
+            else None
+        )
+        with root._working_directory(image_dir):
+            recorders[image_dir] = root._initialize_vasp_compat_outputs(
+                atoms,
+                ibrion=settings.ibrion,
+                isif=settings.stress_isif,
+                neb_mode=True,
+                write_oszicar_pseudo_scf=oszicar_pseudo_scf,
+                neb_prev_positions=prev_positions,
+                neb_next_positions=next_positions,
+            )
+    return recorders
+
+
+def _evaluate_neb_image_for_output(atoms, *, stress_isif: int | None):
+    """Return real image energy, forces, and optional stress for output."""
+
+    root = _root()
+    potential_energy = float(atoms.get_potential_energy())
+    forces = root._safe_get_forces(atoms)
+    stress_matrix = root._safe_get_stress_matrix(
+        atoms, mode=root._stress_mode_from_isif(stress_isif)
+    )
+    return potential_energy, forces, stress_matrix
+
+
+def _record_neb_band_step(
+    *,
+    step_index: int,
+    image_dirs: list[str],
+    images,
+    recorders: dict[str, Any],
+    energy_history: dict[str, list[float]],
+    stress_isif: int | None,
+) -> None:
+    """Append one VTST-style ionic step for all images in the band."""
+
+    root = _root()
+    image_positions = [np.asarray(image.get_positions(), dtype=float) for image in images]
+    total_images = len(images)
+    for image_index, (image_dir, atoms) in enumerate(zip(image_dirs, images)):
+        potential_energy, forces, stress_matrix = _evaluate_neb_image_for_output(
+            atoms, stress_isif=stress_isif
+        )
+        output_atoms = atoms.copy()
+        calculator_kwargs: Dict[str, Any] = {
+            "energy": potential_energy,
+            "forces": forces,
+        }
+        if stress_matrix is not None:
+            calculator_kwargs["stress"] = root._full_to_voigt_stress(stress_matrix)
+        output_atoms.calc = root.SinglePointCalculator(
+            output_atoms, **calculator_kwargs
+        )
+        prev_positions = image_positions[image_index - 1] if image_index > 0 else None
+        next_positions = (
+            image_positions[image_index + 1]
+            if image_index + 1 < total_images
+            else None
+        )
+        neb_chain = root._estimate_neb_chain_approximation(
+            positions=np.asarray(output_atoms.get_positions(), dtype=float),
+            forces=np.asarray(forces, dtype=float),
+            prev_positions=prev_positions,
+            next_positions=next_positions,
+        )
+        with root._working_directory(image_dir):
+            root._record_vasp_compat_step(
+                recorders[image_dir],
+                output_atoms,
+                step_index=step_index,
+                potential_energy=potential_energy,
+                total_energy=potential_energy,
+                sc_time=0.0,
+                neb_chain=neb_chain,
+            )
+        energy_history[image_dir].append(potential_energy)
+
+
+def _finalize_neb_image_outputs(
+    *,
+    image_dirs: list[str],
+    images,
+    recorders: dict[str, Any],
+    energy_history: dict[str, list[float]],
+    write_energy_csv: bool,
+) -> None:
+    """Write final image ``vasprun.xml``, ``CONTCAR``, and optional CSV logs."""
+
+    root = _root()
+    for image_dir, atoms in zip(image_dirs, images):
+        atoms.wrap()
+        with root._working_directory(image_dir):
+            root._write_vasprun_xml(recorders[image_dir], atoms)
+            root._append_outcar_footer(recorders[image_dir])
+            root.write("CONTCAR", atoms, direct=True)
+            if write_energy_csv:
+                with open("energy.csv", "w", newline="", encoding="utf-8") as csvfile:
+                    writer = csv.writer(csvfile)
+                    for potential_energy in energy_history[image_dir]:
+                        writer.writerow([float(potential_energy)])
 
 
 def _collect_neb_image_results(
@@ -205,6 +467,105 @@ def _write_neb_parent_aggregate_outputs(
     root._append_outcar_footer(recorder)
 
 
+def _run_ase_neb_relaxation(
+    *,
+    image_dirs: list[str],
+    workdir_abs: str,
+    incar,
+    settings,
+    bcar: Dict[str, str],
+    potcar_path_abs: str | None,
+    write_energy_csv: bool,
+    oszicar_pseudo_scf: bool,
+) -> None:
+    """Run a spring-coupled ASE NEB optimization for VTST-style inputs."""
+
+    root = _root()
+    ichain = root._parse_neb_ichain(incar)
+    if ichain != 0:
+        raise NotImplementedError(
+            "VPMDK currently implements VTST-style NEB for ICHAIN=0 only. "
+            f"ICHAIN={ichain} TS methods such as dimer/lanczos are not implemented."
+        )
+    if root._is_truthy_flag(getattr(incar, "get", lambda *_: None)("LNEBCELL")):
+        print(
+            "Warning: LNEBCELL is not implemented in ASE NEB mode; "
+            "the NEB band will use fixed cells."
+        )
+    elif settings.isif >= 3:
+        print(
+            "Warning: ASE NEB optimizes image positions only; "
+            f"ISIF={settings.stress_isif} cell relaxation is ignored for the band."
+        )
+
+    images = _build_neb_images(
+        image_dirs=image_dirs,
+        workdir_abs=workdir_abs,
+        incar=incar,
+        bcar=bcar,
+        potcar_path_abs=potcar_path_abs,
+    )
+    _validate_neb_path(images)
+    with root._working_directory(workdir_abs):
+        neb_method = _select_neb_method(images)
+    spring_constant = root._parse_neb_spring_constant(incar)
+    climb = root._is_truthy_flag(getattr(incar, "get", lambda *_: None)("LCLIMB"))
+    optimizer_cls, optimizer_name = root._select_neb_optimizer(incar, settings.ibrion)
+    fmax = _neb_force_limit(settings)
+
+    neb = root.NEB(
+        images,
+        k=spring_constant,
+        climb=climb,
+        method=neb_method,
+    )
+    recorders = _initialize_neb_image_recorders(
+        image_dirs=image_dirs,
+        images=images,
+        settings=settings,
+        oszicar_pseudo_scf=oszicar_pseudo_scf,
+    )
+    energy_history = {image_dir: [] for image_dir in image_dirs}
+    step_count = 0
+
+    def record_step() -> None:
+        nonlocal step_count
+        step_count += 1
+        _record_neb_band_step(
+            step_index=step_count,
+            image_dirs=image_dirs,
+            images=images,
+            recorders=recorders,
+            energy_history=energy_history,
+            stress_isif=settings.stress_isif,
+        )
+
+    print(
+        "Running VTST-style NEB "
+        f"({len(images) - 2} moving images, spring={spring_constant:g}, "
+        f"climb={climb}, method={neb_method}, optimizer={optimizer_name})"
+    )
+    dyn = optimizer_cls(neb, logfile=None)
+    dyn.attach(record_step)
+
+    with root._working_directory(workdir_abs):
+        converged = bool(dyn.run(fmax=fmax, steps=settings.nsw))
+        if step_count == 0:
+            record_step()
+
+    _finalize_neb_image_outputs(
+        image_dirs=image_dirs,
+        images=images,
+        recorders=recorders,
+        energy_history=energy_history,
+        write_energy_csv=write_energy_csv,
+    )
+    if converged:
+        print(f"NEB converged in {step_count} ionic steps (fmax <= {fmax:g}).")
+    else:
+        print(f"NEB stopped after {step_count} ionic steps (NSW={settings.nsw}).")
+
+
 def run_neb_images(
     *,
     workdir: str,
@@ -217,7 +578,7 @@ def run_neb_images(
     lammps_traj_interval: int,
     oszicar_pseudo_scf: bool,
 ) -> None:
-    """Run independent per-image calculations for a NEB-like directory layout."""
+    """Run NEB-style numbered image directories."""
 
     root = _root()
     workdir_abs = os.path.abspath(workdir)
@@ -243,76 +604,79 @@ def run_neb_images(
                 f"but found {len(image_dirs)} under {workdir_abs}. Proceeding with discovered directories."
             )
 
+    root._reject_unsupported_vtst_modes(incar)
+
     with root._active_pseudo_scf_settings(pseudo_scf_settings), root._active_vasp_input_paths(input_paths):
-        total_images = len(image_dirs)
-        image_reference_positions: list[np.ndarray] = []
-        for image_dir in image_dirs:
-            structure_path = root._resolve_neb_image_structure_path(image_dir)
-            structure = root.read_structure(structure_path, potcar_path_abs)
-            image_atoms = root.AseAtomsAdaptor.get_atoms(structure)
-            image_atoms.wrap()
-            image_reference_positions.append(np.asarray(image_atoms.get_positions(), dtype=float))
+        if settings.nsw > 0 and settings.ibrion > 0:
+            if len(image_dirs) < 3:
+                raise RuntimeError(
+                    "ASE NEB optimization requires at least three numbered image "
+                    "directories: initial, one moving image, and final "
+                    "(for example 00, 01, 02)."
+                )
+            _run_ase_neb_relaxation(
+                image_dirs=image_dirs,
+                workdir_abs=workdir_abs,
+                incar=incar,
+                settings=settings,
+                bcar=bcar,
+                potcar_path_abs=potcar_path_abs,
+                write_energy_csv=write_energy_csv,
+                oszicar_pseudo_scf=oszicar_pseudo_scf,
+            )
+        else:
+            total_images = len(image_dirs)
+            image_reference_positions: list[np.ndarray] = []
+            for image_dir in image_dirs:
+                structure_path = root._resolve_neb_image_structure_path(image_dir)
+                structure = root.read_structure(structure_path, potcar_path_abs)
+                image_atoms = root.AseAtomsAdaptor.get_atoms(structure)
+                image_atoms.wrap()
+                image_reference_positions.append(np.asarray(image_atoms.get_positions(), dtype=float))
 
-        for image_index, image_dir in enumerate(image_dirs, start=1):
-            image_name = os.path.basename(image_dir)
-            structure_path = root._resolve_neb_image_structure_path(image_dir)
-            structure = root.read_structure(structure_path, potcar_path_abs)
-            atoms = root.AseAtomsAdaptor.get_atoms(structure)
-            atoms.wrap()
-            root._apply_initial_magnetization(atoms, incar)
-            with root._working_directory(workdir_abs):
-                calculator = root._build_calculator_from_tags(bcar, structure=structure)
-            neb_prev_positions = image_reference_positions[image_index - 2] if image_index > 1 else None
-            neb_next_positions = image_reference_positions[image_index] if image_index < total_images else None
+            for image_index, image_dir in enumerate(image_dirs, start=1):
+                image_name = os.path.basename(image_dir)
+                structure_path = root._resolve_neb_image_structure_path(image_dir)
+                structure = root.read_structure(structure_path, potcar_path_abs)
+                atoms = root.AseAtomsAdaptor.get_atoms(structure)
+                atoms.wrap()
+                root._apply_initial_magnetization(atoms, incar)
+                with root._working_directory(workdir_abs):
+                    calculator = root._build_calculator_from_tags(bcar, structure=structure)
+                neb_prev_positions = image_reference_positions[image_index - 2] if image_index > 1 else None
+                neb_next_positions = image_reference_positions[image_index] if image_index < total_images else None
 
-            print(f"Running NEB image {image_name} ({image_index}/{total_images})")
-            with root._working_directory(image_dir):
-                if settings.nsw <= 0 or settings.ibrion < 0:
-                    root.run_single_point(
-                        atoms,
-                        calculator,
-                        isif=settings.stress_isif,
-                        oszicar_pseudo_scf=oszicar_pseudo_scf,
-                        neb_mode=True,
-                        neb_prev_positions=neb_prev_positions,
-                        neb_next_positions=neb_next_positions,
-                    )
-                elif settings.ibrion == 0:
-                    root.run_md(
-                        atoms,
-                        calculator,
-                        settings.nsw,
-                        settings.tebeg,
-                        settings.potim,
-                        mdalgo=settings.mdalgo,
-                        teend=settings.teend,
-                        smass=settings.smass,
-                        thermostat_params=settings.thermostat_params,
-                        isif=settings.stress_isif,
-                        oszicar_pseudo_scf=oszicar_pseudo_scf,
-                        neb_mode=True,
-                        neb_prev_positions=neb_prev_positions,
-                        neb_next_positions=neb_next_positions,
-                        write_lammps_traj=write_lammps_traj,
-                        lammps_traj_interval=lammps_traj_interval,
-                    )
-                else:
-                    root.run_relaxation(
-                        atoms,
-                        calculator,
-                        settings.nsw,
-                        settings.force_limit,
-                        write_energy_csv,
-                        isif=settings.isif,
-                        pstress=settings.pstress,
-                        energy_tolerance=settings.energy_tolerance,
-                        ibrion=settings.ibrion,
-                        stress_isif=settings.stress_isif,
-                        neb_mode=True,
-                        neb_prev_positions=neb_prev_positions,
-                        neb_next_positions=neb_next_positions,
-                        oszicar_pseudo_scf=oszicar_pseudo_scf,
-                    )
+                print(f"Running NEB image {image_name} ({image_index}/{total_images})")
+                with root._working_directory(image_dir):
+                    if settings.nsw <= 0 or settings.ibrion < 0:
+                        root.run_single_point(
+                            atoms,
+                            calculator,
+                            isif=settings.stress_isif,
+                            oszicar_pseudo_scf=oszicar_pseudo_scf,
+                            neb_mode=True,
+                            neb_prev_positions=neb_prev_positions,
+                            neb_next_positions=neb_next_positions,
+                        )
+                    elif settings.ibrion == 0:
+                        root.run_md(
+                            atoms,
+                            calculator,
+                            settings.nsw,
+                            settings.tebeg,
+                            settings.potim,
+                            mdalgo=settings.mdalgo,
+                            teend=settings.teend,
+                            smass=settings.smass,
+                            thermostat_params=settings.thermostat_params,
+                            isif=settings.stress_isif,
+                            oszicar_pseudo_scf=oszicar_pseudo_scf,
+                            neb_mode=True,
+                            neb_prev_positions=neb_prev_positions,
+                            neb_next_positions=neb_next_positions,
+                            write_lammps_traj=write_lammps_traj,
+                            lammps_traj_interval=lammps_traj_interval,
+                        )
         with root._working_directory(workdir_abs):
             image_results = root._collect_neb_image_results(image_dirs, potcar_path=potcar_path_abs)
             root._write_neb_parent_aggregate_outputs(

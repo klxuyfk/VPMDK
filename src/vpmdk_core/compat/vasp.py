@@ -24,6 +24,7 @@ class VaspCompatConfig:
     neb_mode: bool = False
     neb_prev_positions: Any = None
     neb_next_positions: Any = None
+    strict_forces: bool = False
 
 
 @dataclass(frozen=True)
