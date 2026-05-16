@@ -1374,6 +1374,70 @@ def test_equflash_named_checkpoint_is_unreleased(monkeypatch: pytest.MonkeyPatch
         vpmdk._build_equflash_calculator({"MODEL": "equflash-29M-oam"})
 
 
+def test_fairchem_default_uses_validated_uma_model_and_task(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    seen: dict[str, object] = {}
+
+    class FakeFairChemCalculator:
+        @classmethod
+        def from_model_checkpoint(
+            cls,
+            name_or_path,
+            *,
+            task_name=None,
+            inference_settings="default",
+            device=None,
+        ):
+            seen.update(
+                {
+                    "model": name_or_path,
+                    "task": task_name,
+                    "settings": inference_settings,
+                    "device": device,
+                }
+            )
+            return "fairchem"
+
+    monkeypatch.setattr(vpmdk, "FAIRChemCalculator", FakeFairChemCalculator)
+
+    calc = vpmdk._build_fairchem_calculator({})
+
+    assert calc == "fairchem"
+    assert seen == {
+        "model": "uma-s-1",
+        "task": "omat",
+        "settings": "default",
+        "device": None,
+    }
+
+
+def test_fairchem_non_default_model_does_not_force_default_task(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    seen: dict[str, object] = {}
+
+    class FakeFairChemCalculator:
+        @classmethod
+        def from_model_checkpoint(
+            cls,
+            name_or_path,
+            *,
+            task_name=None,
+            inference_settings="default",
+            device=None,
+        ):
+            seen.update({"model": name_or_path, "task": task_name})
+            return "fairchem"
+
+    monkeypatch.setattr(vpmdk, "FAIRChemCalculator", FakeFairChemCalculator)
+
+    calc = vpmdk._build_fairchem_calculator({"MODEL": "esen-md-direct-all-omol"})
+
+    assert calc == "fairchem"
+    assert seen == {"model": "esen-md-direct-all-omol", "task": None}
+
+
 def test_tace_uses_checkpoint_path_and_bcar_tags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

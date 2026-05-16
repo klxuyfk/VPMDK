@@ -21,6 +21,10 @@ charge-density backends such as ChargE3Net, DeepDFT, and DeepCDP. Actual
 availability depends on which backend packages are installed in your
 environment.
 
+EquFlash is exposed as a checkpoint-dependent SevenNet/FlashTP adapter: use a
+local checkpoint, because no public named EquFlash checkpoint is currently
+validated.
+
 ## Installation
 
 Install the package itself:

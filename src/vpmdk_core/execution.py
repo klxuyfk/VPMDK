@@ -47,7 +47,7 @@ def execute_single_point(
     observer=None,
     context: RunContext | None = None,
 ) -> SinglePointResult:
-    """Run one energy/force/stress evaluation without writing files by default."""
+    """Run one energy/forces evaluation, plus stress when exposed, without writing files."""
 
     root = _root()
     config = config or SinglePointConfig()
