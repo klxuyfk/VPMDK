@@ -62,6 +62,8 @@ Typical settings:
 export HF_HOME=/path/to/hf-cache
 ```
 
+VPMDK's no-`MODEL` default for FAIRChem v2 follows the validated UMA smoke path:
+
 ```text
 MLP=FAIRCHEM_V2
 MODEL=uma-s-1
@@ -152,8 +154,9 @@ Guidance:
   visible via `CUDA_HOME`
 
 `MLP=EQUFLASH` uses the same SevenNet + FlashTP runtime path, but requires a
-local EquFlash-compatible checkpoint. The public `equflash-29M-oam` metadata
-records the checkpoint as unreleased, so it is not a downloadable named model.
+local EquFlash-compatible checkpoint. Treat it as a checkpoint-dependent
+adapter: the public `equflash-29M-oam` metadata records the checkpoint as
+unreleased, so it is not a downloadable named model.
 
 ## ORB
 

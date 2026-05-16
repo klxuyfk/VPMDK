@@ -28,7 +28,7 @@ entry point built on top of `BackendConfig`.
 
 ### `single_point(atoms, ...) -> SinglePointResult`
 
-Runs one energy/force/stress evaluation.
+Runs one energy/forces evaluation, plus stress when exposed by the calculator.
 
 Key parameters:
 

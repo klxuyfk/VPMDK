@@ -237,7 +237,8 @@ DEFAULT_MATRIS_MODEL = "matris_10m_oam"
 DEFAULT_ALPHANET_MODEL = "AlphaNet-MATPES-r2scan"
 DEFAULT_HIENET_MODEL = "HIENet-0"
 DEFAULT_NEQUIX_MODEL = "nequix-mp-1"
-DEFAULT_FAIRCHEM_MODEL = "esen-sm-direct-all-oc25"
+DEFAULT_FAIRCHEM_MODEL = "uma-s-1"
+DEFAULT_FAIRCHEM_TASK = "omat"
 DEFAULT_GRACE_MODEL = "GRACE-2L-MP-r6"
 
 _SEVENNET_FILE_TYPES = frozenset({"checkpoint", "torchscript"})
