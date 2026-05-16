@@ -22,16 +22,15 @@ MODEL_PATH=$(
     }
   ' BCAR
 )
-if [[ -z "${MODEL_PATH}" || "${MODEL_PATH}" == "PATH_TO_NEQUIP_MODEL" ]]; then
-  echo "Set MODEL in BCAR before running (example: MODEL=./model/nequip_model.pth)" >&2
-  exit 1
-fi
-
 if [[ "${MODEL_PATH}" == ~* ]]; then
   MODEL_PATH="${MODEL_PATH/#\~/${HOME}}"
 fi
 if [[ "${MODEL_PATH}" != /* ]]; then
   MODEL_PATH="${PWD}/${MODEL_PATH}"
+fi
+if [[ -z "${MODEL_PATH}" || ! -f "${MODEL_PATH}" ]]; then
+  echo "Set MODEL in BCAR before running (example: MODEL=./model/nequip_model.pth)" >&2
+  exit 1
 fi
 
 if [[ -n "${NEQUIP_SOURCE:-}" && "${NEQUIP_SOURCE}" != /* ]]; then

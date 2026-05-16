@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import types
 from pathlib import Path
@@ -19,6 +20,8 @@ from ase.calculators.calculator import Calculator, all_changes
 def _install_pymatgen_stubs() -> None:
     """Install lightweight pymatgen stand-ins for the test suite."""
 
+    if os.environ.get("VPMDK_TEST_REAL_PYMATGEN") == "1":
+        return
     if "pymatgen" in sys.modules:
         return
 

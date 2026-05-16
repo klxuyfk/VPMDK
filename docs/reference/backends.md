@@ -13,7 +13,7 @@ the behavior implemented in `src/vpmdk_core/backends/`.
 | `CHGNET` | `chgnet` / `CHGNetCalculator` | local checkpoint path or upstream named/default model | upstream default loader | `DEVICE`, CHGNet graph-converter tags |
 | `MATGL` / `M3GNET` | `matgl` or legacy `m3gnet` / `M3GNetCalculator` | model directory or checkpoint path when supported | upstream default model | `DEVICE` |
 | `MACE` | `mace-torch` / `MACECalculator` | local model path | upstream default calculator behavior | `DEVICE` |
-| `MATTERSIM` | `mattersim` / `MatterSimCalculator` | optional local model path | calculator default | simple wrapper |
+| `MATTERSIM` | `mattersim` / `MatterSimCalculator` | optional local model path | calculator default | `DEVICE`, `MATTERSIM_COMPUTE_STRESS`, `MATTERSIM_STRESS_WEIGHT` |
 | `MATLANTIS` | `pfp-api-client` / estimator service | model version string or optional model name | `v8.0.0` | `MATLANTIS_MODEL_VERSION`, `MATLANTIS_PRIORITY`, `MATLANTIS_CALC_MODE` |
 | `EQNORM` | `eqnorm` / `EqnormCalculator` | local checkpoint or named model | `eqnorm-mptrj` | `EQNORM_VARIANT`, `EQNORM_COMPILE`; named models cached in `~/.cache/eqnorm` |
 | `MATRIS` | `matris` / `MatRISCalculator` | local checkpoint or named model | `matris_10m_oam` | `MATRIS_TASK`, graph-converter tags; named models cached in `~/.cache/matris` |
@@ -25,9 +25,9 @@ the behavior implemented in `src/vpmdk_core/backends/`.
 | `NEQUIP` | `nequip` / `NequIPCalculator` | required local deployed or compiled model file | none | `MODEL` required |
 | `ALLEGRO` | `allegro` + `nequip` / `NequIPCalculator` | required local deployed or compiled model file | none | `MODEL` required |
 | `ORB` | `orb-models` / `ORBCalculator` | optional local weights path plus optional ORB model key | `orb-v3-conservative-20-omat` | `ORB_MODEL`, `ORB_PRECISION`, `ORB_COMPILE` |
-| `UPET` | `upet` / `UPETCalculator` | required local checkpoint or named model | none | `UPET_VERSION`, `UPET_NON_CONSERVATIVE` |
+| `UPET` | `upet` / `UPETCalculator` | required local checkpoint or named model | none | `UPET_VERSION`, `UPET_NON_CONSERVATIVE`, `UPET_NEIGHBORLIST_DEVICE` / `UPET_NL_DEVICE` |
 | `TACE` | `TACE` / `TACEAseCalc` | required local checkpoint or named foundation model | none | `TACE_DTYPE`, `TACE_SPIN_ON`, `TACE_NEIGHBORLIST_BACKEND`, `TACE_FIDELITY_IDX` / `TACE_LEVEL` |
-| `EQUFLASH` | EquFlash / `GGNN.common.calculator.UCalculator` | required local checkpoint file | none | currently no bundled named models |
+| `EQUFLASH` | `sevenn` + `flashTP_e3nn` | required local SevenNet/EquFlash checkpoint file | none | uses the FlashTP-accelerated SevenNet path; the public `equflash-29M-oam` metadata does not publish a checkpoint |
 | `FAIRCHEM` / `FAIRCHEM_V2` / `ESEN` | `fairchem-core` 2.x / `FAIRChemCalculator` | named checkpoint/model identifier | `esen-sm-direct-all-oc25` | `FAIRCHEM_TASK`, `FAIRCHEM_INFERENCE_SETTINGS`, `DEVICE` |
 | `FAIRCHEM_V1` | `fairchem-core==1.10.0` baseline or compatible OCP/FAIRChem v1 install / `OCPCalculator` or predictor | required local checkpoint; config usually required | none | `FAIRCHEM_CONFIG`, `FAIRCHEM_V1_PREDICTOR`, `DEVICE` |
 | `GRACE` | TensorPotential / `TPCalculator` or `grace_fm` | local model path or foundation-model name | `GRACE-2L-MP-r6` when available | GRACE padding/dtype tags |
@@ -86,6 +86,13 @@ it supports that concept.
   use separate environments and pin `fairchem-core` versions intentionally.
 - `FLASHTP` requires `sevenn` plus FlashTP support visible to the installed
   `SevenNetCalculator`.
+- `EQUFLASH` follows the same SevenNet + FlashTP runtime path but requires a
+  local checkpoint. Public matbench-discovery metadata for `equflash-29M-oam`
+  currently records the checkpoint as unreleased, so `MODEL=equflash-29M-oam`
+  is rejected with an explicit message.
+- `UPET` defaults to building neighbor lists on CPU when the model is on CUDA.
+  Set `UPET_NEIGHBORLIST_DEVICE=model` to run neighbor-list construction on the
+  model device when the local `metatomic`/`vesin` stack supports it.
 - `SEVENNET_ENABLE_CUEQ`, `SEVENNET_ENABLE_FLASH`, and `SEVENNET_ENABLE_OEQ`
   are mutually exclusive when explicitly enabled.
 - `HIENET_FILE_TYPE=torchscript` requires `MODEL` to point to a local TorchScript file.

@@ -23,11 +23,21 @@ def main() -> None:
     atoms = read(HERE / "POSCAR")
     incar = Incar.from_file(HERE / "INCAR")
 
+    model_path = os.environ.get("VPMDK_DEEPCDP_MODEL") or os.environ.get("VPMDK_CHARGE_MODEL")
     result = vpmdk.predict_charge_density(
         atoms,
         incar=incar,
         reference=atoms,
-        backend="CHARGE3NET",
+        backend="DEEPCDP",
+        model_path=model_path,
+        device="cpu",
+        charge_species=("Si",),
+        soap_rcut=10,
+        soap_nmax=5,
+        soap_lmax=5,
+        soap_sigma=1,
+        soap_periodic=True,
+        activation="relu",
     )
 
     output_path = HERE / "api_CHGCAR"
@@ -41,7 +51,7 @@ def main() -> None:
     print(f"backend={result.backend}")
     print(f"grid_shape={result.grid_shape}")
     print(f"density_shape={result.density.shape}")
-    print(f"wrote={output_path}")
+    print(f"wrote={output_path.name}")
 
 
 if __name__ == "__main__":

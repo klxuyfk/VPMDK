@@ -1,6 +1,11 @@
 # VPMDK Examples
 
-CLI-oriented examples plus Python API examples. Some directories include `reference/` outputs. Generated `output/` directories are ignored; charge-density references are representative only, because numerical values depend on the local charge-density backend and checkpoint you provide.
+CLI-oriented examples plus Python API examples. Some directories include
+`reference/` outputs generated from bundled inputs. Generated `output/`
+directories are ignored; charge-density references are representative only,
+because numerical values depend on the local charge-density backend and
+checkpoint you provide. The USPEX input deck is a workflow-integration example
+and does not include calculation output.
 
 ## Examples
 
@@ -41,7 +46,7 @@ python ./examples/chgcar_charge3net/predict_api.py
 ## Notes
 
 - `md_mace/BCAR` and `neb_nequip_vtst/BCAR` use placeholders.
-- Set `MODEL=...` in each `BCAR` to your local checkpoint path before running.
+- Set `MODEL=...` in each `BCAR` to a checkpoint path before running.
 - `relax_chgnet/run.sh` and `md_mace/run.sh` intentionally run only `vpmdk`.
 - `api_chgnet` does not use `BCAR` or `INCAR`; it demonstrates the stable Python API directly.
 - `chgcar_charge3net` requires a working charge-density backend environment. For the bundled example values that means ChargE3Net plus `VPMDK_CHARGE_SOURCE_DIR`, `VPMDK_CHARGE_PYTHON`, and optionally `VPMDK_CHARGE_MODEL`. To try DeepDFT or DeepCDP instead, change `CHARGE_MLP` and backend-specific model settings in `BCAR`.

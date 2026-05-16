@@ -4,21 +4,12 @@ set -euo pipefail
 cd "$(dirname "$0")"
 REPO_ROOT=$(cd ../.. && pwd)
 
-if [[ -z "${VPMDK_CHARGE_SOURCE_DIR:-}" ]]; then
-  echo "VPMDK_CHARGE_SOURCE_DIR is not set" >&2
-  exit 1
-fi
-
-if [[ -z "${VPMDK_CHARGE_PYTHON:-}" ]]; then
-  echo "VPMDK_CHARGE_PYTHON is not set" >&2
-  exit 1
-fi
-
 export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/matplotlib-vpmdk}"
 
 WORK_DIR=$(mktemp -d)
+STAGE_DIR=$(mktemp -d)
 cleanup() {
-  rm -rf "${WORK_DIR}"
+  rm -rf "${WORK_DIR}" "${STAGE_DIR:-}"
 }
 trap cleanup EXIT
 
@@ -31,13 +22,20 @@ done
   PYTHONPATH="${REPO_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" python -m vpmdk > run.log 2>&1
 )
 
-rm -rf output
-mkdir -p output
-
 for file in CONTCAR OUTCAR OSZICAR vasprun.xml CHGCAR run.log; do
   if [[ -f "${WORK_DIR}/${file}" ]]; then
-    cp "${WORK_DIR}/${file}" "output/${file}"
+    cp "${WORK_DIR}/${file}" "${STAGE_DIR}/${file}"
   fi
 done
 
-echo "chgcar_charge3net finished: output/ updated"
+rm -rf reference.new
+mv "${STAGE_DIR}" reference.new
+STAGE_DIR=""
+if [[ -d reference ]]; then
+  rm -rf reference.prev
+  mv reference reference.prev
+fi
+mv reference.new reference
+rm -rf reference.prev
+
+echo "chgcar_charge3net finished: reference/ updated"

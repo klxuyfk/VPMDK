@@ -4,11 +4,15 @@ from __future__ import annotations
 
 Run explicitly with: pytest -m integration
 
-Required:
-- CHGNet (no model path required, but chgnet + CUDA are required)
+CI smoke:
+- CHGNet CPU smoke (no model path or CUDA required)
+
+Additional explicit backends:
 - MACE (set VPMDK_MACE_MODEL)
 
 Optional backends (skipped unless env vars are set):
+- MatterSim: optional VPMDK_MATTERSIM_MODEL / VPMDK_MATTERSIM_DEVICE
+  (set VPMDK_TEST_REAL_PYMATGEN=1 when using the real MatterSim package)
 - SevenNet: VPMDK_SEVENNET_MODEL, optional VPMDK_SEVENNET_MODAL / VPMDK_SEVENNET_FILE_TYPE
 - FlashTP: VPMDK_FLASHTP_MODEL, optional VPMDK_FLASHTP_MODAL
 - EquFlash: VPMDK_EQUFLASH_MODEL
@@ -23,7 +27,7 @@ Optional backends (skipped unless env vars are set):
 - NequIP: VPMDK_NEQUIP_MODEL
 - Allegro: VPMDK_ALLEGRO_MODEL
 - ORB: VPMDK_ORB_MODEL
-- UPET: VPMDK_UPET_MODEL, optional VPMDK_UPET_VERSION
+- UPET: VPMDK_UPET_MODEL, optional VPMDK_UPET_VERSION / VPMDK_UPET_NL_DEVICE
 - TACE: VPMDK_TACE_MODEL, optional VPMDK_TACE_FIDELITY_IDX
 - FAIRChem v2: VPMDK_FAIRCHEM_MODEL, optional VPMDK_FAIRCHEM_TASK
 """
@@ -40,6 +44,14 @@ import vpmdk
 
 INCAR_MD = """IBRION = 0
 NSW = 5
+POTIM = 1.0
+TEBEG = 300
+TEEND = 300
+MDALGO = 0
+"""
+
+INCAR_MD_SMOKE = """IBRION = 0
+NSW = 1
 POTIM = 1.0
 TEBEG = 300
 TEEND = 300
@@ -67,10 +79,25 @@ def _require_cuda() -> None:
         pytest.skip("CUDA is not available in this environment.")
 
 
-def _write_inputs(tmp_path: Path, data_dir: Path, bcar_text: str) -> None:
+def _require_chgnet() -> None:
+    if vpmdk.CHGNetCalculator is not None:
+        return
+    message = "chgnet is not installed or could not be imported."
+    if os.environ.get("VPMDK_REQUIRE_CHGNET_SMOKE") == "1":
+        pytest.fail(message)
+    pytest.skip(message)
+
+
+def _write_inputs(
+    tmp_path: Path,
+    data_dir: Path,
+    bcar_text: str,
+    *,
+    incar_text: str = INCAR_MD,
+) -> None:
     tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "POSCAR").write_text((data_dir / "POSCAR").read_text())
-    (tmp_path / "INCAR").write_text(INCAR_MD)
+    (tmp_path / "INCAR").write_text(incar_text)
     (tmp_path / "BCAR").write_text(bcar_text)
 
 
@@ -102,12 +129,11 @@ def _load_test_atoms(data_dir: Path):
 
 
 @pytest.mark.integration
-def test_md_chgnet_required(tmp_path: Path, data_dir: Path) -> None:
-    if vpmdk.CHGNetCalculator is None:
-        pytest.skip("chgnet is not installed.")
-    _require_cuda()
-    bcar = "MLP=CHGNET\nDEVICE=cuda\n"
-    _write_inputs(tmp_path, data_dir, bcar)
+@pytest.mark.backend_smoke
+def test_md_chgnet_cpu_smoke(tmp_path: Path, data_dir: Path) -> None:
+    _require_chgnet()
+    bcar = "MLP=CHGNET\nDEVICE=cpu\n"
+    _write_inputs(tmp_path, data_dir, bcar, incar_text=INCAR_MD_SMOKE)
     _run_vpmdk(tmp_path)
     _assert_outputs(tmp_path)
 
@@ -165,8 +191,8 @@ def test_md_flashtp_optional(tmp_path: Path, data_dir: Path) -> None:
 
 @pytest.mark.integration
 def test_md_equflash_optional(tmp_path: Path, data_dir: Path) -> None:
-    if not _any_module_available("GGNN.common.calculator", "ggnn.common.calculator"):
-        pytest.skip("EquFlash calculator package is not installed.")
+    if vpmdk.SevenNetCalculator is None or not vpmdk._is_sevennet_flash_available():
+        pytest.skip("EquFlash requires sevenn plus flashTP_e3nn support.")
     _require_cuda()
     model_value = os.environ.get("VPMDK_EQUFLASH_MODEL")
     if not model_value:
@@ -212,6 +238,28 @@ def test_md_mace_required(tmp_path: Path, data_dir: Path) -> None:
     if not Path(model_path).exists():
         pytest.fail(f"MACE model not found: {model_path}")
     bcar = f"MLP=MACE\nMODEL={model_path}\nDEVICE=cuda\n"
+    _write_inputs(tmp_path, data_dir, bcar)
+    _run_vpmdk(tmp_path)
+    _assert_outputs(tmp_path)
+
+
+@pytest.mark.integration
+def test_md_mattersim_optional(tmp_path: Path, data_dir: Path) -> None:
+    if vpmdk.MatterSimCalculator is None:
+        pytest.skip(
+            "MatterSimCalculator is not installed or could not import; set "
+            "VPMDK_TEST_REAL_PYMATGEN=1 when testing the real MatterSim package."
+        )
+    device = os.environ.get("VPMDK_MATTERSIM_DEVICE", "cuda")
+    if device.startswith("cuda"):
+        _require_cuda()
+    model_value = os.environ.get("VPMDK_MATTERSIM_MODEL", "")
+    bcar_lines = ["MLP=MATTERSIM", f"DEVICE={device}"]
+    if model_value:
+        if not Path(model_value).exists():
+            pytest.fail(f"MatterSim model not found: {model_value}")
+        bcar_lines.append(f"MODEL={model_value}")
+    bcar = "\n".join(bcar_lines) + "\n"
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)
     _assert_outputs(tmp_path)
@@ -322,7 +370,9 @@ def test_md_alphanet_optional(tmp_path: Path, data_dir: Path) -> None:
     model_value = os.environ.get("VPMDK_ALPHANET_MODEL")
     if not model_value:
         pytest.skip("Set VPMDK_ALPHANET_MODEL to run AlphaNet integration.")
-    looks_like_path = os.path.sep in model_value or model_value.endswith((".ckpt", ".pt", ".pth"))
+    looks_like_path = os.path.sep in model_value or model_value.endswith(
+        (".ckpt", ".pt", ".pth")
+    )
     if looks_like_path and not Path(model_value).exists():
         pytest.fail(f"AlphaNet model not found: {model_value}")
     config_path = os.environ.get("VPMDK_ALPHANET_CONFIG", "")
@@ -485,9 +535,12 @@ def test_md_upet_optional(tmp_path: Path, data_dir: Path) -> None:
     if looks_like_path and not Path(model_value).exists():
         pytest.fail(f"UPET model not found: {model_value}")
     version = os.environ.get("VPMDK_UPET_VERSION", "")
+    neighborlist_device = os.environ.get("VPMDK_UPET_NL_DEVICE", "")
     bcar_lines = ["MLP=UPET", f"MODEL={model_value}", "DEVICE=cuda"]
     if version:
         bcar_lines.append(f"UPET_VERSION={version}")
+    if neighborlist_device:
+        bcar_lines.append(f"UPET_NEIGHBORLIST_DEVICE={neighborlist_device}")
     bcar = "\n".join(bcar_lines) + "\n"
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)

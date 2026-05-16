@@ -16,12 +16,13 @@ Always align CUDA, PyTorch/JAX, and any compiled extension wheels.
 Practical recipe distilled from the repository's maintainer notes:
 
 ```bash
-python -m venv /tmp/fairchem_v1_env
-/tmp/fairchem_v1_env/bin/pip install --upgrade pip
-/tmp/fairchem_v1_env/bin/pip install fairchem-core==1.10.0
-/tmp/fairchem_v1_env/bin/pip install torch-scatter torch-sparse \
+FAIRCHEM_V1_ENV=/path/to/venvs/fairchem-v1
+python -m venv "${FAIRCHEM_V1_ENV}"
+"${FAIRCHEM_V1_ENV}/bin/pip" install --upgrade pip
+"${FAIRCHEM_V1_ENV}/bin/pip" install fairchem-core==1.10.0
+"${FAIRCHEM_V1_ENV}/bin/pip" install torch-scatter torch-sparse \
   -f https://data.pyg.org/whl/torch-2.4.0+cu121.html
-/tmp/fairchem_v1_env/bin/pip install "scipy==1.15.3"
+"${FAIRCHEM_V1_ENV}/bin/pip" install "scipy==1.15.3"
 ```
 
 Important caveats:
@@ -46,9 +47,10 @@ Guidance:
 Baseline install pattern:
 
 ```bash
-python -m venv /tmp/fairchem_v2_env
-/tmp/fairchem_v2_env/bin/pip install --upgrade pip
-/tmp/fairchem_v2_env/bin/pip install "fairchem-core>=2,<3"
+FAIRCHEM_V2_ENV=/path/to/venvs/fairchem-v2
+python -m venv "${FAIRCHEM_V2_ENV}"
+"${FAIRCHEM_V2_ENV}/bin/pip" install --upgrade pip
+"${FAIRCHEM_V2_ENV}/bin/pip" install "fairchem-core>=2,<3"
 ```
 
 If you need strict reproducibility, pin an exact 2.x version in your lockfile
@@ -90,7 +92,7 @@ Typical fixes:
 
 ```bash
 conda install -y -c nvidia cuda-nvcc=12.1
-export XLA_FLAGS=--xla_gpu_cuda_data_dir=/path/to/conda/env
+export XLA_FLAGS=--xla_gpu_cuda_data_dir="${CONDA_PREFIX}"
 ```
 
 ## DeePMD (PyTorch backend)
@@ -101,7 +103,7 @@ Typical fixes:
 
 ```bash
 conda install -y mpich
-export LD_LIBRARY_PATH=/path/to/conda/env/lib:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
 ```
 
 For some installations, DeepMD's own configuration may need MPI probing
@@ -145,6 +147,13 @@ Guidance:
   acceleration forced on
 - make sure the installed SevenNet build actually exposes the requested
   accelerator flags
+- on the 2026-05-16 TITAN V validation host, `flashTP_e3nn` needed to be built
+  from the FlashTP source tree with `CUDA_ARCH_LIST=70` and CUDA 12.6 headers
+  visible via `CUDA_HOME`
+
+`MLP=EQUFLASH` uses the same SevenNet + FlashTP runtime path, but requires a
+local EquFlash-compatible checkpoint. The public `equflash-29M-oam` metadata
+records the checkpoint as unreleased, so it is not a downloadable named model.
 
 ## ORB
 
@@ -182,7 +191,7 @@ Historically, manual validation in this repository has used external model
 stores under paths such as:
 
 ```text
-/mnt/d/lin_temp/codex/
+/path/to/external-model-cache/
 ```
 
 That is not required by VPMDK, but it is a practical place to centralize large

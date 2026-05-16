@@ -1,0 +1,4 @@
+backend=DEEPCDP
+grid_shape=(24, 24, 24)
+density_shape=(24, 24, 24)
+wrote=api_CHGCAR

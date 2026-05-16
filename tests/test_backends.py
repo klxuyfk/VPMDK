@@ -3,11 +3,12 @@ from __future__ import annotations
 import sys
 from contextlib import contextmanager
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
 import vpmdk
+from vpmdk_core.backends import misc as backend_misc
 
 
 def test_nequip_uses_compiled_model_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -55,6 +56,59 @@ def test_matgl_load_model_path_is_used(tmp_path: Path, monkeypatch: pytest.Monke
     assert calc == "calc"
     assert seen["load_path"] == str(model_dir)
     assert seen["calc_args"] == ("potential",)
+
+
+def test_mattersim_forwards_device_and_optional_tags(monkeypatch: pytest.MonkeyPatch):
+    seen: dict[str, object] = {}
+
+    class FakeMatterSimCalculator:
+        def __init__(self, *, device="cuda", compute_stress=True, stress_weight=None):
+            seen.update(
+                {
+                    "device": device,
+                    "compute_stress": compute_stress,
+                    "stress_weight": stress_weight,
+                }
+            )
+
+    monkeypatch.setattr(vpmdk, "MatterSimCalculator", FakeMatterSimCalculator)
+
+    calc = vpmdk._build_mattersim_calculator(
+        {
+            "DEVICE": "cpu",
+            "MATTERSIM_COMPUTE_STRESS": "false",
+            "MATTERSIM_STRESS_WEIGHT": "0.5",
+        }
+    )
+
+    assert isinstance(calc, FakeMatterSimCalculator)
+    assert seen == {
+        "device": "cpu",
+        "compute_stress": False,
+        "stress_weight": 0.5,
+    }
+
+
+def test_mattersim_uses_local_checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    model_path = tmp_path / "mattersim.pth"
+    model_path.write_text("dummy")
+    seen: dict[str, object] = {}
+
+    class FakeMatterSimCalculator:
+        @classmethod
+        def from_checkpoint(cls, load_path, **kwargs):
+            seen["load_path"] = load_path
+            seen["kwargs"] = kwargs
+            return "mattersim"
+
+    monkeypatch.setattr(vpmdk, "MatterSimCalculator", FakeMatterSimCalculator)
+
+    calc = vpmdk._build_mattersim_calculator(
+        {"MODEL": str(model_path), "DEVICE": "cuda:0"}
+    )
+
+    assert calc == "mattersim"
+    assert seen == {"load_path": str(model_path), "kwargs": {"device": "cuda:0"}}
 
 
 def test_build_sevennet_calculator_uses_new_backend_and_tags(
@@ -247,40 +301,6 @@ def test_build_sevennet_rejects_unsupported_oeq(monkeypatch: pytest.MonkeyPatch)
 
     with pytest.raises(RuntimeError, match="SEVENNET_ENABLE_OEQ"):
         vpmdk._build_sevennet_calculator({"MODEL": "7net-0", "SEVENNET_ENABLE_OEQ": "1"})
-
-
-def test_build_equflash_uses_ucalculator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    model_path = tmp_path / "equflash.ckpt"
-    model_path.write_text("dummy")
-    seen: dict[str, object] = {}
-
-    class FakeEquFlashCalculator:
-        def __init__(self, checkpoint_path, cpu=False, device=None):
-            seen.update(
-                {
-                    "checkpoint_path": checkpoint_path,
-                    "cpu": cpu,
-                    "device": device,
-                }
-            )
-
-    monkeypatch.setattr(vpmdk, "_get_equflash_calculator_cls", lambda: FakeEquFlashCalculator)
-
-    calc = vpmdk._build_equflash_calculator({"MODEL": str(model_path), "DEVICE": "cuda"})
-
-    assert isinstance(calc, FakeEquFlashCalculator)
-    assert seen == {
-        "checkpoint_path": str(model_path),
-        "cpu": False,
-        "device": "cuda",
-    }
-
-
-def test_build_equflash_requires_local_checkpoint(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(vpmdk, "_get_equflash_calculator_cls", lambda: object)
-
-    with pytest.raises(ValueError, match="local checkpoint"):
-        vpmdk._build_equflash_calculator({"MODEL": "equflash-unreleased"})
 
 
 def test_eqnorm_uses_checkpoint_path_and_bcar_tags(
@@ -1161,12 +1181,197 @@ def test_upet_accepts_named_model_and_version(monkeypatch: pytest.MonkeyPatch):
     assert seen == {"model": "pet-oam-xl", "version": "1.0.0", "device": "cpu"}
 
 
+def test_upet_cuda_defaults_to_cpu_neighborlist_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "pet-oam-xl-v1.0.0.ckpt"
+    model_path.write_text("dummy")
+
+    class FakeUPETCalculator:
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def get_potential_energy(self, *_, **__):
+            return 0.0
+
+    monkeypatch.setattr(vpmdk, "UPETCalculator", lambda **_: FakeUPETCalculator())
+
+    calc = vpmdk._build_upet_calculator({"MODEL": str(model_path), "DEVICE": "cuda"})
+
+    assert calc.__class__.__name__ == "_UPETNeighborListDeviceProxy"
+    assert calc.neighborlist_device == "cpu"
+    assert calc.calculator.__class__ is FakeUPETCalculator
+
+
+def test_upet_neighborlist_device_can_follow_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "pet-oam-xl-v1.0.0.ckpt"
+    model_path.write_text("dummy")
+
+    class FakeUPETCalculator:
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def get_potential_energy(self, *_, **__):
+            return 0.0
+
+    monkeypatch.setattr(vpmdk, "UPETCalculator", lambda **_: FakeUPETCalculator())
+
+    calc = vpmdk._build_upet_calculator(
+        {
+            "MODEL": str(model_path),
+            "DEVICE": "cuda",
+            "UPET_NEIGHBORLIST_DEVICE": "model",
+        }
+    )
+
+    assert calc.__class__ is FakeUPETCalculator
+
+
+class _FakeMetatomicSystem:
+    def __init__(self, device: str | SimpleNamespace):
+        if isinstance(device, str):
+            device = SimpleNamespace(type=device)
+        self.device = device
+
+    def to(self, *, device):
+        return _FakeMetatomicSystem(device)
+
+
+def test_upet_neighborlist_proxy_hooks_metatomic_ase_neighbors(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    neighbors = ModuleType("metatomic_ase._neighbors")
+    events: list[tuple[object, ...]] = []
+
+    def original_vesin(systems, calculators):
+        events.append(("vesin", [system.device.type for system in systems], calculators))
+        return systems
+
+    class AllNeighborsCalculator:
+        def compute(self, systems):
+            events.append(("compute", [system.device.type for system in systems]))
+            return neighbors._compute_requested_neighbors_vesin(systems, ["calc"])
+
+    original_compute = AllNeighborsCalculator.compute
+    neighbors.AllNeighborsCalculator = AllNeighborsCalculator
+    neighbors._compute_requested_neighbors_vesin = original_vesin
+    real_import_module = vpmdk.importlib.import_module
+
+    def fake_import_module(name):
+        if name == "metatomic_ase._neighbors":
+            return neighbors
+        if name == "metatomic.torch.ase_calculator":
+            raise ImportError(name)
+        return real_import_module(name)
+
+    monkeypatch.setattr(vpmdk.importlib, "import_module", fake_import_module)
+
+    result = backend_misc._run_with_upet_neighborlist_device(
+        calculator=None,
+        neighborlist_device="cpu",
+        call=lambda: AllNeighborsCalculator().compute(
+            [_FakeMetatomicSystem("cuda")]
+        ),
+    )
+
+    assert events == [
+        ("compute", ["cpu"]),
+        ("vesin", ["cpu"], ["calc"]),
+    ]
+    assert [system.device.type for system in result] == ["cuda"]
+    assert AllNeighborsCalculator.compute is original_compute
+    assert neighbors._compute_requested_neighbors_vesin is original_vesin
+
+
+def test_upet_neighborlist_proxy_keeps_legacy_metatomic_hook(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    legacy = ModuleType("metatomic.torch.ase_calculator")
+    events: list[tuple[object, ...]] = []
+
+    def original_vesin(systems, requested_options, check_consistency=False):
+        events.append(
+            (
+                "legacy",
+                [system.device.type for system in systems],
+                requested_options,
+                check_consistency,
+            )
+        )
+        return systems
+
+    legacy._compute_requested_neighbors_vesin = original_vesin
+    real_import_module = vpmdk.importlib.import_module
+
+    def fake_import_module(name):
+        if name == "metatomic_ase._neighbors":
+            raise ImportError(name)
+        if name == "metatomic.torch.ase_calculator":
+            return legacy
+        return real_import_module(name)
+
+    monkeypatch.setattr(vpmdk.importlib, "import_module", fake_import_module)
+
+    result = backend_misc._run_with_upet_neighborlist_device(
+        calculator=None,
+        neighborlist_device="cpu",
+        call=lambda: legacy._compute_requested_neighbors_vesin(
+            [_FakeMetatomicSystem("cuda")],
+            ["option"],
+            check_consistency=True,
+        ),
+    )
+
+    assert events == [("legacy", ["cpu"], ["option"], True)]
+    assert [system.device.type for system in result] == ["cuda"]
+    assert legacy._compute_requested_neighbors_vesin is original_vesin
+
+
 def test_upet_missing_checkpoint_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(vpmdk, "UPETCalculator", lambda **kwargs: None)
 
     missing_path = tmp_path / "missing.ckpt"
     with pytest.raises(FileNotFoundError, match="not found"):
         vpmdk._build_upet_calculator({"MODEL": str(missing_path)})
+
+
+def test_equflash_uses_flashtp_sevennet_builder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "equflash.pth"
+    model_path.write_text("dummy")
+    seen: dict[str, object] = {}
+
+    def fake_builder(tags, *, force_flash=False):
+        seen["tags"] = tags
+        seen["force_flash"] = force_flash
+        return "equflash"
+
+    monkeypatch.setattr(vpmdk, "SevenNetCalculator", object)
+    monkeypatch.setattr(vpmdk, "_is_sevennet_flash_available", lambda: True)
+    monkeypatch.setattr(vpmdk, "_build_sevennet_family_calculator", fake_builder)
+
+    calc = vpmdk._build_equflash_calculator(
+        {"MODEL": str(model_path), "DEVICE": "cuda:0"}
+    )
+
+    assert calc == "equflash"
+    assert seen == {
+        "tags": {
+            "MODEL": str(model_path),
+            "DEVICE": "cuda:0",
+            "SEVENNET_FILE_TYPE": "checkpoint",
+        },
+        "force_flash": True,
+    }
+
+
+def test_equflash_named_checkpoint_is_unreleased(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(vpmdk, "SevenNetCalculator", object)
+    monkeypatch.setattr(vpmdk, "_is_sevennet_flash_available", lambda: True)
+
+    with pytest.raises(ValueError, match="no released checkpoint"):
+        vpmdk._build_equflash_calculator({"MODEL": "equflash-29M-oam"})
 
 
 def test_tace_uses_checkpoint_path_and_bcar_tags(
