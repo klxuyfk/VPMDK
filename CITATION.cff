@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use VPMDK in your research, please cite this software."
+type: software
+title: "VPMDK: VASP-Protocol Machine-learning Dynamics Kit"
+authors:
+  - family-names: Aso
+    given-names: Kagami
+    orcid: "https://orcid.org/0009-0005-8266-3557"
+    affiliation: "Corteo Co., Ltd., Japan"
+version: 0.4.2
+license: BSD-3-Clause
+repository-code: "https://github.com/klxuyfk/VPMDK"
+repository-artifact: "https://pypi.org/project/vpmdk/"
+url: "https://github.com/klxuyfk/VPMDK"
+abstract: >-
+  VPMDK (VASP-Protocol Machine-learning Dynamics Kit) is an ASE-oriented layer
+  for machine-learning interatomic potentials. It provides a stable Python API
+  for calculator construction, single-point calculations, relaxations,
+  molecular dynamics, and charge-density prediction, plus a VASP-compatible CLI
+  that reads POSCAR, INCAR, and BCAR inputs and writes VASP-like outputs.
+keywords:
+  - atomistic simulations
+  - machine-learning potentials
+  - molecular dynamics
+  - materials science
+  - VASP
+  - ASE

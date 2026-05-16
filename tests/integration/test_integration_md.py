@@ -4,8 +4,10 @@ from __future__ import annotations
 
 Run explicitly with: pytest -m integration
 
-Required:
-- CHGNet (no model path required, but chgnet + CUDA are required)
+CI smoke:
+- CHGNet CPU smoke (no model path or CUDA required)
+
+Additional explicit backends:
 - MACE (set VPMDK_MACE_MODEL)
 
 Optional backends (skipped unless env vars are set):
@@ -46,6 +48,14 @@ TEEND = 300
 MDALGO = 0
 """
 
+INCAR_MD_SMOKE = """IBRION = 0
+NSW = 1
+POTIM = 1.0
+TEBEG = 300
+TEEND = 300
+MDALGO = 0
+"""
+
 
 def _module_available(name: str) -> bool:
     try:
@@ -67,10 +77,25 @@ def _require_cuda() -> None:
         pytest.skip("CUDA is not available in this environment.")
 
 
-def _write_inputs(tmp_path: Path, data_dir: Path, bcar_text: str) -> None:
+def _require_chgnet() -> None:
+    if vpmdk.CHGNetCalculator is not None:
+        return
+    message = "chgnet is not installed or could not be imported."
+    if os.environ.get("VPMDK_REQUIRE_CHGNET_SMOKE") == "1":
+        pytest.fail(message)
+    pytest.skip(message)
+
+
+def _write_inputs(
+    tmp_path: Path,
+    data_dir: Path,
+    bcar_text: str,
+    *,
+    incar_text: str = INCAR_MD,
+) -> None:
     tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "POSCAR").write_text((data_dir / "POSCAR").read_text())
-    (tmp_path / "INCAR").write_text(INCAR_MD)
+    (tmp_path / "INCAR").write_text(incar_text)
     (tmp_path / "BCAR").write_text(bcar_text)
 
 
@@ -102,12 +127,11 @@ def _load_test_atoms(data_dir: Path):
 
 
 @pytest.mark.integration
-def test_md_chgnet_required(tmp_path: Path, data_dir: Path) -> None:
-    if vpmdk.CHGNetCalculator is None:
-        pytest.skip("chgnet is not installed.")
-    _require_cuda()
-    bcar = "MLP=CHGNET\nDEVICE=cuda\n"
-    _write_inputs(tmp_path, data_dir, bcar)
+@pytest.mark.backend_smoke
+def test_md_chgnet_cpu_smoke(tmp_path: Path, data_dir: Path) -> None:
+    _require_chgnet()
+    bcar = "MLP=CHGNET\nDEVICE=cpu\n"
+    _write_inputs(tmp_path, data_dir, bcar, incar_text=INCAR_MD_SMOKE)
     _run_vpmdk(tmp_path)
     _assert_outputs(tmp_path)
 

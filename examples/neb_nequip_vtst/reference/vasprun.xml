@@ -44,8 +44,7 @@
  </kpoints>
  <parameters>
   <separator name="electronic">
-   <i name="NELM" type="int">1</i>
-   <i name="NBANDS" type="int">8</i>
+   <i name="NELM" type="int">60</i>
   </separator>
   <separator name="ionic">
    <i name="IBRION" type="int">2</i>
@@ -142,7 +141,6 @@
    <i name="nosekinetic">      0.00000000</i>
    <i name="total">    -10.82431400</i>
   </energy>
-  <time name="totalsc">    0.00     0.00</time>
  </calculation>
  <calculation>
   <structure>
@@ -182,7 +180,6 @@
    <i name="nosekinetic">      0.00000000</i>
    <i name="total">    -10.81183173</i>
   </energy>
-  <time name="totalsc">    0.00     0.00</time>
  </calculation>
  <calculation>
   <structure>
@@ -222,7 +219,6 @@
    <i name="nosekinetic">      0.00000000</i>
    <i name="total">    -10.61265320</i>
   </energy>
-  <time name="totalsc">    0.00     0.00</time>
  </calculation>
  <structure name="finalpos">
   <crystal>

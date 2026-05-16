@@ -38,7 +38,7 @@ def main() -> None:
 
     print(f"Final energy: {result.potential_energy:.8f} eV")
     print(f"Recorded ionic steps: {len(result.steps)}")
-    print(f"Wrote: {output_path}")
+    print(f"Wrote: {output_path.name}")
 
 
 if __name__ == "__main__":

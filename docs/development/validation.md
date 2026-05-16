@@ -74,7 +74,7 @@ This page also records recurring environment fixes:
 Historically validated setups have used external checkpoint storage such as:
 
 ```text
-/mnt/d/lin_temp/codex
+/path/to/external-model-cache
 ```
 
 This is only a storage convention used during manual validation and is not a

@@ -1,6 +1,6 @@
 # VPMDK
 
-VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*) is an ASE-oriented layer
+VPMDK (*Vasp-Protocol Machine-learning Dynamics Kit*, aka “VasP-MoDoKi”) is an ASE-oriented layer
 for machine-learning interatomic potentials. Different MLP packages expose
 different calculator constructors, model-loading conventions, and optional
 features; VPMDK provides one place to absorb those differences and present a

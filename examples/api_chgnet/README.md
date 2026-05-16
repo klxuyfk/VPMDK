@@ -10,6 +10,7 @@ These examples use `CHGNET` because it can run without an external checkpoint fi
 - `single_point.py`: run one energy/force/stress evaluation
 - `relax.py`: run a short ionic relaxation and write `relaxed.vasp`
 - `list_backends.py`: inspect backend availability and capability metadata
+- `reference/`: generated output snapshots from these scripts
 
 ## Run
 
@@ -33,4 +34,5 @@ python list_backends.py
 
 - These are library examples, so they do not write `OUTCAR`/`OSZICAR`/`vasprun.xml` by default.
 - `relax.py` explicitly writes `relaxed.vasp` so the optimized structure is easy to inspect.
+- The `list_backends.py` reference records the backend availability in the environment used to generate the snapshot.
 - If you want VASP-style compatibility outputs from Python, attach `vpmdk.VaspCompatObserver()` with `vpmdk.compat.vasp.VaspCompatConfig(...)`.
