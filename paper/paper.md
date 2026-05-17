@@ -13,7 +13,7 @@ authors:
 affiliations:
  - name: Corteo Co., Ltd., Japan
    index: 1
-date: XX Month 2026
+date: 16 May 2026
 bibliography: paper.bib
 ---
 
