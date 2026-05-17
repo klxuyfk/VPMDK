@@ -39,8 +39,5 @@ Prerequisites:
 - VPMDK importable from this checkout or installed in the active environment
 - `phonopy` on `PATH`
 - NequIP backend dependencies available in the active Python environment
-- `NEQUIP_MODEL` pointing to a deployed or compiled NequIP model. On this
-  workstation the script defaults to
-  `/mnt/d/lin_temp/codex/nequip/NequIP-OAM-L-0.1.nequip.pth`.
-- `PYTHON` may be set explicitly. If omitted, the script uses
-  `/home/nei/miniconda3/envs/codex_nequip/bin/python` when available.
+- `NEQUIP_MODEL` pointing to a deployed or compiled NequIP model
+- `PYTHON` may be set explicitly. If omitted, the script uses `python`.

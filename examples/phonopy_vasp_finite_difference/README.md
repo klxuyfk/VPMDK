@@ -42,5 +42,4 @@ Prerequisites:
 - SevenNet backend dependencies available in the active Python environment
 - The sample `BCAR` uses `MLP=SEVENNET`, `MODEL=7net-0`, and `DEVICE=cuda`.
   Set `SEVENNET_MODEL` to use another SevenNet model.
-- `PYTHON` may be set explicitly. If omitted, the script uses
-  `/home/nei/miniconda3/envs/codex_sevenn/bin/python` when available.
+- `PYTHON` may be set explicitly. If omitted, the script uses `python`.

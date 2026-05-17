@@ -48,8 +48,5 @@ Prerequisites:
 - `phonopy` on `PATH`
 - Allegro and NequIP backend dependencies available in the active Python
   environment
-- `ALLEGRO_MODEL` pointing to a deployed or compiled Allegro model. On this
-  workstation the script defaults to
-  `/mnt/d/lin_temp/codex/allegro/Allegro-OAM-L-0.1.nequip.pth`.
-- `PYTHON` may be set explicitly. If omitted, the script uses
-  `/home/nei/miniconda3/envs/codex_nequip/bin/python` when available.
+- `ALLEGRO_MODEL` pointing to a deployed or compiled Allegro model
+- `PYTHON` may be set explicitly. If omitted, the script uses `python`.

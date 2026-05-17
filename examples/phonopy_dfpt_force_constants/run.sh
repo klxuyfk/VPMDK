@@ -3,13 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 REPO_ROOT=$(cd ../.. && pwd)
-DEFAULT_PYTHON=/home/nei/miniconda3/envs/codex_pt/bin/python
-if [[ -z "${PYTHON:-}" && -x "${DEFAULT_PYTHON}" ]]; then
-  PYTHON_BIN=${DEFAULT_PYTHON}
-else
-  PYTHON_BIN=${PYTHON:-python}
-fi
-MACE_MODEL=${MACE_MODEL:-/mnt/d/lin_temp/codex/mace/mace_mp_small.model}
+PYTHON_BIN=${PYTHON:-python}
 
 resolve_path() {
   local path=$1
@@ -24,6 +18,11 @@ resolve_path() {
 
 if ! command -v phonopy >/dev/null 2>&1; then
   echo "phonopy is not on PATH. Install phonopy in the active environment first." >&2
+  exit 1
+fi
+
+if [[ -z "${MACE_MODEL:-}" ]]; then
+  echo "Set MACE_MODEL=/path/to/mace.model before running." >&2
   exit 1
 fi
 

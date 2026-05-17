@@ -3,14 +3,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 REPO_ROOT=$(cd ../.. && pwd)
-DEFAULT_PYTHON=/home/nei/miniconda3/envs/codex_orb/bin/python
-if [[ -z "${PYTHON:-}" && -x "${DEFAULT_PYTHON}" ]]; then
-  PYTHON_BIN=${DEFAULT_PYTHON}
-else
-  PYTHON_BIN=${PYTHON:-python}
-fi
+PYTHON_BIN=${PYTHON:-python}
 PHONOPY_DIM=${PHONOPY_DIM:-"2 2 2"}
-ORB_MODEL_PATH=${ORB_MODEL_PATH:-/mnt/d/lin_temp/codex/orb/orb-v3-conservative-20-omat-20250404.ckpt}
 
 resolve_path() {
   local path=$1
@@ -25,6 +19,11 @@ resolve_path() {
 
 if ! command -v phonopy >/dev/null 2>&1; then
   echo "phonopy is not on PATH. Install phonopy in the active environment first." >&2
+  exit 1
+fi
+
+if [[ -z "${ORB_MODEL_PATH:-}" ]]; then
+  echo "Set ORB_MODEL_PATH=/path/to/orb.ckpt before running." >&2
   exit 1
 fi
 

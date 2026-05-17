@@ -45,8 +45,5 @@ Prerequisites:
 - VPMDK importable from this checkout or installed in the active environment
 - `phonopy` on `PATH`
 - ORB backend dependencies available in the active Python environment
-- `ORB_MODEL_PATH` pointing to an ORB checkpoint. On this workstation the script
-  defaults to
-  `/mnt/d/lin_temp/codex/orb/orb-v3-conservative-20-omat-20250404.ckpt`.
-- `PYTHON` may be set explicitly. If omitted, the script uses
-  `/home/nei/miniconda3/envs/codex_orb/bin/python` when available.
+- `ORB_MODEL_PATH` pointing to an ORB checkpoint
+- `PYTHON` may be set explicitly. If omitted, the script uses `python`.

@@ -55,10 +55,10 @@ python ./examples/chgcar_charge3net/predict_api.py
 - `chgcar_charge3net/INCAR` uses an explicit small fine FFT grid so the example stays runnable; for production-style inputs you would usually let `PREC`/`ENCUT` decide the grid.
 - The phonopy examples require `phonopy` on `PATH`. They intentionally use
   different backend families: MACE, SevenNet, ORB, NequIP, and Allegro.
-- The phonopy scripts default to local `codex_*` Python environments and
-  checkpoints under `/mnt/d/lin_temp/codex` when those paths exist. Override
-  `PYTHON`, `MACE_MODEL`, `SEVENNET_MODEL`, `ORB_MODEL_PATH`, `NEQUIP_MODEL`,
-  or `ALLEGRO_MODEL` for another machine.
+- The phonopy scripts use `python` by default. Set `PYTHON=/path/to/python` to
+  run them with a specific backend environment. Examples that require local
+  checkpoints read `MACE_MODEL`, `ORB_MODEL_PATH`, `NEQUIP_MODEL`, or
+  `ALLEGRO_MODEL`; the SevenNet example defaults to `SEVENNET_MODEL=7net-0`.
 - `phonopy_dfpt_force_constants` demonstrates VPMDK's VASP `dynmat` compatibility layer. It does not run electronic DFPT.
 - `phonopy_vasp_finite_difference` demonstrates the physically direct finite-difference mapping for `IBRION=5`, `POTIM`, and `NFREE=2`.
 - `phonopy_supercell_dfpt_force_constants` demonstrates the full phonopy VASP-DFPT-style file workflow: `phonopy -d --dim`, `SPOSCAR`, `IBRION=8`, `vasprun.xml`, and `phonopy --fc`.

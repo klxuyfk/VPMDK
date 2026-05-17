@@ -38,7 +38,5 @@ Prerequisites:
 - VPMDK importable from this checkout or installed in the active environment
 - `phonopy` on `PATH`
 - MACE backend dependencies available in the active Python environment
-- `MACE_MODEL` pointing to a MACE checkpoint. On this workstation the script
-  defaults to `/mnt/d/lin_temp/codex/mace/mace_mp_small.model`.
-- `PYTHON` may be set explicitly. If omitted, the script uses
-  `/home/nei/miniconda3/envs/codex_pt/bin/python` when available.
+- `MACE_MODEL` pointing to a MACE checkpoint
+- `PYTHON` may be set explicitly. If omitted, the script uses `python`.

@@ -3,12 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 REPO_ROOT=$(cd ../.. && pwd)
-DEFAULT_PYTHON=/home/nei/miniconda3/envs/codex_sevenn/bin/python
-if [[ -z "${PYTHON:-}" && -x "${DEFAULT_PYTHON}" ]]; then
-  PYTHON_BIN=${DEFAULT_PYTHON}
-else
-  PYTHON_BIN=${PYTHON:-python}
-fi
+PYTHON_BIN=${PYTHON:-python}
 SEVENNET_MODEL=${SEVENNET_MODEL:-7net-0}
 
 if ! command -v phonopy >/dev/null 2>&1; then

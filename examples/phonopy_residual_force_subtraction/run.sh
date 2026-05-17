@@ -4,14 +4,8 @@ shopt -s nullglob
 
 cd "$(dirname "$0")"
 REPO_ROOT=$(cd ../.. && pwd)
-DEFAULT_PYTHON=/home/nei/miniconda3/envs/codex_nequip/bin/python
-if [[ -z "${PYTHON:-}" && -x "${DEFAULT_PYTHON}" ]]; then
-  PYTHON_BIN=${DEFAULT_PYTHON}
-else
-  PYTHON_BIN=${PYTHON:-python}
-fi
+PYTHON_BIN=${PYTHON:-python}
 PHONOPY_DIM=${PHONOPY_DIM:-"2 2 2"}
-ALLEGRO_MODEL=${ALLEGRO_MODEL:-/mnt/d/lin_temp/codex/allegro/Allegro-OAM-L-0.1.nequip.pth}
 
 resolve_path() {
   local path=$1
@@ -26,6 +20,11 @@ resolve_path() {
 
 if ! command -v phonopy >/dev/null 2>&1; then
   echo "phonopy is not on PATH. Install phonopy in the active environment first." >&2
+  exit 1
+fi
+
+if [[ -z "${ALLEGRO_MODEL:-}" ]]; then
+  echo "Set ALLEGRO_MODEL=/path/to/model.pth before running." >&2
   exit 1
 fi
 
