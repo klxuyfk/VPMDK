@@ -7,6 +7,65 @@ from typing import Dict, Iterable, List
 
 from pymatgen.io.vasp import Poscar, Potcar
 
+_VASP_COMMENT_MAX_LENGTH = 40
+_VASP_COMMENT_INFO_KEY = "vasp_comment"
+
+
+def _normalize_vasp_comment(comment: object) -> str:
+    """Return the VASP POSCAR/CONTCAR comment line."""
+
+    text = str(comment)
+    line = text.splitlines()[0] if text.splitlines() else ""
+    return line[:_VASP_COMMENT_MAX_LENGTH]
+
+
+def _read_vasp_comment(path: str) -> str:
+    """Return the first POSCAR/CONTCAR line as VASP would preserve it."""
+
+    with open(path, encoding="utf-8") as handle:
+        return _normalize_vasp_comment(handle.readline().rstrip("\r\n"))
+
+
+def _store_vasp_comment_on_structure(structure, comment: str) -> None:
+    """Attach the source POSCAR/CONTCAR comment to a pymatgen structure."""
+
+    try:
+        setattr(structure, "_vpmdk_vasp_comment", comment)
+    except Exception:
+        pass
+
+    try:
+        properties = structure.properties
+    except Exception:
+        return
+    try:
+        properties[_VASP_COMMENT_INFO_KEY] = comment
+        properties["comment"] = comment
+    except Exception:
+        pass
+
+
+def _apply_vasp_comment_from_structure(atoms, structure) -> None:
+    """Copy preserved POSCAR/CONTCAR comment metadata onto ASE atoms."""
+
+    comment = getattr(structure, "_vpmdk_vasp_comment", None)
+    if comment is None:
+        try:
+            comment = structure.properties.get(_VASP_COMMENT_INFO_KEY)
+        except Exception:
+            comment = None
+    if comment is None:
+        try:
+            comment = structure.properties.get("comment")
+        except Exception:
+            comment = None
+    if comment is None:
+        return
+
+    normalized = _normalize_vasp_comment(comment)
+    atoms.info[_VASP_COMMENT_INFO_KEY] = normalized
+    atoms.info["comment"] = normalized
+
 
 def parse_key_value_file(path: str) -> Dict[str, str]:
     """Parse simple key=value style file."""
@@ -199,6 +258,7 @@ def _apply_initial_magnetization(atoms, incar) -> None:
 def read_structure(poscar_path: str, potcar_path: str | None = None):
     """Read POSCAR and reconcile species with POTCAR if necessary."""
 
+    comment = _read_vasp_comment(poscar_path)
     poscar = Poscar.from_file(poscar_path)
     structure = poscar.structure
     if potcar_path and os.path.exists(potcar_path):
@@ -226,4 +286,5 @@ def read_structure(poscar_path: str, potcar_path: str | None = None):
                 structure = poscar.structure
     elif not poscar.site_symbols:
         print("Warning: POSCAR has no species names and no POTCAR provided.")
+    _store_vasp_comment_on_structure(structure, comment)
     return structure

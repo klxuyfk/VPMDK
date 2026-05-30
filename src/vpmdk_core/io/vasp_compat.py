@@ -50,6 +50,8 @@ class _PseudoScfSettings:
 _PSEUDO_SCF_INCAR_TAGS = frozenset({"NELM", "NELMIN", "NELMDL", "EDIFF"})
 _ACTIVE_PSEUDO_SCF_SETTINGS: _PseudoScfSettings | None = None
 
+_VASP_COMMENT_INFO_KEY = "vasp_comment"
+
 
 @dataclass(frozen=True)
 class _VaspInputPaths:
@@ -61,6 +63,43 @@ class _VaspInputPaths:
 
 
 _ACTIVE_VASP_INPUT_PATHS: _VaspInputPaths | None = None
+
+
+def _vasp_comment_from_atoms(atoms) -> str | None:
+    """Return preserved POSCAR/CONTCAR comment metadata from ASE atoms."""
+
+    info = getattr(atoms, "info", {})
+    for key in (_VASP_COMMENT_INFO_KEY, "comment"):
+        if key in info and info[key] is not None:
+            return _root()._normalize_vasp_comment(info[key])
+    return None
+
+
+def _rewrite_vasp_structure_comment(path: str, comment: str) -> None:
+    """Replace the first POSCAR/CONTCAR line while keeping ASE's structure body."""
+
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except FileNotFoundError:
+        return
+
+    if lines:
+        lines[0] = f"{comment}\n"
+    else:
+        lines = [f"{comment}\n"]
+
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.writelines(lines)
+
+
+def _write_vasp_structure(path: str, atoms, *, direct: bool = True) -> None:
+    """Write POSCAR/CONTCAR-style output preserving the VASP comment line."""
+
+    _root().write(path, atoms, direct=direct)
+    comment = _vasp_comment_from_atoms(atoms)
+    if comment is not None:
+        _rewrite_vasp_structure_comment(path, comment)
 
 
 @dataclass

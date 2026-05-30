@@ -199,6 +199,7 @@ def _build_neb_images(
         structure_path = root._resolve_neb_image_structure_path(image_dir)
         structure = root.read_structure(structure_path, potcar_path_abs)
         atoms = root.AseAtomsAdaptor.get_atoms(structure)
+        root._apply_vasp_comment_from_structure(atoms, structure)
         root._apply_initial_magnetization(atoms, incar)
         with root._working_directory(workdir_abs):
             calculator = root._build_calculator_from_tags(bcar, structure=structure)
@@ -354,7 +355,7 @@ def _finalize_neb_image_outputs(
         with root._working_directory(image_dir):
             root._write_vasprun_xml(recorders[image_dir], atoms)
             root._append_outcar_footer(recorders[image_dir])
-            root.write("CONTCAR", atoms, direct=True)
+            root._write_vasp_structure("CONTCAR", atoms, direct=True)
             if write_energy_csv:
                 with open("energy.csv", "w", newline="", encoding="utf-8") as csvfile:
                     writer = csv.writer(csvfile)
@@ -374,6 +375,7 @@ def _collect_neb_image_results(
         structure_path = _resolve_neb_image_structure_path(image_dir, prefer_contcar=True)
         structure = root.read_structure(structure_path, potcar_path)
         atoms = root.AseAtomsAdaptor.get_atoms(structure)
+        root._apply_vasp_comment_from_structure(atoms, structure)
         atoms.wrap()
 
         potential_energy = 0.0
@@ -631,6 +633,7 @@ def run_neb_images(
                 structure_path = root._resolve_neb_image_structure_path(image_dir)
                 structure = root.read_structure(structure_path, potcar_path_abs)
                 image_atoms = root.AseAtomsAdaptor.get_atoms(structure)
+                root._apply_vasp_comment_from_structure(image_atoms, structure)
                 image_atoms.wrap()
                 image_reference_positions.append(np.asarray(image_atoms.get_positions(), dtype=float))
 
@@ -639,6 +642,7 @@ def run_neb_images(
                 structure_path = root._resolve_neb_image_structure_path(image_dir)
                 structure = root.read_structure(structure_path, potcar_path_abs)
                 atoms = root.AseAtomsAdaptor.get_atoms(structure)
+                root._apply_vasp_comment_from_structure(atoms, structure)
                 atoms.wrap()
                 root._apply_initial_magnetization(atoms, incar)
                 with root._working_directory(workdir_abs):

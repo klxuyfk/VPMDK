@@ -90,6 +90,7 @@ def main():
 
             structure = root.read_structure(poscar_path, potcar_for_structure)
             atoms = root.AseAtomsAdaptor.get_atoms(structure)
+            root._apply_vasp_comment_from_structure(atoms, structure)
             atoms.wrap()
             root._apply_initial_magnetization(atoms, incar)
             with root._working_directory(workdir_abs):
