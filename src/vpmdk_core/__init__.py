@@ -453,10 +453,12 @@ from .charge_density import (
 )
 from . import compat
 from .io.inputs import (
+    _apply_vasp_comment_from_structure,
     _apply_initial_magnetization,
     _expand_magmom_to_atoms,
     _flatten,
     _infer_type_map,
+    _normalize_vasp_comment,
     _normalize_species_labels,
     _parse_magmom_values,
     _resolve_mlp_tag,
@@ -511,6 +513,7 @@ from .io.vasp_compat import (
     _selected_incar_path,
     _stress_mode_from_isif,
     _voigt_to_full_stress,
+    _write_vasp_structure,
     _write_vasprun_xml,
 )
 from .models import (

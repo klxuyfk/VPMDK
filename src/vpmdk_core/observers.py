@@ -150,4 +150,4 @@ class VaspCompatObserver(RunObserver):
         _root()._write_vasprun_xml(self._recorder, atoms)
         _root()._append_outcar_footer(self._recorder)
         if config.write_contcar:
-            _root().write("CONTCAR", atoms, direct=True)
+            _root()._write_vasp_structure("CONTCAR", atoms, direct=True)

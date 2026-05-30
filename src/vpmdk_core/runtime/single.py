@@ -437,5 +437,5 @@ def run_force_constants(
     recorder.force_constants = force_constants.tolist()
     root._write_vasprun_xml(recorder, atoms)
     root._append_outcar_footer(recorder)
-    root.write("CONTCAR", atoms, direct=True)
+    root._write_vasp_structure("CONTCAR", atoms, direct=True)
     return np.asarray(recorder.force_constants, dtype=float)

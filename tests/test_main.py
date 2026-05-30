@@ -238,6 +238,43 @@ def test_single_point_energy_for_all_potentials(
     assert (tmp_path / "CONTCAR").exists()
 
 
+def test_main_preserves_poscar_header_in_contcar(tmp_path: Path, prepare_inputs):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0"},
+    )
+    header = "custom VASP system title"
+    poscar_lines = (tmp_path / "POSCAR").read_text().splitlines()
+    poscar_lines[0] = header
+    (tmp_path / "POSCAR").write_text("\n".join(poscar_lines) + "\n")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
+    monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
+    try:
+        vpmdk.main()
+    finally:
+        monkeypatch.undo()
+
+    assert (tmp_path / "CONTCAR").read_text().splitlines()[0] == header
+
+
+def test_write_vasp_structure_truncates_header_to_vasp_limit(tmp_path: Path, load_atoms):
+    atoms = load_atoms()
+    header = "0123456789" * 5
+    atoms.info["vasp_comment"] = header
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    try:
+        vpmdk._write_vasp_structure("CONTCAR", atoms, direct=True)
+    finally:
+        monkeypatch.undo()
+
+    assert (tmp_path / "CONTCAR").read_text().splitlines()[0] == header[:40]
+
+
 def test_main_transfers_magmom_to_atoms(tmp_path: Path, prepare_inputs, arrays_close):
     prepare_inputs(
         tmp_path,
