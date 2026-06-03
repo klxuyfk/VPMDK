@@ -16,14 +16,18 @@ directory-based workflows. In practice it provides:
 
 Supported integrations include CHGNet, MACE, MatGL/M3GNet, SevenNet, FlashTP,
 Eqnorm, MatRIS, AlphaNet, HIENet, Nequix, NequIP, Allegro, ORB, UPET, TACE,
-EquFlash, FAIRChem, GRACE, DeePMD, MatterSim, and Matlantis, plus optional
-charge-density backends such as ChargE3Net, DeepDFT, and DeepCDP. Actual
-availability depends on which backend packages are installed in your
+EquFlash, EquiformerV3, FAIRChem, GRACE, DeePMD, MatterSim, and Matlantis, plus
+optional charge-density backends such as ChargE3Net, DeepDFT, and DeepCDP.
+Actual availability depends on which backend packages are installed in your
 environment.
 
 EquFlash is exposed as a checkpoint-dependent SevenNet/FlashTP adapter: use a
 local checkpoint, because no public named EquFlash checkpoint is currently
 validated.
+
+EquiformerV3 is exposed as `MLP=EQUIFORMER_V3` through the FAIRChem v1/OCP
+runtime. It requires a local EquiformerV3 checkpoint and the official
+`atomicarchitects/equiformer_v3` source tree on `PYTHONPATH`.
 
 ## Installation
 

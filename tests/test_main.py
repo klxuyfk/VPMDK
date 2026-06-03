@@ -120,6 +120,7 @@ class DummyNEBOptimizer:
         "UPET",
         "TACE",
         "EQUFLASH",
+        "EQUIFORMER_V3",
         "FAIRCHEM",
         "FAIRCHEM_V2",
         "FAIRCHEM_V1",
@@ -133,14 +134,31 @@ def test_single_point_energy_for_all_potentials(
     prepare_inputs,
 ):
     extra_bcar: dict[str, str] = {}
-    if potential in {"NEQUIP", "ALLEGRO", "DEEPMD", "FAIRCHEM_V1", "UPET", "TACE", "EQUFLASH"}:
+    if potential in {
+        "NEQUIP",
+        "ALLEGRO",
+        "DEEPMD",
+        "FAIRCHEM_V1",
+        "UPET",
+        "TACE",
+        "EQUFLASH",
+        "EQUIFORMER_V3",
+    }:
         model_name = (
             "pet-oam-xl-v1.0.0.ckpt"
             if potential == "UPET"
             else (
                 "tace-model.pt"
                 if potential == "TACE"
-                else ("equflash-model.ckpt" if potential == "EQUFLASH" else "nequip-model.pth")
+                else (
+                    "equflash-model.ckpt"
+                    if potential == "EQUFLASH"
+                    else (
+                        "equiformer-v3.pt"
+                        if potential == "EQUIFORMER_V3"
+                        else "nequip-model.pth"
+                    )
+                )
             )
         )
         model_path = tmp_path / model_name
@@ -186,6 +204,11 @@ def test_single_point_energy_for_all_potentials(
     monkeypatch.setattr(vpmdk, "UPETCalculator", lambda *a, **k: factory("UPET"))
     monkeypatch.setattr(vpmdk, "TACEAseCalc", lambda *a, **k: factory("TACE"))
     monkeypatch.setattr(vpmdk, "_build_equflash_calculator", lambda *a, **k: factory("EQUFLASH"))
+    monkeypatch.setattr(
+        vpmdk,
+        "_build_equiformer_v3_calculator",
+        lambda *a, **k: factory("EQUIFORMER_V3"),
+    )
     monkeypatch.setattr(vpmdk, "_build_grace_calculator", lambda tags: factory("GRACE"))
     monkeypatch.setattr(vpmdk, "DeePMDCalculator", lambda *a, **k: factory("DEEPMD"))
 

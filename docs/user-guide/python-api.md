@@ -70,6 +70,31 @@ config = vpmdk.BackendConfig(
 calc = vpmdk.build_calculator(config)
 ```
 
+EquiformerV3 is a dedicated backend tag that uses the FAIRChem v1/OCP runtime.
+The official EquiformerV3 source must be importable, usually by putting the
+repository's `src` directory on `PYTHONPATH` before Python starts:
+
+```python
+backend = vpmdk.BackendConfig(
+    mlp="EQUIFORMER_V3",
+    model="/path/to/equiformer_v3_checkpoint.pt",
+    device="cuda",
+)
+result = vpmdk.single_point(atoms, backend)
+```
+
+If the model registration lives under a custom module name, pass it through
+backend options:
+
+```python
+backend = vpmdk.BackendConfig(
+    mlp="EQUIFORMER_V3",
+    model="/path/to/equiformer_v3_checkpoint.pt",
+    device="cpu",
+    options={"EQUIFORMER_V3_MODULE": "your.module.name"},
+)
+```
+
 Useful rules:
 
 - `BackendConfig` is the primary public backend-selection object

@@ -1438,6 +1438,65 @@ def test_fairchem_non_default_model_does_not_force_default_task(
     assert seen == {"model": "esen-md-direct-all-omol", "task": None}
 
 
+def test_equiformer_v3_imports_registration_module_and_uses_fairchem_v1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "equiformer_v3.pt"
+    model_path.write_text("dummy")
+    seen: dict[str, object] = {}
+    registered = {"ready": False}
+
+    def fake_registered(model_name):
+        seen.setdefault("registered", []).append(model_name)
+        return registered["ready"]
+
+    def fake_import_module(module_name):
+        seen["module"] = module_name
+        registered["ready"] = True
+        return object()
+
+    def fake_fairchem_v1_builder(tags):
+        seen["tags"] = dict(tags)
+        return "equiformer-v3"
+
+    monkeypatch.setattr(vpmdk, "_fairchem_model_registered", fake_registered)
+    monkeypatch.setattr(vpmdk.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(
+        vpmdk, "_build_fairchem_v1_calculator", fake_fairchem_v1_builder
+    )
+
+    calc = vpmdk._build_equiformer_v3_calculator(
+        {
+            "MODEL": str(model_path),
+            "DEVICE": "cpu",
+            "EQUIFORMER_V3_MODULE": "custom.equiformer_v3",
+        }
+    )
+
+    assert calc == "equiformer-v3"
+    assert seen["module"] == "custom.equiformer_v3"
+    assert seen["tags"] == {
+        "MODEL": str(model_path),
+        "DEVICE": "cpu",
+        "EQUIFORMER_V3_MODULE": "custom.equiformer_v3",
+    }
+    assert seen["registered"] == ["equiformer_v3", "equiformer_v3"]
+
+
+def test_equiformer_v3_requires_checkpoint_path():
+    with pytest.raises(ValueError, match="requires MODEL"):
+        vpmdk._build_equiformer_v3_calculator({})
+
+
+def test_equiformer_v3_availability_requires_fairchem_v1_calculator(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(vpmdk, "_fairchem_model_registered", lambda _: True)
+    monkeypatch.setattr(vpmdk, "_get_fairchem_v1_calculator_cls", lambda: None)
+
+    assert vpmdk._is_equiformer_v3_available() is False
+
+
 def test_tace_uses_checkpoint_path_and_bcar_tags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

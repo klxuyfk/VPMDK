@@ -35,6 +35,29 @@ Important caveats:
 - `MODEL` is required
 - `FAIRCHEM_CONFIG` is usually required as well
 
+## EquiformerV3
+
+`MLP=EQUIFORMER_V3` uses the FAIRChem v1/OCP calculator path after importing the
+official EquiformerV3 model registration module. Start from the FAIRChem v1
+environment above, then make the EquiformerV3 source importable:
+
+```bash
+git clone https://github.com/atomicarchitects/equiformer_v3 /path/to/equiformer_v3
+export PYTHONPATH=/path/to/equiformer_v3/src:${PYTHONPATH}
+```
+
+Typical settings:
+
+```text
+MLP=EQUIFORMER_V3
+MODEL=/path/to/equiformer_v3_checkpoint.pt
+DEVICE=cpu
+```
+
+By default VPMDK imports
+`fairchem.experimental.models.equiformer_v3.equiformer_v3`. If you package the
+model registration under a different module name, set `EQUIFORMER_V3_MODULE`.
+
 ## FAIRChem v2 / UMA
 
 Guidance:

@@ -75,6 +75,7 @@ _BASE_CAPABILITIES: dict[str, BackendCapabilities] = {
     "UPET": BackendCapabilities(fine_tune=True),
     "TACE": BackendCapabilities(spin=True, fine_tune=True),
     "EQUFLASH": BackendCapabilities(),
+    "EQUIFORMER_V3": BackendCapabilities(fine_tune=True),
     "FAIRCHEM": BackendCapabilities(fine_tune=True),
     "FAIRCHEM_V2": BackendCapabilities(fine_tune=True),
     "ESEN": BackendCapabilities(fine_tune=True),
@@ -133,6 +134,7 @@ def _backend_available(name: str) -> bool:
         "EQUFLASH": lambda: (
             root.SevenNetCalculator is not None and root._is_sevennet_flash_available()
         ),
+        "EQUIFORMER_V3": lambda: root._is_equiformer_v3_available(),
         "FAIRCHEM": lambda: root.FAIRChemCalculator is not None,
         "FAIRCHEM_V2": lambda: root.FAIRChemCalculator is not None,
         "ESEN": lambda: root.FAIRChemCalculator is not None,
