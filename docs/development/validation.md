@@ -15,6 +15,23 @@ not a benchmark-quality comparison against reference DFT data.  Blocked entries
 record adapter behavior or missing public artifacts rather than successful
 calculator evaluation.
 
+## 2026-06-03 EquiformerV3 Validation
+
+- Structure: ASE `bulk("Si", "diamond", a=5.43)` (`Si2`)
+- API path: `BackendConfig(mlp="EQUIFORMER_V3")` -> `single_point`
+- Environment: `codex_fairchem_v1`, torch 2.4.1+cu121, fairchem-core 1.10.0,
+  official `atomicarchitects/equiformer_v3` source at commit
+  `a7300c58df683dc99cb48027d5bfd4c887486c48`
+- Checkpoint: local `omat24-mptrj-salex_gradient.pt`
+- CPU run: `CUDA_VISIBLE_DEVICES=""`, `DEVICE=cpu`
+- CUDA run: `DEVICE=cuda` on NVIDIA TITAN V
+
+| Backend | CPU energy (eV) | CPU max force (eV/A) | CUDA energy (eV) | CUDA max force (eV/A) |
+| --- | ---: | ---: | ---: | ---: |
+| `EQUIFORMER_V3` | -10.8360443115 | 1.414973e-06 | -10.8360481262 | 1.322957e-06 |
+
+Stress was returned as a full 3x3 tensor in both runs.
+
 ## 2026-05-16 Real Backend Sweep
 
 - Structure: `tests/POSCAR` (`Si2`)

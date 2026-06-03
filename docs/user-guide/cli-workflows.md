@@ -255,3 +255,30 @@ there usually abort the run.
 
 Unknown `BCAR` tags are not globally validated; they are simply ignored unless
 some backend or helper explicitly consumes them.
+
+## EquiformerV3 Backend
+
+`MLP=EQUIFORMER_V3` is a dedicated entry point for EquiformerV3 checkpoints. It
+uses the FAIRChem v1/OCP calculator path after importing the official
+EquiformerV3 registration module.
+
+Before launching `vpmdk`, make the official source tree importable:
+
+```bash
+export PYTHONPATH=/path/to/equiformer_v3/src:${PYTHONPATH}
+```
+
+Typical `BCAR`:
+
+```text
+MLP=EQUIFORMER_V3
+MODEL=/path/to/equiformer_v3_checkpoint.pt
+DEVICE=cuda
+```
+
+If your registration module is not
+`fairchem.experimental.models.equiformer_v3.equiformer_v3`, set:
+
+```text
+EQUIFORMER_V3_MODULE=your.module.name
+```

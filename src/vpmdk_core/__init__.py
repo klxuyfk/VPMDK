@@ -4,8 +4,8 @@ The utility consumes VASP-style inputs (POSCAR, INCAR, POTCAR, BCAR) and
 executes single-point, relaxation, or molecular dynamics runs with the selected
 neural-network potential. Multiple ASE calculators are supported (CHGNet,
 M3GNet/MatGL, MACE, MatterSim, Matlantis, Eqnorm, MatRIS, AlphaNet, HIENet,
-Nequix, SevenNet, FlashTP, EquFlash, UPET, TACE) and the expected VASP outputs
-such as CONTCAR and OUTCAR-style energy logs are produced.
+Nequix, SevenNet, FlashTP, EquFlash, UPET, TACE, EquiformerV3) and the expected
+VASP outputs such as CONTCAR and OUTCAR-style energy logs are produced.
 """
 
 from __future__ import annotations
@@ -391,12 +391,18 @@ from .backends.eqnorm import (
 )
 from .backends.fairchem import (
     _FairChemV1PredictorCalculator,
+    _EQUIFORMER_V3_IMPORT_PATHS,
     _as_numpy,
+    _build_equiformer_v3_calculator,
     _build_fairchem_calculator,
     _build_fairchem_v1_calculator,
     _build_fairchem_v1_predictor,
+    _equiformer_v3_import_candidates,
+    _fairchem_model_registered,
     _get_fairchem_v1_calculator_cls,
     _get_fairchem_v1_predictor_cls,
+    _import_equiformer_v3_model,
+    _is_equiformer_v3_available,
     _normalize_fairchem_prediction,
     _pick_fairchem_prediction_value,
     _run_fairchem_v1_prediction,

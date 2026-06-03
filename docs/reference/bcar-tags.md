@@ -184,6 +184,12 @@ Backend-specific overrides win over the shared graph-converter tags.
 - `FAIRCHEM_CONFIG`
 - `FAIRCHEM_V1_PREDICTOR`
 
+### EquiformerV3
+
+- `EQUIFORMER_V3_MODULE`
+- `EQUIFORMER_V3_IMPORT_MODULE`
+- `FAIRCHEM_CONFIG`
+
 ### GRACE
 
 - `GRACE_PAD_NEIGHBORS_FRACTION`

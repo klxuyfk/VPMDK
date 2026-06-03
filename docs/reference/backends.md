@@ -28,6 +28,7 @@ the behavior implemented in `src/vpmdk_core/backends/`.
 | `UPET` | `upet` / `UPETCalculator` | required local checkpoint or named model | none | `UPET_VERSION`, `UPET_NON_CONSERVATIVE`, `UPET_NEIGHBORLIST_DEVICE` / `UPET_NL_DEVICE` |
 | `TACE` | `TACE` / `TACEAseCalc` | required local checkpoint or named foundation model | none | `TACE_DTYPE`, `TACE_SPIN_ON`, `TACE_NEIGHBORLIST_BACKEND`, `TACE_FIDELITY_IDX` / `TACE_LEVEL` |
 | `EQUFLASH` | `sevenn` + `flashTP_e3nn` checkpoint-dependent adapter | required local SevenNet/EquFlash checkpoint file | none | uses the FlashTP-accelerated SevenNet path; no public named checkpoint is currently validated |
+| `EQUIFORMER_V3` | official `atomicarchitects/equiformer_v3` FAIRChem v1/OCP runtime / `OCPCalculator` | required local EquiformerV3 checkpoint | none | `EQUIFORMER_V3_MODULE`, `FAIRCHEM_CONFIG`, `DEVICE`; imports the EquiformerV3 registration module before using the FAIRChem v1 builder |
 | `FAIRCHEM` / `FAIRCHEM_V2` / `ESEN` | `fairchem-core` 2.x / `FAIRChemCalculator` | named checkpoint/model identifier | `uma-s-1p1` with `FAIRCHEM_TASK=omat` | `FAIRCHEM_TASK`, `FAIRCHEM_INFERENCE_SETTINGS`, `DEVICE` |
 | `FAIRCHEM_V1` | `fairchem-core==1.10.0` baseline or compatible OCP/FAIRChem v1 install / `OCPCalculator` or predictor | required local checkpoint; config usually required | none | `FAIRCHEM_CONFIG`, `FAIRCHEM_V1_PREDICTOR`, `DEVICE` |
 | `GRACE` | TensorPotential / `TPCalculator` or `grace_fm` | local model path or foundation-model name | `GRACE-2L-MP-r6` when available | GRACE padding/dtype tags |
@@ -39,8 +40,8 @@ the behavior implemented in `src/vpmdk_core/backends/`.
 capability model. Highlights:
 
 - `CHGNET`, `MACE`, and `TACE` declare `spin=True`
-- `EQNORM`, `MACE`, `NEQUIX`, `ALLEGRO`, `NEQUIP`, `UPET`, `FAIRCHEM`, `GRACE`,
-  and `DEEPMD` declare `fine_tune=True`
+- `EQNORM`, `MACE`, `NEQUIX`, `ALLEGRO`, `NEQUIP`, `UPET`, `EQUIFORMER_V3`,
+  `FAIRCHEM`, `GRACE`, and `DEEPMD` declare `fine_tune=True`
 - `ALPHANET` and `DEEPMD` are marked as structure-aware backends
 - `MATRIS_TASK=e` downgrades capabilities to energy-only
 
@@ -84,6 +85,11 @@ it supports that concept.
 
 - `FAIRCHEM_V1` and `FAIRCHEM_V2` are not environment-compatible in practice;
   use separate environments and pin `fairchem-core` versions intentionally.
+- `EQUIFORMER_V3` uses the FAIRChem v1/OCP calculator path, not the FAIRChem
+  v2 `FAIRChemCalculator`. The official EquiformerV3 source must be importable
+  so the `equiformer_v3` model is registered. Put the repository's `src`
+  directory on `PYTHONPATH`, or set `EQUIFORMER_V3_MODULE` to a custom
+  registration module.
 - `FAIRCHEM` / `FAIRCHEM_V2` / `ESEN` default to the `uma-s-1p1` checkpoint with
   `FAIRCHEM_TASK=omat`. This registry name is present in both the
   fairchem-core 2.13.0 validation environment and current 2.x releases. For

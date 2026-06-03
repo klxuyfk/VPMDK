@@ -13,6 +13,92 @@ def _root():
     return sys.modules["vpmdk_core"]
 
 
+_EQUIFORMER_V3_MODEL_NAME = "equiformer_v3"
+_EQUIFORMER_V3_IMPORT_PATHS = (
+    "fairchem.experimental.models.equiformer_v3.equiformer_v3",
+    "experimental.models.equiformer_v3.equiformer_v3",
+)
+
+
+def _split_equiformer_v3_modules(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [module.strip() for module in value.replace(";", ",").split(",") if module.strip()]
+
+
+def _equiformer_v3_import_candidates(bcar_tags: Dict[str, str]) -> list[str]:
+    explicit: list[str] = []
+    for tag in ("EQUIFORMER_V3_MODULE", "EQUIFORMER_V3_IMPORT_MODULE"):
+        explicit.extend(_split_equiformer_v3_modules(bcar_tags.get(tag)))
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for module_name in [*explicit, *_EQUIFORMER_V3_IMPORT_PATHS]:
+        if module_name in seen:
+            continue
+        seen.add(module_name)
+        candidates.append(module_name)
+    return candidates
+
+
+def _fairchem_model_registered(model_name: str) -> bool:
+    root = _root()
+    try:
+        module = root.importlib.import_module("fairchem.core.common.registry")
+        registry = getattr(module, "registry", None)
+        get_model_class = getattr(registry, "get_model_class", None)
+        if not callable(get_model_class):
+            return False
+        get_model_class(model_name)
+        return True
+    except Exception:
+        return False
+
+
+def _import_equiformer_v3_model(bcar_tags: Dict[str, str]):
+    """Import EquiformerV3 so the FAIRChem v1 registry can construct it."""
+
+    root = _root()
+    if root._fairchem_model_registered(_EQUIFORMER_V3_MODEL_NAME):
+        return None
+
+    errors: list[str] = []
+    last_error: Exception | None = None
+    for module_name in root._equiformer_v3_import_candidates(bcar_tags):
+        try:
+            module = root.importlib.import_module(module_name)
+        except Exception as exc:
+            last_error = exc
+            errors.append(f"{module_name}: {type(exc).__name__}: {exc}")
+            continue
+        if root._fairchem_model_registered(_EQUIFORMER_V3_MODEL_NAME):
+            return module
+        errors.append(f"{module_name}: imported but did not register {_EQUIFORMER_V3_MODEL_NAME!r}")
+
+    details = "; ".join(errors) if errors else "no import candidates configured"
+    raise RuntimeError(
+        "EquiformerV3 model registration is not available. Install the official "
+        "atomicarchitects/equiformer_v3 code, put its src directory on PYTHONPATH, "
+        "or set EQUIFORMER_V3_MODULE to a module that registers 'equiformer_v3'. "
+        f"Import attempts: {details}"
+    ) from last_error
+
+
+def _is_equiformer_v3_available() -> bool:
+    root = _root()
+    if root._get_fairchem_v1_calculator_cls() is None:
+        return False
+    if root._fairchem_model_registered(_EQUIFORMER_V3_MODEL_NAME):
+        return True
+    for module_name in _EQUIFORMER_V3_IMPORT_PATHS:
+        try:
+            if root.importlib.util.find_spec(module_name) is not None:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _get_fairchem_v1_calculator_cls():
     """Return FAIRChem v1 calculator class if installed."""
 
@@ -84,6 +170,20 @@ def _build_fairchem_calculator(bcar_tags: Dict[str, str]):
         inference_settings=inference_settings,
         device=device,
     )
+
+
+def _build_equiformer_v3_calculator(bcar_tags: Dict[str, str]):
+    """Create an EquiformerV3 ASE calculator through the FAIRChem v1 runtime."""
+
+    root = _root()
+    model_path = bcar_tags.get("MODEL")
+    if not model_path:
+        raise ValueError("EquiformerV3 requires MODEL pointing to a checkpoint file.")
+    if not root.os.path.exists(model_path):
+        raise FileNotFoundError(f"EquiformerV3 model not found: {model_path}")
+
+    root._import_equiformer_v3_model(bcar_tags)
+    return root._build_fairchem_v1_calculator(bcar_tags)
 
 
 def _pick_fairchem_prediction_value(prediction, keys: Iterable[str]):

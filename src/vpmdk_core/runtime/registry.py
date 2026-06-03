@@ -37,6 +37,7 @@ _CALCULATOR_BUILDERS: Dict[str, str] = {
     "UPET": "_build_upet_calculator",
     "EQUFLASH": "_build_equflash_calculator",
     "TACE": "_build_tace_calculator",
+    "EQUIFORMER_V3": "_build_equiformer_v3_calculator",
     "FAIRCHEM": "_build_fairchem_calculator",
     "FAIRCHEM_V2": "_build_fairchem_calculator",
     "ESEN": "_build_fairchem_calculator",

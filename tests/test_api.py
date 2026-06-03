@@ -206,6 +206,7 @@ def test_list_backends_exposes_known_entries():
     assert "CHGNET" in names
     assert "MACE" in names
     assert "FAIRCHEM" in names
+    assert "EQUIFORMER_V3" in names
 
 
 def test_list_backends_marks_flashtp_unavailable_without_flash_support(
