@@ -68,6 +68,8 @@ Common packages:
 - `upet` for `MLP=UPET`
 - `TACE` for `MLP=TACE`
 - `sevenn` plus `flashTP_e3nn` and a local EquFlash-compatible checkpoint for `MLP=EQUFLASH`
+- `fairchem-core==1.10.0` for EquiformerV2 / eqV2 checkpoints through
+  `MLP=FAIRCHEM_V1`
 - the official `atomicarchitects/equiformer_v3` code plus its bundled FAIRChem
   v1/OCP runtime for `MLP=EQUIFORMER_V3`
 - `fairchem-core>=2,<3` for `MLP=FAIRCHEM` / `FAIRCHEM_V2` / `ESEN`
@@ -106,6 +108,7 @@ pip install "fairchem-core==1.10.0"
 Use that for:
 
 - `MLP=FAIRCHEM_V1`
+- EquiformerV2 / eqV2 checkpoints, also through `MLP=FAIRCHEM_V1`
 - `MLP=EQUIFORMER_V3`, when paired with the official EquiformerV3 repository
   on `PYTHONPATH`
 
@@ -120,6 +123,27 @@ is registered from that project's `fairchem.experimental` code.
 Do not mix FAIRChem v1 and v2 in the same environment. If you need
 reproducibility, pin an exact `fairchem-core` release in your environment file
 rather than relying on an open-ended install.
+
+Original Equiformer V1 `graph_attention_transformer` checkpoints are not part
+of the documented FAIRChem compatibility surface. They require older OCP trainer
+and registry conventions that differ from VPMDK's maintained FAIRChem v1 path.
+
+## DeePMD / DPA Guidance
+
+DPA-family checkpoints use the DeePMD backend:
+
+```text
+MLP=DEEPMD
+MODEL=/path/to/dpa_checkpoint.pt
+```
+
+DPA-4 / DPA4 / SeZM checkpoints require a `deepmd-kit` build that includes the
+matching PyTorch model registration. If DeepMD fails while loading MPI-related
+shared libraries, put the active environment's `lib` directory first:
+
+```bash
+export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+```
 
 ## Editable Development Setup
 

@@ -184,6 +184,18 @@ Backend-specific overrides win over the shared graph-converter tags.
 - `FAIRCHEM_CONFIG`
 - `FAIRCHEM_V1_PREDICTOR`
 
+EquiformerV2 / eqV2 checkpoints use the FAIRChem v1/OCP path:
+
+```text
+MLP=FAIRCHEM_V1
+MODEL=/path/to/eqV2_checkpoint.pt
+DEVICE=cuda
+```
+
+There is no `MLP=EQUIFORMER_V2` tag. Original Equiformer V1
+`graph_attention_transformer` checkpoints are not part of the documented
+support surface because they depend on older OCP trainer conventions.
+
 ### EquiformerV3
 
 - `EQUIFORMER_V3_MODULE`
@@ -202,6 +214,18 @@ Backend-specific overrides win over the shared graph-converter tags.
 
 - `DEEPMD_TYPE_MAP`
 - `DEEPMD_HEAD`
+
+DPA-family checkpoints use the DeePMD path:
+
+```text
+MLP=DEEPMD
+MODEL=/path/to/dpa_checkpoint.pt
+```
+
+For DPA-4 / DPA4 / SeZM checkpoints, use a `deepmd-kit` environment that
+registers the `dpa4` / `SeZM` model type. Some DeepMD environments also need
+`LD_LIBRARY_PATH` to include the environment's `lib` directory so MPI-related
+shared libraries are resolved consistently.
 
 ## Notes on Relative Paths
 

@@ -35,6 +35,27 @@ Important caveats:
 - `MODEL` is required
 - `FAIRCHEM_CONFIG` is usually required as well
 
+## EquiformerV2 / eqV2
+
+EquiformerV2 / eqV2 checkpoints use the FAIRChem v1/OCP runtime, not a
+dedicated `EQUIFORMER_V2` backend tag. Start from the FAIRChem v1 environment
+above and select:
+
+```text
+MLP=FAIRCHEM_V1
+MODEL=/path/to/eqV2_checkpoint.pt
+DEVICE=cpu
+```
+
+This route covers OCP/FAIRChem v1 checkpoints whose model registration is
+available from `fairchem-core==1.10.0`, including the `equiformer_v2` and
+`hydra` eqV2 checkpoint formats used in the validation environments.
+
+Original Equiformer V1 checkpoints using `graph_attention_transformer` are not
+part of the maintained compatibility surface. They depend on older OCP trainer
+constructor conventions and older PyG import paths, so do not treat them as
+equivalent to EquiformerV2 / eqV2 support.
+
 ## EquiformerV3
 
 `MLP=EQUIFORMER_V3` uses the FAIRChem v1/OCP calculator path after importing the
@@ -140,6 +161,20 @@ Multi-head checkpoints can be selected with:
 ```text
 DEEPMD_HEAD=some_head_name
 ```
+
+DPA-family checkpoints use this same backend:
+
+```text
+MLP=DEEPMD
+MODEL=/path/to/dpa_checkpoint.pt
+```
+
+For DPA-4 / DPA4 / SeZM checkpoints, the `deepmd-kit` environment must include
+the PyTorch implementation that registers the `dpa4` / `SeZM` model type. If
+the package imports but checkpoint construction fails with an unknown model
+type, the installed `deepmd-kit` line is too old for that checkpoint. If import
+fails while loading `deepmd_op_pt`, align the PyTorch version with the
+`deepmd-kit` wheel or rebuild `deepmd-kit` against the active PyTorch runtime.
 
 ## NequIP / Allegro
 
