@@ -70,6 +70,18 @@ config = vpmdk.BackendConfig(
 calc = vpmdk.build_calculator(config)
 ```
 
+EquiformerV2 / eqV2 checkpoints use the FAIRChem v1/OCP backend. They do not
+have a separate `EQUIFORMER_V2` tag:
+
+```python
+backend = vpmdk.BackendConfig(
+    mlp="FAIRCHEM_V1",
+    model="/path/to/eqV2_checkpoint.pt",
+    device="cuda",
+)
+result = vpmdk.single_point(atoms, backend)
+```
+
 EquiformerV3 is a dedicated backend tag that uses the FAIRChem v1/OCP runtime.
 The official EquiformerV3 source must be importable, usually by putting the
 repository's `src` directory on `PYTHONPATH` before Python starts:
@@ -93,6 +105,16 @@ backend = vpmdk.BackendConfig(
     device="cpu",
     options={"EQUIFORMER_V3_MODULE": "your.module.name"},
 )
+```
+
+DPA-family checkpoints use DeePMD-kit:
+
+```python
+backend = vpmdk.BackendConfig(
+    mlp="DEEPMD",
+    model="/path/to/dpa_checkpoint.pt",
+)
+result = vpmdk.single_point(atoms, backend)
 ```
 
 Useful rules:

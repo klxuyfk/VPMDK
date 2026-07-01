@@ -34,6 +34,22 @@ the behavior implemented in `src/vpmdk_core/backends/`.
 | `GRACE` | TensorPotential / `TPCalculator` or `grace_fm` | local model path or foundation-model name | `GRACE-2L-MP-r6` when available | GRACE padding/dtype tags |
 | `DEEPMD` | `deepmd-kit` / `DP` | required local frozen model or supported checkpoint | none | `DEEPMD_TYPE_MAP`, `DEEPMD_HEAD` |
 
+## Non-Obvious Entrypoints and Aliases
+
+Some model-family names are not accepted as `MLP` tags. Use the actual VPMDK
+entrypoint below.
+
+| Model family / user-facing name | Use this `MLP` | Runtime path | Notes |
+|---------------------------------|----------------|--------------|-------|
+| EquiformerV2 / eqV2 checkpoints | `FAIRCHEM_V1` | FAIRChem v1/OCP `OCPCalculator` | Set `MODEL` to the local eqV2 checkpoint. There is no `MLP=EQUIFORMER_V2` alias. The original Equiformer V1 `graph_attention_transformer` checkpoints are not part of the documented support surface because they require older OCP trainer conventions. |
+| EquiformerV3 checkpoints | `EQUIFORMER_V3` | FAIRChem v1/OCP `OCPCalculator` plus the official EquiformerV3 registration module | Dedicated VPMDK tag; do not use `FAIRCHEM_V2` for this path. |
+| DPA / DPA-2 / DPA-3 / DPA-4 / DPA4 / SeZM checkpoints | `DEEPMD` | DeePMD-kit `DP` ASE calculator | Set `MODEL` to the local DeepMD checkpoint. DPA-4 / SeZM checkpoints require a DeePMD-kit release that registers the `dpa4` / `SeZM` model type. |
+| UMA / FAIRChem v2 named models | `FAIRCHEM`, `FAIRCHEM_V2`, or `ESEN` | `fairchem-core` 2.x `FAIRChemCalculator` | `ESEN` is routed through the same builder as `FAIRCHEM_V2`; set `FAIRCHEM_TASK` when upstream requires it. |
+| Flash-accelerated SevenNet | `FLASHTP` | SevenNet calculator with FlashTP acceleration forced | Same model semantics as SevenNet, but FlashTP support must be visible to `sevenn`. |
+| EquFlash checkpoints | `EQUFLASH` | SevenNet + FlashTP checkpoint-dependent adapter | Requires a local compatible checkpoint; VPMDK does not validate a public named EquFlash checkpoint. |
+| Allegro deployed/compiled models | `ALLEGRO` | NequIP `NequIPCalculator` | The runtime calculator class is shared with NequIP, but use `MLP=ALLEGRO` for Allegro artifacts. |
+| MatGL / M3GNet checkpoints | `MATGL` or `M3GNET` | MatGL or legacy M3GNet calculator | Both names route to the same VPMDK builder. |
+
 ## Capability Metadata
 
 `vpmdk.list_backends()` and `vpmdk.get_backend_capabilities()` expose a compact
@@ -85,11 +101,19 @@ it supports that concept.
 
 - `FAIRCHEM_V1` and `FAIRCHEM_V2` are not environment-compatible in practice;
   use separate environments and pin `fairchem-core` versions intentionally.
+- EquiformerV2 / eqV2 checkpoints use `MLP=FAIRCHEM_V1`. VPMDK intentionally
+  does not expose an `EQUIFORMER_V2` backend tag, because the supported route is
+  the FAIRChem v1/OCP checkpoint loader. Original Equiformer V1
+  `graph_attention_transformer` checkpoints require older OCP trainer APIs and
+  are not a documented compatibility target.
 - `EQUIFORMER_V3` uses the FAIRChem v1/OCP calculator path, not the FAIRChem
   v2 `FAIRChemCalculator`. The official EquiformerV3 source must be importable
   so the `equiformer_v3` model is registered. Put the repository's `src`
   directory on `PYTHONPATH`, or set `EQUIFORMER_V3_MODULE` to a custom
   registration module.
+- DPA-family checkpoints use `MLP=DEEPMD`. Newer DPA architectures such as
+  DPA-4 / DPA4 / SeZM require a `deepmd-kit` build that includes the matching
+  PyTorch model registration and compiled operator support.
 - `FAIRCHEM` / `FAIRCHEM_V2` / `ESEN` default to the `uma-s-1p1` checkpoint with
   `FAIRCHEM_TASK=omat`. This registry name is present in both the
   fairchem-core 2.13.0 validation environment and current 2.x releases. For

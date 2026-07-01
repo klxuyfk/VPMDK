@@ -16,7 +16,8 @@ directory-based workflows. In practice it provides:
 
 Supported integrations include CHGNet, MACE, MatGL/M3GNet, SevenNet, FlashTP,
 Eqnorm, MatRIS, AlphaNet, HIENet, Nequix, NequIP, Allegro, ORB, UPET, TACE,
-EquFlash, EquiformerV3, FAIRChem, GRACE, DeePMD, MatterSim, and Matlantis, plus
+EquFlash, EquiformerV2/eqV2 through FAIRChem v1, EquiformerV3, FAIRChem,
+GRACE, DeePMD including DPA-family checkpoints, MatterSim, and Matlantis, plus
 optional charge-density backends such as ChargE3Net, DeepDFT, and DeepCDP.
 Actual availability depends on which backend packages are installed in your
 environment.
@@ -25,9 +26,19 @@ EquFlash is exposed as a checkpoint-dependent SevenNet/FlashTP adapter: use a
 local checkpoint, because no public named EquFlash checkpoint is currently
 validated.
 
+EquiformerV2 / eqV2 checkpoints are exposed through the legacy FAIRChem v1/OCP
+path. Use `MLP=FAIRCHEM_V1` and set `MODEL` to the local eqV2 checkpoint; there
+is no separate `MLP=EQUIFORMER_V2` tag. Original Equiformer V1
+`graph_attention_transformer` checkpoints are outside the documented support
+surface because they require older OCP trainer and registry conventions.
+
 EquiformerV3 is exposed as `MLP=EQUIFORMER_V3` through the FAIRChem v1/OCP
 runtime. It requires a local EquiformerV3 checkpoint and the official
 `atomicarchitects/equiformer_v3` source tree on `PYTHONPATH`.
+
+DPA-family Deep Potential checkpoints, including DPA-4 / DPA4 / SeZM models,
+use the DeePMD-kit path: set `MLP=DEEPMD` and point `MODEL` at the local
+DeepMD checkpoint.
 
 ## Installation
 
