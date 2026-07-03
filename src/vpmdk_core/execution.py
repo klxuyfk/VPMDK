@@ -250,6 +250,14 @@ def execute_md(
             observer.on_finish(atoms, result, context)
         return result
 
+    target_end = config.temperature if config.temperature_end is None else config.temperature_end
+    if mdalgo in (2, 4) and (config.temperature <= 0 or target_end <= 0):
+        raise RuntimeError(
+            "Nose-Hoover chain dynamics require positive TEBEG and TEEND "
+            "temperatures. Use MDALGO=0 for zero-temperature NVE-style dynamics "
+            "or choose a positive temperature ramp."
+        )
+
     if config.temperature <= 0:
         velocities = atoms.get_velocities()
         if velocities is None:
@@ -270,7 +278,6 @@ def execute_md(
         config.smass,
         config.thermostat_kwargs,
     )
-    target_end = config.temperature if config.temperature_end is None else config.temperature_end
     recorded_steps: list[RunStep] = []
 
     for step_index in range(1, config.steps + 1):

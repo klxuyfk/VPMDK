@@ -58,12 +58,107 @@ def _rescale_velocities(atoms, target_temperature: float) -> None:
     atoms.set_velocities(velocities * scaling)
 
 
-def _estimate_tdamp(smass: float | None, timestep: float) -> float:
+def _estimate_tdamp(
+    smass: float | None,
+    timestep: float,
+    thermostat_params: Dict[str, float] | None = None,
+) -> float:
     """Return Nose-Hoover time constant (in fs)."""
 
+    if thermostat_params is not None and "NHC_PERIOD" in thermostat_params:
+        nhc_period = float(thermostat_params["NHC_PERIOD"])
+        if nhc_period <= 0:
+            raise RuntimeError(
+                "NHC_PERIOD must be positive for VPMDK Nose-Hoover chain runs. "
+                "VASP uses NHC_PERIOD=0 to switch to NVE; use MDALGO=0 in VPMDK "
+                "for that mode."
+            )
+        return nhc_period * timestep
     if smass is None or smass == 0:
         return max(100.0 * timestep, timestep)
     return abs(smass)
+
+
+def _raise_nose_hoover_chain_temperature_error(reason: str) -> None:
+    """Raise a clear error for unsupported ASE Nose-Hoover chain updates."""
+
+    raise RuntimeError(
+        "Temperature ramping with Nose-Hoover chain requires ASE "
+        "NoseHooverChainNVT to provide set_temperature() or the expected "
+        "3.27-style internal thermostat state. "
+        f"{reason}"
+    )
+
+
+def _set_nose_hoover_chain_temperature(dyn, atoms, target_temperature: float) -> None:
+    """Update ASE NoseHooverChainNVT target temperature for a ramp step."""
+
+    root = _root()
+    target_temperature = float(target_temperature)
+    if target_temperature <= 0:
+        _raise_nose_hoover_chain_temperature_error(
+            "The requested target temperature is not positive; use a positive "
+            "TEBEG/TEEND range or a non-NHC integrator for zero-temperature runs."
+        )
+
+    thermostat = getattr(dyn, "_thermostat", None)
+    missing = []
+    if thermostat is None:
+        missing.append("_thermostat")
+    else:
+        for attr in ("_Q", "_kT", "_num_atoms_global", "_tdamp"):
+            if not hasattr(thermostat, attr):
+                missing.append(f"_thermostat.{attr}")
+    if not hasattr(dyn, "_p"):
+        missing.append("_p")
+    if missing:
+        _raise_nose_hoover_chain_temperature_error(
+            "Missing attributes: " + ", ".join(missing) + "."
+        )
+
+    q = thermostat._Q
+    try:
+        chain_length = len(q)
+    except TypeError:
+        _raise_nose_hoover_chain_temperature_error(
+            "_thermostat._Q is not an indexable thermostat-mass array."
+        )
+    if chain_length < 1:
+        _raise_nose_hoover_chain_temperature_error(
+            "_thermostat._Q is empty; at least one thermostat mass is required."
+        )
+
+    try:
+        num_atoms_global = float(thermostat._num_atoms_global)
+        tdamp = float(thermostat._tdamp)
+    except (TypeError, ValueError):
+        _raise_nose_hoover_chain_temperature_error(
+            "Could not interpret Nose-Hoover chain atom count or damping time."
+        )
+    if num_atoms_global <= 0 or tdamp <= 0:
+        _raise_nose_hoover_chain_temperature_error(
+            "Nose-Hoover chain atom count and damping time must be positive."
+        )
+
+    kT = root.units.kB * target_temperature
+    thermostat._kT = kT
+    first_mass = 3.0 * num_atoms_global * kT * tdamp**2
+    remaining_mass = kT * tdamp**2
+    try:
+        q[0] = first_mass
+        if chain_length > 1:
+            try:
+                q[1:] = remaining_mass
+            except TypeError:
+                for index in range(1, chain_length):
+                    q[index] = remaining_mass
+    except (TypeError, ValueError, IndexError):
+        _raise_nose_hoover_chain_temperature_error(
+            "_thermostat._Q is not a mutable thermostat-mass array."
+        )
+
+    root._rescale_velocities(atoms, target_temperature)
+    dyn._p = atoms.get_momenta()
 
 
 def _select_md_dynamics(
@@ -97,6 +192,22 @@ def _select_md_dynamics(
 
         return update
 
+    def make_nose_hoover_chain_update(dyn):
+        def update(temp: float) -> None:
+            setter = getattr(dyn, "set_temperature", None)
+            if setter is None:
+                root._set_nose_hoover_chain_temperature(dyn, atoms, temp)
+                return
+            try:
+                setter(temperature_K=temp)
+            except TypeError:
+                setter(temp)
+            root._rescale_velocities(atoms, temp)
+            if hasattr(dyn, "_p"):
+                dyn._p = atoms.get_momenta()
+
+        return update
+
     if mdalgo == 1:
         if root.Andersen is None:
             raise RuntimeError(
@@ -116,11 +227,23 @@ def _select_md_dynamics(
         return dyn, make_update(dyn)
 
     if mdalgo in (2, 4) and root.NoseHooverChainNVT is not None:
-        tdamp_fs = _estimate_tdamp(smass, timestep)
+        if initial_temperature <= 0:
+            raise RuntimeError(
+                "Nose-Hoover chain dynamics require a positive initial "
+                "temperature. Use a positive TEBEG/temperature value or "
+                "MDALGO=0 for zero-temperature velocity-Verlet dynamics."
+            )
+        tdamp_fs = _estimate_tdamp(smass, timestep, thermostat_params)
         if mdalgo == 2:
             chain_length = int(thermostat_params.get("NHC_NCHAINS", 1))
         else:
             chain_length = int(thermostat_params.get("NHC_NCHAINS", 3))
+        if chain_length < 1:
+            raise RuntimeError(
+                "NHC_NCHAINS must be at least 1 for VPMDK Nose-Hoover chain "
+                "runs. VASP uses NHC_NCHAINS=0 to switch off the thermostat; "
+                "use MDALGO=0 in VPMDK for NVE dynamics."
+            )
         dyn = root.NoseHooverChainNVT(
             atoms,
             timestep=timestep_ase,
@@ -130,7 +253,7 @@ def _select_md_dynamics(
             logfile="OUTCAR",
         )
 
-        return dyn, make_update(dyn)
+        return dyn, make_nose_hoover_chain_update(dyn)
     if mdalgo in (2, 4) and root.NoseHooverChainNVT is None and mdalgo != 0:
         raise RuntimeError(
             "Nose-Hoover thermostat requested but ase.md.nose_hoover_chain.NoseHooverChainNVT "

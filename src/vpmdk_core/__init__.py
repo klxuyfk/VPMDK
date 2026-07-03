@@ -549,7 +549,13 @@ from .observers import (
     coerce_observer,
 )
 from .runtime.common import _extract_numeric_attribute, _resolve_calculator, _working_directory
-from .runtime.md import _estimate_tdamp, _rescale_velocities, _select_md_dynamics, run_md
+from .runtime.md import (
+    _estimate_tdamp,
+    _rescale_velocities,
+    _select_md_dynamics,
+    _set_nose_hoover_chain_temperature,
+    run_md,
+)
 from .runtime.neb import (
     _collect_neb_image_results,
     _discover_neb_image_directories,

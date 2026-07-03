@@ -66,6 +66,7 @@ SUPPORTED_INCAR_TAGS = {
     "LANGEVIN_GAMMA",
     "CSVR_PERIOD",
     "NHC_NCHAINS",
+    "NHC_PERIOD",
     "MAGMOM",
     "IMAGES",
     "ICHAIN",
@@ -231,7 +232,13 @@ def _extract_thermostat_parameters(incar) -> Dict[str, float]:
     """Collect thermostat keywords from ``incar`` with validation."""
 
     params: Dict[str, float] = {}
-    keys = ("ANDERSEN_PROB", "LANGEVIN_GAMMA", "CSVR_PERIOD", "NHC_NCHAINS")
+    keys = (
+        "ANDERSEN_PROB",
+        "LANGEVIN_GAMMA",
+        "CSVR_PERIOD",
+        "NHC_NCHAINS",
+        "NHC_PERIOD",
+    )
     for key in keys:
         if hasattr(incar, "__contains__") and key in incar:
             value = incar[key]

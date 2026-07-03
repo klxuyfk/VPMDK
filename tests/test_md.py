@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 
+import numpy as np
 import pytest
 
 import vpmdk
@@ -324,6 +325,169 @@ def test_select_md_dynamics_langevin_missing_dependency(load_atoms, monkeypatch)
             smass=None,
             thermostat_params={},
         )
+
+
+def test_select_md_dynamics_nose_hoover_chain_updates_ramp_target(load_atoms, monkeypatch):
+    atoms = load_atoms()
+    atoms.set_velocities([[0.02, 0.0, 0.0] for _ in range(len(atoms))])
+    captured: dict[str, object] = {}
+
+    class DummyNoseHooverChain:
+        def __init__(
+            self,
+            atoms,
+            timestep,
+            temperature_K,
+            tdamp,
+            tchain,
+            logfile=None,
+        ):
+            self.atoms = atoms
+            self._p = atoms.get_momenta()
+            self._thermostat = type("Thermostat", (), {})()
+            self._thermostat._num_atoms_global = len(atoms)
+            self._thermostat._tdamp = tdamp
+            self._thermostat._kT = vpmdk.units.kB * temperature_K
+            self._thermostat._Q = np.zeros(tchain)
+            self._thermostat._Q[0] = (
+                3.0 * len(atoms) * self._thermostat._kT * tdamp**2
+            )
+            if tchain > 1:
+                self._thermostat._Q[1:] = self._thermostat._kT * tdamp**2
+            captured.update(
+                {
+                    "timestep": timestep,
+                    "temperature": temperature_K,
+                    "tdamp": tdamp,
+                    "tchain": tchain,
+                    "logfile": logfile,
+                }
+            )
+
+    monkeypatch.setattr(vpmdk, "NoseHooverChainNVT", DummyNoseHooverChain)
+
+    dyn, updater = vpmdk._select_md_dynamics(
+        atoms,
+        mdalgo=4,
+        timestep=1.5,
+        initial_temperature=300.0,
+        smass=None,
+        thermostat_params={"NHC_PERIOD": 20.0, "NHC_NCHAINS": 4},
+    )
+
+    assert isinstance(dyn, DummyNoseHooverChain)
+    assert captured["tchain"] == 4
+    assert captured["tdamp"] == pytest.approx(30.0 * vpmdk.units.fs)
+
+    updater(450.0)
+
+    kT = vpmdk.units.kB * 450.0
+    tdamp = captured["tdamp"]
+    assert dyn._thermostat._kT == pytest.approx(kT)
+    assert dyn._thermostat._Q[0] == pytest.approx(3.0 * len(atoms) * kT * tdamp**2)
+    assert dyn._thermostat._Q[1] == pytest.approx(kT * tdamp**2)
+    assert np.allclose(dyn._p, atoms.get_momenta())
+
+
+def test_select_md_dynamics_nose_hoover_chain_update_errors_when_ase_incompatible(
+    load_atoms,
+    monkeypatch,
+):
+    atoms = load_atoms()
+    atoms.set_velocities([[0.02, 0.0, 0.0] for _ in range(len(atoms))])
+
+    class IncompatibleNoseHooverChain:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(vpmdk, "NoseHooverChainNVT", IncompatibleNoseHooverChain)
+
+    _, updater = vpmdk._select_md_dynamics(
+        atoms,
+        mdalgo=4,
+        timestep=1.0,
+        initial_temperature=300.0,
+        smass=None,
+        thermostat_params={},
+    )
+
+    with pytest.raises(RuntimeError, match="Temperature ramping with Nose-Hoover chain"):
+        updater(350.0)
+
+
+def test_select_md_dynamics_nose_hoover_chain_rejects_disabled_chain(
+    load_atoms,
+    monkeypatch,
+):
+    atoms = load_atoms()
+    monkeypatch.setattr(
+        vpmdk,
+        "NoseHooverChainNVT",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("should reject before creating dynamics")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="NHC_NCHAINS must be at least 1"):
+        vpmdk._select_md_dynamics(
+            atoms,
+            mdalgo=4,
+            timestep=1.0,
+            initial_temperature=300.0,
+            smass=None,
+            thermostat_params={"NHC_NCHAINS": 0},
+        )
+
+
+def test_select_md_dynamics_nose_hoover_chain_rejects_nonpositive_initial_temperature(
+    load_atoms,
+    monkeypatch,
+):
+    atoms = load_atoms()
+    monkeypatch.setattr(
+        vpmdk,
+        "NoseHooverChainNVT",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("should reject before creating dynamics")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="positive initial"):
+        vpmdk._select_md_dynamics(
+            atoms,
+            mdalgo=4,
+            timestep=1.0,
+            initial_temperature=0.0,
+            smass=None,
+            thermostat_params={},
+        )
+
+
+def test_public_md_nose_hoover_chain_rejects_nonpositive_ramp_target(load_atoms):
+    atoms = load_atoms()
+
+    with pytest.raises(RuntimeError, match="positive TEBEG and TEEND"):
+        vpmdk.md(
+            atoms,
+            calculator=DummyCalculator(),
+            steps=2,
+            temperature=300.0,
+            thermostat="nose_hoover_chain",
+            temperature_end=0.0,
+        )
+
+
+def test_estimate_tdamp_uses_vasp_style_nhc_period():
+    assert vpmdk._estimate_tdamp(
+        None,
+        2.0,
+        {"NHC_PERIOD": 40.0},
+    ) == pytest.approx(80.0)
+
+
+def test_estimate_tdamp_rejects_disabled_nhc_period():
+    with pytest.raises(RuntimeError, match="NHC_PERIOD must be positive"):
+        vpmdk._estimate_tdamp(None, 2.0, {"NHC_PERIOD": 0.0})
 
 
 def test_select_md_dynamics_nose_hoover_missing_dependency(load_atoms, monkeypatch):

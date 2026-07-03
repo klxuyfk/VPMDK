@@ -145,9 +145,15 @@ MD mode uses ASE molecular-dynamics drivers, selected by `MDALGO`:
 
 Additional behavior:
 
-- `TEEND` enables linear temperature ramping from `TEBEG`
+- `TEEND` enables linear temperature ramping from `TEBEG`, including
+  Nose-Hoover chain runs when the installed ASE exposes compatible thermostat
+  state
 - `SMASS > 0` upgrades default `MDALGO=0` to Nose-Hoover (`2`)
 - `SMASS < 0` upgrades default `MDALGO=0` to Langevin (`3`)
+- `NHC_PERIOD` sets the Nose-Hoover chain damping time in MD steps, so VPMDK
+  passes `NHC_PERIOD * POTIM` as the ASE damping time
+- `NHC_NCHAINS=0` is VASP's NVE switch-off mode; use `MDALGO=0` in VPMDK
+  instead
 - `XDATCAR` is written for advanced MD steps
 - `WRITE_LAMMPS_TRAJ=1` writes a LAMMPS text trajectory
 
@@ -247,7 +253,7 @@ You should expect warnings for:
   output is disabled
 - malformed optional numeric tags that are parsed through warning-tolerant
   helpers, such as `PSTRESS`, `TEBEG`, `TEEND`, `SMASS`, `ANDERSEN_PROB`,
-  `LANGEVIN_GAMMA`, `CSVR_PERIOD`, `NHC_NCHAINS`, or `IMAGES`
+  `LANGEVIN_GAMMA`, `CSVR_PERIOD`, `NHC_NCHAINS`, `NHC_PERIOD`, or `IMAGES`
 
 Core execution-control tags such as `NSW`, `IBRION`, `EDIFFG`, `POTIM`,
 `MDALGO`, and `ISIF` are not warning-tolerant in the same way; malformed values
