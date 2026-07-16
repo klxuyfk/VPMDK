@@ -2198,6 +2198,7 @@ def test_main_passes_md_parameters_to_run_md(tmp_path: Path, prepare_inputs):
             "MDALGO": "3",
             "SMASS": "-2.5",
             "LANGEVIN_GAMMA": "15.0",
+            "NHC_PERIOD": "80",
         },
     )
 
@@ -2252,6 +2253,7 @@ def test_main_passes_md_parameters_to_run_md(tmp_path: Path, prepare_inputs):
     assert seen["teend"] == 400
     assert seen["smass"] == -2.5
     assert seen["thermostat"].get("LANGEVIN_GAMMA") == 15.0
+    assert seen["thermostat"].get("NHC_PERIOD") == 80.0
     assert seen["write_lammps_traj"] is False
     assert seen["lammps_traj_interval"] == 1
     assert seen["oszicar_pseudo_scf"] is False

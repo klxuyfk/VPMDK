@@ -25,6 +25,7 @@ Supported tags:
 - `LANGEVIN_GAMMA`
 - `CSVR_PERIOD`
 - `NHC_NCHAINS`
+- `NHC_PERIOD`
 - `MAGMOM`
 - `IMAGES`
 - `ICHAIN`
@@ -71,6 +72,7 @@ The parsed `IncarSettings` defaults are:
 | `LANGEVIN_GAMMA` | Langevin friction in 1/ps | used only with `MDALGO=3` |
 | `CSVR_PERIOD` | Bussi relaxation time in fs | used only with `MDALGO=5` |
 | `NHC_NCHAINS` | Nose-Hoover chain length | used with `MDALGO=2` or `4` |
+| `NHC_PERIOD` | Nose-Hoover chain damping period in MD steps | VPMDK uses `NHC_PERIOD * POTIM` as the ASE damping time |
 | `MAGMOM` | Initial magnetic moments | VASP-like parsing including `N*value` |
 | `IMAGES` | NEB image count hint | also triggers NEB-like mode detection |
 | `ICHAIN` | VTST chain method selector | only `0`/unset NEB is implemented |
@@ -137,6 +139,7 @@ Recognized thermostat-only tags:
 - `LANGEVIN_GAMMA`
 - `CSVR_PERIOD`
 - `NHC_NCHAINS`
+- `NHC_PERIOD`
 
 Invalid values are ignored with warnings rather than crashing the entire run.
 

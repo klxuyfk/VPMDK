@@ -86,6 +86,11 @@ Special semantics:
 - `steps=0` is valid and behaves like a single-point evaluation of the current
   structure without advancing dynamics
 - `advanced=False` marks that fallback step
+- `nose_hoover` and `nose_hoover_chain` require positive `temperature` and
+  `temperature_end` values
+- `thermostat_kwargs` accepts thermostat-specific keys such as
+  `ANDERSEN_PROB`, `LANGEVIN_GAMMA`, `CSVR_PERIOD`, `NHC_NCHAINS`, and
+  `NHC_PERIOD`
 
 ## Charge-Density Functions
 
@@ -189,6 +194,13 @@ Computed property:
 
 - `effective_mdalgo`: explicit `mdalgo` when set, otherwise the value derived
   from `thermostat`
+
+Nose-Hoover chain notes:
+
+- `NHC_PERIOD` is interpreted in MD steps and multiplied by `timestep_fs`
+  before ASE receives the damping time
+- `NHC_NCHAINS=0` is VASP's NVE switch-off mode; use `thermostat="nve"` or
+  `MDALGO=0` instead
 
 ### `vpmdk.compat.vasp.VaspCompatConfig`
 

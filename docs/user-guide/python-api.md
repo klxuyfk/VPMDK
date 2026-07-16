@@ -200,8 +200,13 @@ MD-specific semantics:
 
 - `steps=0` is allowed and returns one non-advanced fallback step
 - zero-step MD does not sample velocities or create an MD driver
-- when `steps > 0` and `temperature <= 0`, velocities are zeroed rather than
-  resampled
+- when `steps > 0` and `temperature <= 0`, non-Nose-Hoover dynamics zero
+  velocities rather than resampling them
+- `nose_hoover` and `nose_hoover_chain` require positive `temperature` and
+  `temperature_end` values
+- Nose-Hoover chain keyword arguments include VASP-style `NHC_NCHAINS` and
+  `NHC_PERIOD`; `NHC_PERIOD` is interpreted in MD steps and multiplied by the
+  time step before ASE receives the damping time
 - advanced VASP metadata such as `MDALGO` lives under `vpmdk.compat.vasp.VaspMDConfig`
 
 ## Backends and Structure-Derived Metadata
