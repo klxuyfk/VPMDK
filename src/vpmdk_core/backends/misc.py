@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, List
 
 
 def _root():
@@ -68,12 +68,13 @@ def _build_matlantis_calculator(bcar_tags: Dict[str, str]):
             "Matlantis calculator not available. Install pfp-api-client and dependencies."
         )
 
-    model_version = (
+    model_reference = root._resolve_backend_model_reference(
+        "MATLANTIS",
         bcar_tags.get("MATLANTIS_MODEL_VERSION")
         or bcar_tags.get("MODEL_VERSION")
-        or bcar_tags.get("MODEL")
-        or "v8.0.0"
+        or bcar_tags.get("MODEL"),
     )
+    model_version = str(model_reference.value)
     priority_raw = bcar_tags.get("MATLANTIS_PRIORITY") or bcar_tags.get("PRIORITY")
     priority = 50 if priority_raw is None else root._coerce_int_tag(priority_raw, "MATLANTIS_PRIORITY")
     calc_mode_value = bcar_tags.get("MATLANTIS_CALC_MODE") or bcar_tags.get("CALC_MODE")
@@ -105,14 +106,27 @@ def _build_orb_calculator(bcar_tags: Dict[str, str]):
     precision = bcar_tags.get("ORB_PRECISION") or "float32-high"
     compile_value = bcar_tags.get("ORB_COMPILE")
     compile_flag = None if compile_value is None else root._coerce_bool_tag(compile_value, "ORB_COMPILE")
-    weights_path = bcar_tags.get("MODEL")
+    weights_reference = root._resolve_backend_model_reference(
+        "ORB", bcar_tags.get("MODEL")
+    )
+    # An explicit MODEL (a local checkpoint or a remote URI) overrides the
+    # factory's bundled default weights; an omitted MODEL keeps that default.
+    weights_path = (
+        None
+        if weights_reference.kind is root.ModelReferenceKind.DEFAULT
+        else weights_reference.value
+    )
 
-    model = model_factory(
-        weights_path=weights_path or None,
-        device=device,
-        precision=precision,
-        compile=compile_flag,
-        train=False,
+    model = root._require_loaded_model(
+        model_factory(
+            weights_path=weights_path or None,
+            device=device,
+            precision=precision,
+            compile=compile_flag,
+            train=False,
+        ),
+        backend_name="ORB",
+        model=str(model_name),
     )
 
     return root.ORBCalculator(model, device=device)
@@ -128,45 +142,125 @@ def _build_mattersim_calculator(bcar_tags: Dict[str, str]):
         )
 
     device = root._resolve_device(bcar_tags.get("DEVICE"))
-    kwargs: Dict[str, object] = {}
-    if device is not None and root._callable_supports_parameter(
-        root.MatterSimCalculator, "device"
-    ):
-        kwargs["device"] = device
-
     compute_stress = root._parse_optional_bool_tag(
         bcar_tags, "MATTERSIM_COMPUTE_STRESS"
     )
-    if compute_stress is not None and root._callable_supports_parameter(
-        root.MatterSimCalculator, "compute_stress"
-    ):
-        kwargs["compute_stress"] = compute_stress
-
     stress_weight = root._parse_optional_float(
         bcar_tags.get("MATTERSIM_STRESS_WEIGHT"), key="MATTERSIM_STRESS_WEIGHT"
     )
-    if stress_weight is not None and root._callable_supports_parameter(
-        root.MatterSimCalculator, "stress_weight"
-    ):
-        kwargs["stress_weight"] = stress_weight
 
-    model_value = bcar_tags.get("MODEL")
-    if model_value and os.path.exists(model_value):
+    def physics_kwarg_is_declared(callable_obj, key: str) -> bool:
+        """Whether a physics kwarg verifiably reaches a DECLARED parameter.
+
+        Requiring ``callable_obj`` itself to declare the parameter is too strict
+        for the real upstream shape: ``MatterSimCalculator.from_checkpoint(
+        load_path, *, device=..., **kwargs)`` FORWARDS ``**kwargs`` to
+        ``__init__``, which is where compute_stress/stress_weight are declared.
+        Rejecting that hard-failed a documented, previously-working configuration.
+
+        So accept exactly one forwarding hop -- and only when the target really
+        declares the parameter. A bare ``**kwargs`` with nowhere to land is still
+        rejected, because there the value would be silently swallowed and the run
+        would quietly compute different physics (the case this gate exists for).
+        """
+
+        if root._callable_declares_parameter(callable_obj, key):
+            return True
+        if callable_obj is root.MatterSimCalculator:
+            # The constructor itself: no further hop to inspect, so a **kwargs-only
+            # signature genuinely cannot accept the tag.
+            return False
+        return root._callable_supports_parameter(
+            callable_obj, key
+        ) and root._callable_declares_parameter(root.MatterSimCalculator, key)
+
+    def optional_kwargs(callable_obj, description: str) -> Dict[str, object]:
+        """Return supported optional kwargs for whichever loader is used.
+
+        A physics tag comes only from an explicit BCAR entry, so dropping one
+        silently changes what the run computes and must fail instead. DEVICE is
+        resolved automatically and only affects placement, so a loader that
+        picks its own device may still ignore it.
+        """
+
+        selected: Dict[str, object] = {}
+        unsupported: List[str] = []
+        for key, tag, value, physics in (
+            ("device", "DEVICE", device, False),
+            ("compute_stress", "MATTERSIM_COMPUTE_STRESS", compute_stress, True),
+            ("stress_weight", "MATTERSIM_STRESS_WEIGHT", stress_weight, True),
+        ):
+            if value is None:
+                continue
+            # Physics tags (compute_stress/stress_weight) MUST reach an EXPLICITLY
+            # declared parameter -- directly or through one verified forwarding
+            # hop (see physics_kwarg_is_declared). A bare ``**kwargs`` with no
+            # declaring target would silently swallow them, computing without
+            # stress and giving no error, so that still raises. DEVICE is fine to
+            # forward through ``**kwargs``, so it keeps the looser check.
+            accepts = (
+                physics_kwarg_is_declared(callable_obj, key)
+                if physics
+                else root._callable_supports_parameter(callable_obj, key)
+            )
+            if accepts:
+                selected[key] = value
+            elif physics:
+                unsupported.append(tag)
+        if unsupported:
+            raise RuntimeError(
+                f"The installed {description} does not accept "
+                f"{', '.join(unsupported)}; remove the tag(s) or install a "
+                "MatterSim release that supports them."
+            )
+        return selected
+
+    model_reference = root._resolve_backend_model_reference(
+        "MATTERSIM", bcar_tags.get("MODEL")
+    )
+    if model_reference.kind is not root.ModelReferenceKind.DEFAULT:
+        model_value = str(model_reference.value)
         from_checkpoint = getattr(root.MatterSimCalculator, "from_checkpoint", None)
         if callable(from_checkpoint):
-            if device is not None and root._callable_supports_parameter(
-                from_checkpoint, "device"
-            ):
-                kwargs.setdefault("device", device)
-            return from_checkpoint(model_value, **kwargs)
-        return root.MatterSimCalculator(model_value, **kwargs)
-    if model_value and root._looks_like_filesystem_path(
-        model_value,
-        suffixes=(".pt", ".pth", ".ckpt"),
-    ):
-        raise FileNotFoundError(f"MatterSim model not found: {model_value}")
+            checkpoint_kwargs = optional_kwargs(
+                from_checkpoint, "MatterSimCalculator.from_checkpoint"
+            )
+            calculator = from_checkpoint(model_value, **checkpoint_kwargs)
+            return root._require_loaded_model(
+                calculator, backend_name="MatterSim", model=model_value
+            )
 
-    return root.MatterSimCalculator(**kwargs)
+        if root._callable_declares_parameter(
+            root.MatterSimCalculator, "load_path"
+        ):
+            # Require an explicit ``load_path`` parameter. A ``**kwargs``-only
+            # signature would silently absorb and ignore ``load_path``, loading
+            # the default model instead of the requested checkpoint.
+            calculator = root.MatterSimCalculator(
+                load_path=model_value,
+                **optional_kwargs(root.MatterSimCalculator, "MatterSimCalculator"),
+            )
+            return root._require_loaded_model(
+                calculator, backend_name="MatterSim", model=model_value
+            )
+
+        if model_reference.kind is root.ModelReferenceKind.LOCAL_PATH:
+            calculator = root.MatterSimCalculator(
+                model_value,
+                **optional_kwargs(root.MatterSimCalculator, "MatterSimCalculator"),
+            )
+            return root._require_loaded_model(
+                calculator, backend_name="MatterSim", model=model_value
+            )
+
+        raise RuntimeError(
+            "The installed MatterSimCalculator cannot load named MODEL "
+            f"{model_value!r}: from_checkpoint and load_path are unavailable."
+        )
+
+    return root.MatterSimCalculator(
+        **optional_kwargs(root.MatterSimCalculator, "MatterSimCalculator")
+    )
 
 
 def _normalize_upet_neighborlist_device(
@@ -349,12 +443,10 @@ def _build_upet_calculator(bcar_tags: Dict[str, str]):
             "UPET calculator not available. Install upet and dependencies."
         )
 
-    model_value = bcar_tags.get("MODEL")
-    if not model_value:
-        raise ValueError(
-            "UPET requires MODEL set to a checkpoint path or a named model such as "
-            "pet-oam-xl."
-        )
+    model_reference = root._resolve_backend_model_reference(
+        "UPET", bcar_tags.get("MODEL")
+    )
+    model_value = str(model_reference.value)
 
     device = root._resolve_device(bcar_tags.get("DEVICE"))
     kwargs: Dict[str, object] = {"device": device}
@@ -373,12 +465,8 @@ def _build_upet_calculator(bcar_tags: Dict[str, str]):
             non_conservative_value, "UPET_NON_CONSERVATIVE"
         )
 
-    if os.path.exists(model_value):
+    if model_reference.kind is root.ModelReferenceKind.LOCAL_PATH:
         calculator = root.UPETCalculator(checkpoint_path=model_value, **kwargs)
-    elif root._looks_like_filesystem_path(
-        model_value, suffixes=(".ckpt", ".pt", ".pth")
-    ):
-        raise FileNotFoundError(f"UPET model not found: {model_value}")
     else:
         calculator = root.UPETCalculator(model=model_value, **kwargs)
 
@@ -405,29 +493,15 @@ def _build_equflash_calculator(bcar_tags: Dict[str, str]):
         )
 
     model_value = bcar_tags.get("MODEL")
-    if not model_value:
-        raise ValueError(
-            "EquFlash requires MODEL pointing to a local SevenNet/EquFlash checkpoint. "
-            "The public matbench-discovery metadata for equflash-29M-oam lists "
-            "checkpoint_url: missing."
-        )
     if _is_equflash_unreleased_named_model(model_value):
         raise ValueError(
             "EquFlash named model 'equflash-29M-oam' has public metadata but no "
             "released checkpoint. Set MODEL to a local SevenNet/EquFlash checkpoint."
         )
-    if not os.path.exists(model_value):
-        if root._looks_like_filesystem_path(
-            model_value,
-            suffixes=(".pt", ".pth", ".ckpt", ".tar"),
-        ):
-            raise FileNotFoundError(f"EquFlash model not found: {model_value}")
-        raise ValueError(
-            "EquFlash currently requires MODEL pointing to a local SevenNet/EquFlash "
-            "checkpoint file."
-        )
+    model_reference = root._resolve_backend_model_reference("EQUFLASH", model_value)
 
     tags = dict(bcar_tags)
+    tags["MODEL"] = str(model_reference.value)
     tags.setdefault("DEVICE", "cuda")
     tags.setdefault("SEVENNET_FILE_TYPE", "checkpoint")
     return root._build_sevennet_family_calculator(tags, force_flash=True)
@@ -442,17 +516,13 @@ def _build_tace_calculator(bcar_tags: Dict[str, str]):
             "TACE calculator not available. Install TACE and dependencies."
         )
 
-    model_value = bcar_tags.get("MODEL")
-    if not model_value:
-        raise ValueError(
-            "TACE requires MODEL set to a checkpoint path or a named model such as TACE-v1-OMat24-M."
-        )
+    model_reference = root._resolve_backend_model_reference(
+        "TACE", bcar_tags.get("MODEL")
+    )
+    model_value = str(model_reference.value)
 
     model_path = model_value
-    if not os.path.exists(model_value):
-        if root._looks_like_filesystem_path(model_value, suffixes=(".ckpt", ".pt", ".pth")):
-            raise FileNotFoundError(f"TACE model not found: {model_value}")
-
+    if model_reference.kind is root.ModelReferenceKind.NAMED_MODEL:
         if root.tace_foundations is None:
             raise RuntimeError(
                 "TACE named-model registry is not available. Install TACE with foundation-model "
@@ -497,12 +567,60 @@ def _build_tace_calculator(bcar_tags: Dict[str, str]):
 
     if level_tag is not None:
         level_value = root._coerce_int_tag(bcar_tags[level_tag], level_tag)
-        if root._callable_supports_parameter(root.TACEAseCalc, "fidelity_idx"):
+        # The fidelity selector picks WHICH DFT level the model predicts, so
+        # dropping it silently changes the physics of the run. It must therefore
+        # reach an EXPLICITLY declared parameter: _callable_supports_parameter is
+        # True for a bare ``**kwargs`` signature, which would absorb and ignore
+        # the value and quietly compute with fidelity head 0. Use
+        # _callable_declares_parameter (False for ``**kwargs``) and raise when
+        # neither spelling exists -- the previous if/elif had no ``else``, so an
+        # unsupported build discarded the tag outright. Mirrors the MatterSim
+        # physics-tag guard in this module.
+        if root._callable_declares_parameter(root.TACEAseCalc, "fidelity_idx"):
             kwargs["fidelity_idx"] = level_value
-        elif root._callable_supports_parameter(root.TACEAseCalc, "level"):
+        elif root._callable_declares_parameter(root.TACEAseCalc, "level"):
             kwargs["level"] = level_value
+        else:
+            raise RuntimeError(
+                f"The installed TACE calculator does not accept {level_tag}"
+                " (no fidelity_idx/level parameter); remove the tag or install a"
+                " TACE release that supports selecting the fidelity level."
+            )
 
     return root.TACEAseCalc(**kwargs)
+
+
+def _resolve_grace_foundation_model(model_value: str | None = None) -> str | None:
+    """Return the foundation model GRACE would select for an optional name."""
+
+    root = _root()
+    available_models = list(root.GRACE_MODEL_NAMES)
+    if not available_models:
+        return None
+    fallback = (
+        root.DEFAULT_GRACE_MODEL
+        if root.DEFAULT_GRACE_MODEL in available_models
+        else available_models[0]
+    )
+    if model_value:
+        normalized = str(model_value).casefold()
+        return next(
+            (candidate for candidate in available_models if candidate.casefold() == normalized),
+            None,
+        )
+    return fallback
+
+
+# One constant shared with the resident server's request path: the resident
+# builder never re-runs per request, so the server synthesizes this exact
+# warning for a DEVICE-carrying GRACE request to preserve one-shot output
+# equivalence.
+_GRACE_DEVICE_IGNORED_WARNING = (
+    "Warning: GRACE ignores the DEVICE tag; device placement is "
+    "decided entirely by the installed TensorFlow build. GPU "
+    "execution requires a CUDA-enabled tensorflow compatible with "
+    "the local driver (tensorpotential requires tensorflow<2.20)."
+)
 
 
 def _build_grace_calculator(bcar_tags: Dict[str, str]):
@@ -513,6 +631,13 @@ def _build_grace_calculator(bcar_tags: Dict[str, str]):
         raise RuntimeError(
             "TPCalculator not available. Install grace-tensorpotential and dependencies."
         )
+
+    if str(bcar_tags.get("DEVICE") or "").strip():
+        # TPCalculator/grace_fm take no device argument at all: placement is
+        # decided by the installed TensorFlow build, so a user writing
+        # DEVICE=cuda got silence and, on a TF build without working CUDA
+        # support, CPU execution they believed was GPU.
+        print(_GRACE_DEVICE_IGNORED_WARNING)
 
     grace_kwargs: Dict[str, object] = {}
 
@@ -542,29 +667,60 @@ def _build_grace_calculator(bcar_tags: Dict[str, str]):
     if float_dtype:
         grace_kwargs["float_dtype"] = float_dtype
 
-    model_value = bcar_tags.get("MODEL")
-    if model_value and os.path.exists(model_value):
-        return root.TPCalculator(model_value, **grace_kwargs)
+    model_reference = root._resolve_backend_model_reference(
+        "GRACE", bcar_tags.get("MODEL")
+    )
+    requested_model = str(bcar_tags.get("MODEL") or "").strip()
+    if root._grace_substitutes_unknown_model(root, model_reference, requested_model):
+        # Report the substitution once, at construction time. The shared
+        # resolver stays side-effect free because the server calls it per
+        # request for identity comparison. The same predicate gates the resident
+        # server's request warning so the two cannot drift.
+        print(
+            f"Warning: Unknown GRACE model '{requested_model}', using default "
+            f"{model_reference.value} instead."
+        )
+    if model_reference.kind is root.ModelReferenceKind.LOCAL_PATH:
+        calculator = root.TPCalculator(model_reference.value, **grace_kwargs)
+        return root._require_loaded_model(
+            calculator, backend_name="GRACE", model=str(model_reference.value)
+        )
 
-    available_models = root.GRACE_MODEL_NAMES
-    default_model = root.DEFAULT_GRACE_MODEL
-    if available_models:
-        default_model = default_model if default_model in available_models else available_models[0]
-
-    if root.grace_fm is not None and available_models:
-        selected = model_value or default_model
-        if selected not in available_models:
-            print(
-                f"Warning: Unknown GRACE model '{selected}', using default {default_model} instead."
+    selected = model_reference.value
+    if root.grace_fm is not None and selected is not None:
+        if root._resolve_grace_foundation_model(str(selected)) is None:
+            # The selected model could not be validated against the foundation
+            # registry (e.g. an empty MODELS_NAME_LIST via version skew). Do not
+            # forward an unverified name to grace_fm, which may silently load a
+            # substituted/default model; fail clearly per the strict
+            # no-silent-wrong-model contract. A local checkpoint path still works.
+            if model_reference.explicit:
+                raise FileNotFoundError(f"GRACE model not found: {selected}")
+            # An omitted MODEL fell back to the default constant, which cannot be
+            # validated against the empty registry either.
+            raise RuntimeError(
+                "GRACE has no enumerable foundation models; set MODEL to a local "
+                "checkpoint path or install a TensorPotential release that lists "
+                "its foundation models."
             )
-            selected = default_model
-        return root.grace_fm(selected, **grace_kwargs)
+        calculator = root.grace_fm(str(selected), **grace_kwargs)
+        return root._require_loaded_model(
+            calculator, backend_name="GRACE", model=str(selected)
+        )
 
-    if model_value:
-        raise FileNotFoundError(f"GRACE model not found: {model_value}")
+    if model_reference.explicit:
+        # An explicitly named foundation model cannot be loaded without the
+        # TensorPotential foundation loader. Preserve the FileNotFoundError
+        # contract so callers distinguishing a missing model from a generic
+        # failure (and exception-to-exit-code mappings) keep working.
+        raise FileNotFoundError(f"GRACE model not found: {selected}")
 
+    # No MODEL was supplied and the foundation loader is unavailable, so there
+    # is no default to fall back on. This is an environment problem, not a
+    # missing named model, hence a RuntimeError rather than FileNotFoundError.
     raise RuntimeError(
-        "GRACE calculator requires a MODEL path or available foundation models (grace_fm)."
+        "GRACE calculator requires a MODEL path or an available TensorPotential "
+        "foundation loader (grace_fm)."
     )
 
 
@@ -577,11 +733,10 @@ def _build_deepmd_calculator(bcar_tags: Dict[str, str], structure=None):
             "DeePMD-kit calculator not available. Install deepmd-kit and dependencies."
         )
 
-    model_path = bcar_tags.get("MODEL")
-    if not model_path:
-        raise ValueError("DeePMD-kit requires MODEL pointing to a frozen model file.")
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"DeePMD-kit model not found: {model_path}")
+    model_reference = root._resolve_backend_model_reference(
+        "DEEPMD", bcar_tags.get("MODEL")
+    )
+    model_path = str(model_reference.value)
 
     type_map_value = bcar_tags.get("DEEPMD_TYPE_MAP")
     type_map: List[str] = []

@@ -85,6 +85,24 @@ _CHARGE_MODEL_CONFIG_TAGS = {
     "CHARGE_SPIN": ("spin", bool),
 }
 
+# The DeePCDP option tags _charge_density_options_from_bcar reads
+# INDIVIDUALLY (not via a dict): kept as a set beside those reads so the
+# BCAR vocabulary harvest (_known_bcar_tags) cannot drift from the consumers
+# again -- the R161 harvest missed exactly these eight and falsely warned
+# "not recognized" for a documented, fully-consumed configuration.
+_DEEPCDP_OPTION_TAGS = frozenset(
+    {
+        "CHARGE_DEEPCDP_METADATA",
+        "CHARGE_DEEPCDP_SPECIES",
+        "CHARGE_DEEPCDP_RCUT",
+        "CHARGE_DEEPCDP_NMAX",
+        "CHARGE_DEEPCDP_LMAX",
+        "CHARGE_DEEPCDP_SIGMA",
+        "CHARGE_DEEPCDP_PERIODIC",
+        "CHARGE_DEEPCDP_ACTIVATION",
+    }
+)
+
 _DEEPCDP_WEIGHTING_KEYS = {
     "CHARGE_DEEPCDP_WEIGHTING_FUNCTION": ("function", str),
     "CHARGE_DEEPCDP_WEIGHTING_R0": ("r0", float),
@@ -178,6 +196,11 @@ def _coerce_csv_tokens(value: Any, *, key: str) -> list[str]:
     return result
 
 
+# Derived from the alias table's values so a new backend cannot drift out of the
+# input-phase validation below.
+_SUPPORTED_CHARGE_BACKENDS = frozenset(_CHARGE_BACKEND_ALIASES.values())
+
+
 def _normalize_charge_backend_name(name: str | None) -> str:
     candidate = "CHARGE3NET" if name is None else str(name).strip().upper()
     if not candidate:
@@ -228,13 +251,64 @@ def _largest_prime_factor(value: int) -> int:
     return max(largest, n)
 
 
+# Ceiling for a single FFT-grid axis. Realistic grids stay in the low
+# thousands (a 1000 A cell at ENCUT=1000 needs ~8000); 100000 per axis is
+# >10x beyond that while keeping the smooth-number search below trivially
+# fast. Without a bound, a finite-but-absurd ENCUT (1e30 passes every
+# is-it-a-number check) pushed `minimum` to ~1e17 and the search into a
+# multi-year spin: _largest_prime_factor trial-divides to sqrt(candidate),
+# so each probe alone took hours and a server worker wedged permanently on
+# one request. Same class as _MAX_REQUEST_TIMEOUT: values handed to
+# unbounded machinery must reject huge-but-finite, not just inf/nan.
+_MAX_FFT_GRID_POINTS_PER_AXIS = 100_000
+
+# The per-axis cap alone is not enough: NGXF=NGYF=NGZF=99999 is per-axis legal
+# but a 1e15-point (8 PB) grid, which passed the input phase and then died at
+# CHGCAR-write time as a "retryable" MemoryError after the whole calculation
+# was paid for. Bound the RESOURCE (total points), not just the parameter
+# axis. 1e9 (~1000^3) is >10x beyond the largest realistic fine grid
+# (~500^3) while still allocatable.
+_MAX_FFT_GRID_TOTAL_POINTS = 1_000_000_000
+
+
 def _next_even_smooth_number(minimum: float) -> int:
-    candidate = max(2, int(np.ceil(float(minimum))))
+    numeric = float(minimum)
+    if not np.isfinite(numeric) or numeric > _MAX_FFT_GRID_POINTS_PER_AXIS:
+        raise ValueError(
+            f"CHGCAR grid dimension {numeric!r} exceeds the supported maximum "
+            f"of {_MAX_FFT_GRID_POINTS_PER_AXIS} points per axis; check ENCUT "
+            "and the cell size."
+        )
+    candidate = max(2, int(np.ceil(numeric)))
     if candidate % 2:
         candidate += 1
     while _largest_prime_factor(candidate) > 7:
         candidate += 2
     return candidate
+
+
+def _validated_fft_grid_shape(shape: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Reject grids no machine can hold, so they classify as input errors.
+
+    An explicit NGXF=1e12 sails through _coerce_positive_int, and the failure
+    then happens at CHGCAR-write time as a MemoryError -- a "retryable"
+    calculation failure (exit 2) that a batch driver resubmits forever. The
+    grid is pure input, so judge it at input time (exit 1).
+    """
+
+    for count in shape:
+        if count > _MAX_FFT_GRID_POINTS_PER_AXIS:
+            raise ValueError(
+                f"CHGCAR grid {shape!r} exceeds the supported maximum of "
+                f"{_MAX_FFT_GRID_POINTS_PER_AXIS} points per axis."
+            )
+    total = int(shape[0]) * int(shape[1]) * int(shape[2])
+    if total > _MAX_FFT_GRID_TOTAL_POINTS:
+        raise ValueError(
+            f"CHGCAR grid {shape!r} has {total} points, exceeding the "
+            f"supported maximum of {_MAX_FFT_GRID_TOTAL_POINTS} total points."
+        )
+    return shape
 
 
 def _get_reference_cell(reference) -> np.ndarray:
@@ -269,10 +343,12 @@ def determine_vasp_fft_grid(reference, incar: Mapping[str, Any]) -> tuple[int, i
         for tag in ("NGXF", "NGYF", "NGZF")
     ]
     if all(value is not None for value in explicit_fine):
-        return tuple(
-            _coerce_positive_int(value, key=tag)
-            for tag, value in zip(("NGXF", "NGYF", "NGZF"), explicit_fine, strict=False)
-        )  # type: ignore[return-value]
+        return _validated_fft_grid_shape(
+            tuple(
+                _coerce_positive_int(value, key=tag)
+                for tag, value in zip(("NGXF", "NGYF", "NGZF"), explicit_fine, strict=False)
+            )
+        )
 
     explicit_coarse = [
         _coerce_optional_float(_coerce_mapping_value(incar, tag), key=tag)
@@ -319,16 +395,37 @@ def determine_vasp_fft_grid(reference, incar: Mapping[str, Any]) -> tuple[int, i
                 explicit,
                 key=("NGXF", "NGYF", "NGZF")[index],
             )
-    return int(fine_shape[0]), int(fine_shape[1]), int(fine_shape[2])
+    return _validated_fft_grid_shape(
+        (int(fine_shape[0]), int(fine_shape[1]), int(fine_shape[2]))
+    )
 
 
 def _charge_density_options_from_bcar(bcar_tags: Mapping[str, Any]) -> dict[str, Any]:
     root = _root()
+    requested_backend = bcar_tags.get(
+        "CHARGE_MLP",
+        bcar_tags.get("CHARGE_BACKEND", "CHARGE3NET"),
+    )
+    # Validate the backend SELECTOR here, in the input phase. Every other CHARGE_*
+    # value is validated in this function (so run_workdir's _read_workdir_input
+    # reports a bad one as input_error / exit 1), but the selector was only
+    # rejected later, at dispatch inside predict_charge_density -- after the
+    # single point had already completed and written OUTCAR/CONTCAR. A typo like
+    # CHARGE_MLP=CHARGE3NE therefore escaped as a plain ValueError and server mode
+    # reported calculation_error (exit 2), which SERVER_MODE_SPEC 2.5 documents as
+    # RETRYABLE, so a retry driver resubmits a permanently broken BCAR forever.
+    # _normalize_charge_backend_name is a pure alias lookup that never raises, so
+    # the check has to be explicit. The dispatch-time raise stays as defense for
+    # direct API callers.
+    normalized_backend = root._normalize_charge_backend_name(requested_backend)
+    if normalized_backend not in root._SUPPORTED_CHARGE_BACKENDS:
+        supported = ", ".join(sorted(root._SUPPORTED_CHARGE_BACKENDS))
+        raise ValueError(
+            f"Unsupported charge-density backend: {normalized_backend}. "
+            f"Supported: {supported}"
+        )
     options: dict[str, Any] = {
-        "backend": bcar_tags.get(
-            "CHARGE_MLP",
-            bcar_tags.get("CHARGE_BACKEND", "CHARGE3NET"),
-        ),
+        "backend": requested_backend,
         "model_path": bcar_tags.get("CHARGE_MODEL"),
         "device": bcar_tags.get("CHARGE_DEVICE"),
         "source_dir": bcar_tags.get("CHARGE_SOURCE_DIR"),
@@ -529,10 +626,14 @@ def _resolve_deepcdp_checkpoint_path(model_path: str | None, source_dir: str | N
     if len(pt_files) == 1:
         return str(pt_files[0])
     if not pt_files:
-        raise RuntimeError(
+        # Pure path-resolution failures: permanent configuration, decidable
+        # without executing anything -> input_error (exit 1), never the
+        # RETRYABLE exit 2 (WorkdirInputError subclasses RuntimeError, so
+        # callers catching RuntimeError keep working).
+        raise _root().WorkdirInputError(
             "DeepCDP model path must point to a .pt checkpoint or a directory containing one."
         )
-    raise RuntimeError(
+    raise _root().WorkdirInputError(
         "DeepCDP model directory contains multiple .pt checkpoints. Set CHARGE_MODEL "
         "to the exact checkpoint path."
     )
@@ -568,7 +669,18 @@ def _run_charge3net_backend(
     if num_basis is not None:
         num_basis = _coerce_int_option(num_basis, key="num_basis")
     if not model_path:
-        raise RuntimeError(
+        # A permanently unconfigured charge backend (no CHARGE_MODEL anywhere)
+        # is decidable without executing anything, exactly like the backend
+        # SELECTOR typo fixed in _charge_density_options_from_bcar: as a plain
+        # RuntimeError, server mode reported calculation_error (exit 2), which
+        # SERVER_MODE_SPEC 2.5 documents as RETRYABLE, so a retry driver
+        # re-ran the FULL calculation (the ionic loop completes before this
+        # raise) on the same broken directory forever, while one-shot exited 1
+        # for the byte-identical input. WorkdirInputError classifies both
+        # paths as input_error / exit 1. Raising at the use-site (not by
+        # pre-resolving paths in the input phase) keeps monkeypatched
+        # predict_charge_density flows untouched -- the R124[3] blocker.
+        raise _root().WorkdirInputError(
             "ChargE3Net model checkpoint not found. Set CHARGE_MODEL (or "
             "VPMDK_CHARGE_MODEL). When CHARGE_SOURCE_DIR is set, VPMDK also checks "
             "<CHARGE_SOURCE_DIR>/models/charge3net_mp.pt."
@@ -620,12 +732,25 @@ def _run_charge3net_backend(
             command.extend(["--num-basis", str(num_basis)])
         if spin is not None:
             command.extend(["--spin", "1" if spin else "0"])
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            # The configured interpreter itself is missing (CHARGE_PYTHON /
+            # VPMDK_CHARGE_PYTHON names a non-existent executable) -- broken
+            # configuration that no retry can heal, so it must classify as
+            # input_error (exit 1), not the RETRYABLE calculation_error
+            # (exit 2), for the same reason as the missing-checkpoint raise
+            # above.
+            raise _root().WorkdirInputError(
+                f"Charge-density python interpreter not found: {command[0]}. "
+                "Set CHARGE_PYTHON (or VPMDK_CHARGE_PYTHON) to an existing "
+                "Python executable."
+            ) from exc
         if completed.returncode != 0:
             stderr = completed.stderr.strip()
             stdout = completed.stdout.strip()
@@ -653,7 +778,9 @@ def _run_deepdft_backend(
     model_dir = _resolve_deepdft_model_dir(model_path, source_dir)
     probe_count = _validate_max_probes_per_batch(max_probes_per_batch)
     if not model_dir:
-        raise RuntimeError(
+        # Same classification as the ChargE3Net missing-checkpoint raise:
+        # permanent configuration error -> input_error, never exit 2.
+        raise _root().WorkdirInputError(
             "DeepDFT model directory not found. Set CHARGE_MODEL (or "
             "VPMDK_CHARGE_MODEL / VPMDK_DEEPDFT_MODEL) to a directory containing "
             "arguments.json and best_model.pth."
@@ -689,12 +816,25 @@ def _run_deepdft_backend(
             command.extend(["--source-dir", str(source_dir)])
         if device is not None:
             command.extend(["--device", str(_root()._resolve_device(device))])
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            # The configured interpreter itself is missing (CHARGE_PYTHON /
+            # VPMDK_CHARGE_PYTHON names a non-existent executable) -- broken
+            # configuration that no retry can heal, so it must classify as
+            # input_error (exit 1), not the RETRYABLE calculation_error
+            # (exit 2), for the same reason as the missing-checkpoint raise
+            # above.
+            raise _root().WorkdirInputError(
+                f"Charge-density python interpreter not found: {command[0]}. "
+                "Set CHARGE_PYTHON (or VPMDK_CHARGE_PYTHON) to an existing "
+                "Python executable."
+            ) from exc
         if completed.returncode != 0:
             stderr = completed.stderr.strip()
             stdout = completed.stdout.strip()
@@ -733,7 +873,9 @@ def _run_deepcdp_backend(
     )
     probe_count = _validate_max_probes_per_batch(max_probes_per_batch)
     if not checkpoint_path:
-        raise RuntimeError(
+        # Same classification as the ChargE3Net missing-checkpoint raise:
+        # permanent configuration error -> input_error, never exit 2.
+        raise _root().WorkdirInputError(
             "DeepCDP checkpoint not found. Set CHARGE_MODEL (or VPMDK_CHARGE_MODEL / "
             "VPMDK_DEEPCDP_MODEL) to a DeepCDP .pt file or directory."
         )
@@ -791,12 +933,25 @@ def _run_deepcdp_backend(
         if weighting:
             for key, value in weighting.items():
                 command.extend([f"--weighting-{key.replace('_', '-')}", str(value)])
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            # The configured interpreter itself is missing (CHARGE_PYTHON /
+            # VPMDK_CHARGE_PYTHON names a non-existent executable) -- broken
+            # configuration that no retry can heal, so it must classify as
+            # input_error (exit 1), not the RETRYABLE calculation_error
+            # (exit 2), for the same reason as the missing-checkpoint raise
+            # above.
+            raise _root().WorkdirInputError(
+                f"Charge-density python interpreter not found: {command[0]}. "
+                "Set CHARGE_PYTHON (or VPMDK_CHARGE_PYTHON) to an existing "
+                "Python executable."
+            ) from exc
         if completed.returncode != 0:
             stderr = completed.stderr.strip()
             stdout = completed.stdout.strip()

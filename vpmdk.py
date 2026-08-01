@@ -15,9 +15,14 @@ def _load_core() -> ModuleType:
     return importlib.import_module("vpmdk_core")
 
 
-_core = _load_core()
-
 if __name__ == "__main__":
-    _core.main()
+    root = os.path.dirname(os.path.abspath(__file__))
+    src_path = os.path.join(root, "src")
+    if src_path not in sys.path:
+        sys.path.insert(0, src_path)
+    from vpmdk_entry import main
+
+    raise SystemExit(main())
 else:
+    _core = _load_core()
     sys.modules[__name__] = _core

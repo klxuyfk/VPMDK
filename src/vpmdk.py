@@ -5,9 +5,10 @@ import importlib
 import sys
 
 
-_core = importlib.import_module("vpmdk_core")
-
 if __name__ == "__main__":
-    _core.main()
+    from vpmdk_entry import main
+
+    raise SystemExit(main())
 else:
+    _core = importlib.import_module("vpmdk_core")
     sys.modules[__name__] = _core

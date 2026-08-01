@@ -221,6 +221,50 @@ def test_list_backends_marks_flashtp_unavailable_without_flash_support(
     assert specs["FLASHTP"].available is False
 
 
+@pytest.mark.parametrize("name", ["MATGL", "M3GNET"])
+def test_list_backends_does_not_report_matgl_default_for_legacy_m3gnet(
+    monkeypatch: pytest.MonkeyPatch, name: str
+):
+    monkeypatch.setattr(vpmdk, "_USING_LEGACY_M3GNET", True)
+
+    specs = {spec.name: spec for spec in vpmdk.list_backends()}
+
+    assert specs[name].default_model is None
+
+
+@pytest.mark.parametrize("name", ["MATGL", "M3GNET"])
+def test_list_backends_reports_matgl_default_for_matgl(
+    monkeypatch: pytest.MonkeyPatch, name: str
+):
+    monkeypatch.setattr(vpmdk, "_USING_LEGACY_M3GNET", False)
+
+    specs = {spec.name: spec for spec in vpmdk.list_backends()}
+
+    assert specs[name].default_model == vpmdk.DEFAULT_MATGL_MODEL
+
+
+def test_list_backends_reports_installed_grace_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        vpmdk, "GRACE_MODEL_NAMES", ["GRACE-INSTALLED", "GRACE-OTHER"]
+    )
+
+    specs = {spec.name: spec for spec in vpmdk.list_backends()}
+
+    assert specs["GRACE"].default_model == "GRACE-INSTALLED"
+
+
+def test_list_backends_retains_grace_default_without_installed_registry(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(vpmdk, "GRACE_MODEL_NAMES", [])
+
+    specs = {spec.name: spec for spec in vpmdk.list_backends()}
+
+    assert specs["GRACE"].default_model == vpmdk.DEFAULT_GRACE_MODEL
+
+
 def test_relax_config_relax_cell_updates_default_isif_values():
     config = vpmdk.RelaxConfig(relax_cell=True)
 

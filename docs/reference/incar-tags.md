@@ -52,32 +52,47 @@ The parsed `IncarSettings` defaults are:
 | `mdalgo` | `0` |
 | `smass` | `None` |
 
+### Number Formats
+
+A numeric value that the INCAR reader would silently turn into a *different*
+number is rejected with exit 1 rather than used:
+
+- scientific notation for an integer tag (`NSW = 1e5` reads as `1`)
+- a Fortran `D` exponent anywhere (`EDIFFG = -1.0D-03` reads as `-1.0`)
+- a corrupted token whose leading digits still parse (`TEBEG = 5OO` — letter
+  O — reads as `5`, `NSW = 0x10` reads as `0`)
+
+Write those as plain digits or with an `E` exponent. The check reads the INCAR
+text the same way the parser does, so it also covers VASP's compact styles:
+several tags on one line separated by `;`, and values continued with a trailing
+`\`.
+
 ## Tag Semantics
 
 | Tag | Meaning | Default / Behavior |
 |-----|---------|--------------------|
 | `NSW` | Ionic or MD step count | `0` |
-| `IBRION` | Run mode selector | `<0` single point, `0` MD, `5`/`6` finite-difference force constants, `7`/`8` force-constants compatibility output, other `>0` relaxation |
+| `IBRION` | Run mode selector | `<0` single point, `0` MD, `5`/`6` finite-difference force constants, `7`/`8` force-constants compatibility output, other `>0` relaxation (`44` is rejected as unsupported); when omitted with `NSW>1`, VPMDK runs a single point and warns — real VASP would default to `0` (MD) |
 | `EDIFFG` | Relaxation stop criterion | `<0` force threshold, `>0` energy threshold |
 | `ISIF` | Cell/stress mode | normalized to VPMDK-supported modes |
-| `PSTRESS` | External scalar pressure in kBar | only used when cell degrees of freedom are active |
+| `PSTRESS` | External scalar pressure in kBar | only used when cell degrees of freedom are active; following VASP's Pulay-stress definition, all reported stress output subtracts `PSTRESS` from the diagonal, `external pressure` reads ~0 for a cell equilibrated at the target, and the OUTCAR `Pullay stress` field echoes the applied value |
 | `TEBEG` | Initial MD temperature | `300.0` |
 | `TEEND` | Final MD temperature | defaults to `TEBEG` |
-| `POTIM` | MD time step in fs, or finite-difference displacement in Angstrom for `IBRION=5`/`6` | `2.0`, except `0.015` for `IBRION=5`/`6` when omitted |
+| `POTIM` | MD time step in fs, or finite-difference displacement in Angstrom for `IBRION=5`/`6` | `2.0`, except `0.015` for `IBRION=5`/`6` when omitted. As a displacement it must be at least `1e-6` Angstrom: smaller values underflow the double-precision positions and would produce an all-zero or noise-dominated Hessian |
 | `NFREE` | finite-difference displacement stencil for `IBRION=5`/`6` | omitted values use `2`; supported values are `1`, `2`, and `4` |
 | `SYMPREC` | symmetry tolerance for `IBRION=6`/`8` atom-orbit reduction | `1e-5` |
-| `MDALGO` | MD integrator / thermostat selection | `0` |
-| `SMASS` | Thermostat mass / fallback selector | can auto-promote `MDALGO` |
-| `ANDERSEN_PROB` | Andersen collision probability | used only with `MDALGO=1` |
+| `MDALGO` | MD integrator / thermostat selection | `0`. `MDALGO=2`/`4` (Nose-Hoover chain) rejects POSCAR selective dynamics: ASE's chain integrator ignores constraints in its internal momenta, which distorts the sampled temperature far below `TEBEG`; use `MDALGO=1`, `3`, or `5` for constrained MD |
+| `SMASS` | Nose-Hoover damping time in fs / fallback selector | can auto-promote `MDALGO`; read as a damping TIME in fs, not as VASP's Nose mass, so the numbers are not interchangeable. When omitted the damping time is `100 * POTIM` fs; a value below `10 * POTIM` is reported as strong coupling |
+| `ANDERSEN_PROB` | Andersen collision probability | used only with `MDALGO=1`. Note: Andersen freezes the center of mass while the reported temperature divides by all 3N DOF, so OSZICAR/stdout read ≈(3N−3)/3N of `TEBEG` (VASP reports over 3N−3); the sampled ensemble itself is at `TEBEG`; when omitted, VPMDK defaults to **0.1** collisions per atom per step and warns — real VASP defaults to 0 (collision-free NVE); write `ANDERSEN_PROB = 0.0` for VASP's default behavior |
 | `LANGEVIN_GAMMA` | Langevin friction in 1/ps | used only with `MDALGO=3` |
-| `CSVR_PERIOD` | Bussi relaxation time in fs | used only with `MDALGO=5` |
-| `NHC_NCHAINS` | Nose-Hoover chain length | used with `MDALGO=2` or `4` |
+| `CSVR_PERIOD` | Bussi relaxation time in fs | used only with `MDALGO=5`; when omitted the default is `100 * POTIM` fs, so writing `CSVR_PERIOD = 100` is NOT the same as omitting it unless `POTIM = 1`. Unlike `NHC_PERIOD`, this tag is read in fs, not in MD steps. Must be positive |
+| `NHC_NCHAINS` | Nose-Hoover chain length | used with `MDALGO=2` or `4`; must be between 1 and 100 (chains beyond ~10 links have no physical effect, and the integrator's cost grows linearly with the length) |
 | `NHC_PERIOD` | Nose-Hoover chain damping period in MD steps | VPMDK uses `NHC_PERIOD * POTIM` as the ASE damping time |
-| `MAGMOM` | Initial magnetic moments | VASP-like parsing including `N*value` |
+| `MAGMOM` | Initial magnetic moments | VASP-like parsing including `N*value` (repeat expansion is bounded at 1e6 values per tag, counting the product of nested `N*M*value` factors); **inert for results** — attached as ASE initial moments, but no supported backend reads initial moments (they only predict moments as outputs), so FM/AFM orderings produce identical energies; a warning discloses this |
 | `IMAGES` | NEB image count hint | also triggers NEB-like mode detection |
 | `ICHAIN` | VTST chain method selector | only `0`/unset NEB is implemented |
 | `IOPT` | VTST optimizer selector | maps selected values to ASE optimizers |
-| `LCLIMB` | NEB climbing-image flag | truthy values enable climbing-image ASE NEB |
+| `LCLIMB` | NEB climbing-image flag | truthy values enable climbing-image ASE NEB; when omitted, VPMDK runs **plain NEB** and warns — VTST's documented default is `.TRUE.`, so write `LCLIMB = .TRUE.` for VTST's default behavior (a plain band underestimates the barrier) |
 | `LNEBCELL` | VTST NEB cell-relaxation flag | recognized but not implemented; fixed-cell NEB is used |
 | `SPRING` | NEB spring constant | negative VTST values are converted to positive ASE spring magnitudes |
 
@@ -122,12 +137,19 @@ Rules:
 
 ## MDALGO and SMASS
 
-If `MDALGO` is explicitly set, that value is used.
+If `MDALGO` is explicitly set, that value is used. The implemented algorithms are
+`0` (velocity-Verlet NVE), `1` (Andersen), `2`/`4` (Nose-Hoover chain), `3`
+(Langevin) and `5` (CSVR). Any other value warns and runs `MDALGO=0`; the
+fallback is also what `OUTCAR` and `vasprun.xml` then report, so the recorded
+ensemble matches the trajectory.
 
 If `MDALGO=0` and `SMASS` is provided:
 
 - `SMASS < 0` -> `MDALGO=3` (Langevin)
 - `SMASS > 0` -> `MDALGO=2` (Nose-Hoover)
+
+`SMASS` does not promote an out-of-range `MDALGO`: an explicit unsupported value
+runs NVE, as the warning says.
 
 This mirrors the compatibility behavior already covered by regression tests.
 
@@ -141,7 +163,15 @@ Recognized thermostat-only tags:
 - `NHC_NCHAINS`
 - `NHC_PERIOD`
 
-Invalid values are ignored with warnings rather than crashing the entire run.
+Unparseable values are ignored with warnings rather than crashing the entire run,
+and values that a thermostat merely treats as a limiting case are passed through
+(`ANDERSEN_PROB` outside `[0, 1]` behaves as the nearest legal bound).
+
+A value that makes the requested thermostat mathematically undefined is an input
+error (exit 1) instead, because there is no coupling the run could fall back to:
+`NHC_PERIOD <= 0` and `CSVR_PERIOD <= 0` are rejected before the run starts. Both
+previously failed part-way through the calculation and were reported as retryable
+calculation failures (exit 2).
 
 ## MAGMOM
 
@@ -205,3 +235,10 @@ These `INCAR` tags are only relevant for charge-density grid construction:
 
 If `WRITE_CHGCAR` is not enabled, the CLI warns that those tags are ignored for
 the current run.
+
+Grids are validated up front and capped at 100000 points per axis and 1e9
+points in total. A combination that exceeds either bound — whether derived
+from `ENCUT` and the cell or requested explicitly via `NGX*`/`NG*F` — is
+rejected as an input error (exit 1) before the calculation starts, rather than
+failing late (or, for extreme `ENCUT` values, never returning) during the
+CHGCAR write.

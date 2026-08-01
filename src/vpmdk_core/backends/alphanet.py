@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from typing import Any, Dict
 
@@ -40,25 +39,91 @@ def _resolve_alphanet_named_model_spec(model_name: str) -> Dict[str, Any] | None
     return None
 
 
-def _ensure_alphanet_named_model_files(model_name: str) -> tuple[str, str]:
-    """Download a known AlphaNet named model and config when needed."""
+def _alphanet_named_model_cache_paths(model_name: str) -> tuple[str, str] | None:
+    """Return a named model's (checkpoint, config) cache paths WITHOUT downloading.
+
+    Single source of truth for the cache layout, shared by the downloading
+    ``_ensure_alphanet_named_model_files`` and by the config inference the server
+    uses to report its resident configuration (which must never hit the network).
+    Returns None for an unknown model name.
+    """
 
     root = _root()
     spec = _resolve_alphanet_named_model_spec(model_name)
     if spec is None:
+        return None
+    cache_dir = root.os.path.join(
+        root.os.path.expanduser("~/.cache/alphanet"),
+        spec["display_name"].replace("/", "_"),
+    )
+    return (
+        root.os.path.join(cache_dir, spec["checkpoint_filename"]),
+        root.os.path.join(cache_dir, spec["config_filename"]),
+    )
+
+
+def _infer_alphanet_config_path(
+    bcar_tags: Dict[str, str], *, base_dir: str | None = None
+) -> str | None:
+    """Return the config path the builder would infer, without downloading.
+
+    When ALPHANET_CONFIG is omitted the builder infers it (the single JSON beside
+    the checkpoint, or the named model's cached config). The server must record
+    that inferred value in the resident's effective configuration; otherwise a
+    request that explicitly names the very same file the resident already uses is
+    compared against ``server=None`` and rejected with exit 5, even though the
+    one-shot builder constructs a byte-identical calculator (SERVER_MODE_SPEC 3.4
+    rejects only tags that DIFFER). Returns None when nothing can be inferred
+    without side effects -- an unknown/ambiguous layout, or a named model whose
+    cache is not populated yet -- leaving the tag simply unadvertised as before.
+    """
+
+    root = _root()
+    if str(bcar_tags.get("ALPHANET_CONFIG") or "").strip():
+        return None  # explicit: already canonicalized through the normal path
+    raw_model = bcar_tags.get("MODEL")
+    model_arg = str(raw_model) if raw_model is not None and str(raw_model).strip() else None
+    try:
+        if base_dir is None:
+            reference = root._resolve_backend_model_reference("ALPHANET", model_arg)
+        else:
+            reference = root._resolve_backend_model_reference(
+                "ALPHANET", model_arg, base_dir=base_dir
+            )
+        if reference.kind is root.ModelReferenceKind.LOCAL_PATH:
+            # Pure filesystem inference -- reuse the builder's own resolver so the
+            # advertised path cannot drift from the one actually loaded.
+            return _resolve_alphanet_config_path(str(reference.value), bcar_tags)
+        cache_paths = _alphanet_named_model_cache_paths(str(reference.value))
+        if cache_paths is None:
+            return None
+        checkpoint_path, config_path = cache_paths
+        if not root.os.path.exists(config_path):
+            # Not fetched yet: reporting identity must never trigger a download.
+            return None
+        return _resolve_alphanet_config_path(
+            checkpoint_path, bcar_tags, default_config_path=config_path
+        )
+    except Exception:
+        # Inference is best effort: never let reporting the resident's identity
+        # fail a server that already built its calculator successfully.
+        return None
+
+
+def _ensure_alphanet_named_model_files(model_name: str) -> tuple[str, str]:
+    """Download a known AlphaNet named model and config when needed."""
+
+    root = _root()
+    cache_paths = _alphanet_named_model_cache_paths(model_name)
+    if cache_paths is None:
         supported = ", ".join(
             sorted(named_spec["display_name"] for named_spec in root._ALPHANET_NAMED_MODELS.values())
         )
         raise ValueError(f"Unsupported AlphaNet model '{model_name}'. Available: {supported}")
 
-    cache_dir = root.os.path.join(
-        root.os.path.expanduser("~/.cache/alphanet"),
-        spec["display_name"].replace("/", "_"),
-    )
-    root.os.makedirs(cache_dir, exist_ok=True)
-
-    checkpoint_path = root.os.path.join(cache_dir, spec["checkpoint_filename"])
-    config_path = root.os.path.join(cache_dir, spec["config_filename"])
+    spec = _resolve_alphanet_named_model_spec(model_name)
+    checkpoint_path, config_path = cache_paths
+    root.os.makedirs(root.os.path.dirname(config_path), exist_ok=True)
 
     if not root.os.path.exists(config_path) or root.os.path.getsize(config_path) == 0:
         print(f"AlphaNet config not found, downloading to {config_path} ...")
@@ -130,7 +195,10 @@ def _build_alphanet_calculator(bcar_tags: Dict[str, str], *, structure=None):
     if root.AlphaNetCalculator is None:
         raise RuntimeError("AlphaNet calculator not available. Install AlphaNet and dependencies.")
 
-    model_value = bcar_tags.get("MODEL") or root.DEFAULT_ALPHANET_MODEL
+    model_reference = root._resolve_backend_model_reference(
+        "ALPHANET", bcar_tags.get("MODEL")
+    )
+    model_value = str(model_reference.value)
     precision = _normalize_alphanet_precision(
         bcar_tags.get("ALPHANET_PRECISION") or bcar_tags.get("ALPHANET_DTYPE")
     )
@@ -139,10 +207,8 @@ def _build_alphanet_calculator(bcar_tags: Dict[str, str], *, structure=None):
     config_path = None
     checkpoint_path = model_value
 
-    if os.path.exists(model_value):
+    if model_reference.kind is root.ModelReferenceKind.LOCAL_PATH:
         config_path = _resolve_alphanet_config_path(model_value, bcar_tags)
-    elif root._looks_like_filesystem_path(model_value, suffixes=(".ckpt", ".pt", ".pth")):
-        raise FileNotFoundError(f"AlphaNet model not found: {model_value}")
     else:
         checkpoint_path, config_path = root._ensure_alphanet_named_model_files(model_value)
         config_path = _resolve_alphanet_config_path(

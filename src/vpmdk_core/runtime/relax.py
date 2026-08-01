@@ -36,6 +36,20 @@ class _EnergyConvergenceMonitor:
         return delta <= self._tolerance
 
 
+def _warn_pressure_is_inert_at_constant_volume(
+    scalar_pressure: float | None, isif: int
+) -> None:
+    """Say so when PSTRESS cannot act, instead of dropping it silently."""
+
+    if not scalar_pressure:
+        return
+    print(
+        f"Warning: PSTRESS is ignored for ISIF={isif}, which relaxes at constant "
+        "volume; an external hydrostatic pressure does no work there. Use ISIF=3 "
+        "(or 6/7/8) to relax against a pressure."
+    )
+
+
 def _make_relaxation_builder(
     isif: int,
     scalar_pressure: float | None,
@@ -57,30 +71,40 @@ def _make_relaxation_builder(
 
         return build_ucf, False
 
-    if isif == 4:
+    if isif in (4, 5):
+        # NO scalar_pressure at constant volume. An external hydrostatic pressure
+        # can do no work when the volume is fixed, so it must be inert -- but ASE
+        # adds -V*P*I to the virial and only removes the TRACE after solving
+        # against the deformation gradient, so once F != I a traceless remainder
+        # survives as a spurious driving force. Measured (EMT/Cu, NSW=100): ISIF=5
+        # lost 18.5% of its volume at PSTRESS=500 and 41.7% at 2000, ISIF=4 lost
+        # 42.2% at 2000, with the energy diverging rather than relaxing -- and both
+        # modes are documented as constant volume.
+        _warn_pressure_is_inert_at_constant_volume(scalar_pressure, isif)
 
         def build_constant_volume(atoms):
-            return root.UnitCellFilter(
-                atoms,
-                constant_volume=True,
-                scalar_pressure=scalar_pressure_kwarg,
-            )
+            return root.UnitCellFilter(atoms, constant_volume=True)
 
-        return build_constant_volume, False
-
-    if isif == 5:
-
-        def build_constant_volume_frozen(atoms):
-            return root.UnitCellFilter(
-                atoms,
-                constant_volume=True,
-                scalar_pressure=scalar_pressure_kwarg,
-            )
-
-        return build_constant_volume_frozen, True
+        return build_constant_volume, isif == 5
 
     if isif == 6:
-        return root.StrainFilter, False
+        if not scalar_pressure:
+            # No pressure to apply (unset, or an explicit PSTRESS=0, which is also
+            # VASP's default): keep the documented StrainFilter mapping so runs that
+            # were already correct stay bit-for-bit unchanged.
+            return root.StrainFilter, False
+
+        # ase.filters.StrainFilter has NO scalar_pressure argument, so a PSTRESS
+        # given with ISIF=6 -- a mode where cell degrees of freedom ARE active, so
+        # docs/reference/incar-tags.md says PSTRESS applies -- was silently dropped
+        # and the cell relaxed to zero stress instead: a high-pressure ISIF=6 sweep
+        # produced the same structure at every PSTRESS. UnitCellFilter with the ions
+        # frozen is cell-only in the same way (this is exactly the shape ISIF=5 uses
+        # above) and it does accept the pressure.
+        def build_strain_with_pressure(atoms):
+            return root.UnitCellFilter(atoms, scalar_pressure=scalar_pressure)
+
+        return build_strain_with_pressure, True
 
     if isif == 7:
 
@@ -109,6 +133,9 @@ def _make_relaxation_builder(
     return build_identity, False
 
 
+_INTERNAL_ISIF_FREEZE_MARKER = "_vpmdk_internal_isif_freeze"
+
+
 @contextmanager
 def _temporarily_freeze_atoms(atoms, freeze_required: bool):
     """Temporarily constrain ionic positions when required by ISIF."""
@@ -129,6 +156,15 @@ def _temporarily_freeze_atoms(atoms, freeze_required: bool):
         original_constraints = base_constraints
 
     frozen = _root().FixAtoms(indices=list(range(len(atoms))))
+    # Mark it as VPMDK's OWN device for holding the ions while only the cell
+    # relaxes (ISIF 5/6/7). The VASP-compat recorder reads forces with
+    # apply_constraint=True, so this constraint zeroed the OUTCAR TOTAL-FORCE
+    # table, "FORCES: max atom, RMS", the total drift and the vasprun.xml forces
+    # varray -- a run with real residual forces looked perfectly converged. Real
+    # VASP reports the physical forces for these ISIF modes; the marker lets the
+    # recorder drop THIS constraint (and only this one, so a user's selective
+    # dynamics still applies) while reading them.
+    setattr(frozen, _INTERNAL_ISIF_FREEZE_MARKER, True)
     atoms.set_constraint(base_constraints + [frozen])
     try:
         yield
@@ -155,6 +191,12 @@ def run_relaxation(
     neb_next_positions=None,
     oszicar_pseudo_scf: bool = False,
 ):
+
+    if write_energy_csv:
+        # This run WILL write energy.csv at the end; fail on an unwritable
+        # node now, before the relaxation is paid for (the recorder's
+        # unconditional preflight of flag-gated artifacts was scoped down).
+        _root()._require_writable_artifact_path("energy.csv")
     result = _root().relax(
         atoms,
         calculator=calculator,
@@ -178,6 +220,8 @@ def run_relaxation(
             neb_mode=neb_mode,
             neb_prev_positions=neb_prev_positions,
             neb_next_positions=neb_next_positions,
+            pstress_kbar=pstress,
+            nsw_requested=steps,
         ),
     )
     if write_energy_csv:

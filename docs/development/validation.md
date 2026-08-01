@@ -15,6 +15,102 @@ not a benchmark-quality comparison against reference DFT data.  Blocked entries
 record adapter behavior or missing public artifacts rather than successful
 calculator evaluation.
 
+## 2026-07-17 Lightweight Client Validation
+
+The server client entrypoint was measured against an absent Unix socket, which
+exercises argument parsing, import, connection failure, error rendering, and
+exit code 3 without including server calculation time.
+
+- Before lightweight dispatch: approximately 4.1 s wall time
+- After lightweight dispatch: approximately 0.02 s wall time
+- Acceptance target: less than 0.3 s
+- Isolated import checks: `run`, `status`, and `stop` left `vpmdk_core`, torch,
+  CHGNet, MACE, e3nn, ASE, pymatgen, and NumPy unloaded
+- Full real-pymatgen/CUDA suite: 453 collected, 432 passed, 21 optional-backend
+  skips
+- 2026-07-19 minimal CPU environment regression: 491 collected, 465 passed,
+  26 optional-backend/CUDA skips; all 106 resident-server tests passed with Unix
+  sockets enabled outside the managed sandbox
+- GRACE 0.6.0 CPU validation (`vpmdk-grace`): the installed registry omitted
+  VPMDK's named default and resolved to `GRACE-FS-OAM`; a real Si2 calculation
+  produced finite energy, forces, and stress, and the resident server reported
+  that effective model, completed one request, wrote VASP outputs, and stopped
+  cleanly; the latest full suite with the GRACE integration enabled collected
+  491 tests, with 465 passed and 26 unrelated optional-backend skips
+- 2026-07-20 shared MODEL resolver validation: the main environment completed
+  all 620 non-integration tests, including 226 backend tests and all 111
+  resident-server tests. The classification matrix covers every one of the 26
+  built-in backends across omitted, existing-local, missing-path, named, and
+  upstream-delegated MODEL inputs; every policy field is fixed by the test
+  table, and builder tests cover relevant device-signature and legacy-loader
+  compatibility. Real CHGNet CPU one-shot and resident-server comparisons both
+  passed with real pymatgen enabled. With `GRACE-FS-OAM` enabled on CPU, the
+  `vpmdk-grace` environment completed the full 646-test collection with 621
+  passed (including real GRACE MD) and 25 unrelated optional-backend skips.
+- No new CUDA claim was made for that resolver run: the active runtime exposed
+  no `nvidia-smi`, `/dev/nvidia*`, or PyTorch CUDA device, and the previously
+  supplied `/mnt/d/lin_temp/codex` checkpoint mount was not present. The CUDA
+  results later on this page are prior recorded sweeps, not results inferred
+  from the CPU-only rerun.
+- ASE compatibility smoke: real ASE 3.20.1 completed a resident NEB force
+  evaluation through three per-image delegates to one calculator, without an
+  `allow_shared_calculator` keyword; the one-shot constructor path also passed
+- Bundled server batch: passed with real CHGNet on CPU and the local MACE
+  checkpoint on CUDA through the installed lightweight console entrypoint
+- DeepMD resident safety smoke: passed in `codex_deepmd` with DeepMD 3.2.0b0,
+  local `DPA-3.1-3M.pt`, `DEEPMD_HEAD=Omat24`, and the model's explicit
+  118-element type map on CPU; startup, one MD request, output checks, and
+  graceful teardown all completed
+
+Wall-clock performance is recorded here as a manual observation rather than a
+pytest assertion because host scheduling is nondeterministic. The import
+boundary and exit-code behavior are deterministic regression tests in
+`tests/test_client_entry.py`.
+
+## 2026-07-16 Resident Server Validation
+
+The resident server was validated through both mocked lifecycle tests and real
+CPU/CUDA calculators.
+
+- Host GPU: NVIDIA TITAN V, 12 GiB, driver 560.94
+- Main environment: Python 3.13.5, torch 2.8.0+cu128
+- Server backends: CHGNet default model and local `mace_mp_small.model`
+- Workload: bundled `examples/server_batch` Si2 directories
+- Lifecycle observed: startup readiness, `idle`/`busy` JSON status, two
+  sequential requests, streamed completion markers, graceful stop, socket
+  cleanup, and VRAM return to the pre-server level
+- CHGNet integration: one resident model handled three requests and was
+  compared with one-shot execution
+
+The CHGNet server comparison required exact equality for `OSZICAR`, `CONTCAR`,
+and `vasprun.xml`, plus exact `OUTCAR` content before its live resource-accounting
+footer. Model initialization occurred once for the server rather than once per
+request.
+
+CUDA status identified the resident backend and current workdir while busy.
+Observed total device memory was approximately 1.25 GiB for the active CHGNet
+server and 1.30 GiB for the idle MACE server, compared with a host baseline of
+approximately 0.94 GiB. These values demonstrate residency on this host only;
+they are not memory requirements or benchmarks.
+
+Additional CUDA workflow smokes passed for ORB and MatterSim MD and NequIP and
+Allegro single points in their dedicated environments. They validate that the
+shared CLI/runtime changes did not regress those calculator families; they are
+not additional server-concurrency tests.
+
+The full real-pymatgen suite with MACE integration on CUDA completed as:
+
+```text
+375 collected
+355 passed
+20 skipped
+```
+
+The skipped tests require optional backend packages not installed together in
+the main environment. The fast stub-mode suite completed with 350 passed and
+25 integration tests deselected; the package sdist/wheel build also passed. No
+VPMDK process or Unix socket remained after validation.
+
 ## 2026-06-03 EquiformerV3 Validation
 
 - Structure: ASE `bulk("Si", "diamond", a=5.43)` (`Si2`)
@@ -49,7 +145,7 @@ Stress was returned as a full 3x3 tensor in both runs.
 | --- | --- | --- | --- | --- | --- | --- |
 | `CHGNET` | Manual real-backend single point | torch 2.8.0+cu128, chgnet 0.4.2 | upstream CHGNet v0.3.0 default | passed | passed | stress returned |
 | `MACE` | Manual real-backend single point | torch 2.8.0+cu128, mace 0.3.14 | local `mace_mp_small.model` | passed | passed | stress returned |
-| `MATGL` | Manual real-backend single point | torch 2.2.1+cu121, matgl 1.3.0, dgl 2.1.0+cu121 | local `M3GNet-MP-2021.2.8-PES` model directory | passed | passed | required `DGLBACKEND=pytorch` and CUDA NVRTC library path |
+| `MATGL` | Manual real-backend single point plus MatGL 2.0 API regression | torch 2.2.1+cu121, matgl 1.3.0, dgl 2.1.0+cu121; MatGL 2.0.6 API audit | local `M3GNet-MP-2021.2.8-PES` model directory | passed | passed | required `DGLBACKEND=pytorch` and CUDA NVRTC library path; regression covers the 2.x `PESCalculator`-only import and required default-potential load |
 | `M3GNET` | Manual real-backend single point | same as `MATGL` | same MatGL M3GNet model directory | passed | passed | alias path covered separately |
 | `MATTERSIM` | Manual real-backend single point | torch 2.10.0+cu128, mattersim 1.2.0 | upstream `mattersim-v1.0.0-1M.pth` default | passed | passed | `DEVICE` now forwarded when supported |
 | `EQNORM` | Manual real-backend single point | torch 2.6.0+cu124, eqnorm 0.1.0 | named `eqnorm-mptrj`, cached as `eqnorm-mptrj.pt` | passed | passed | named model cache already present |
@@ -69,8 +165,8 @@ Stress was returned as a full 3x3 tensor in both runs.
 | `FAIRCHEM_V2` | Manual real-backend single point | torch 2.8.0+cu128, fairchem-core 2.13.0 | `uma-s-1`, `FAIRCHEM_TASK=omat` | passed | passed | VPMDK default uses `uma-s-1p1`, which is present in fairchem-core 2.13.0 and current 2.x registries |
 | `FAIRCHEM` | Manual real-backend single point | same as `FAIRCHEM_V2` | `uma-s-1`, `FAIRCHEM_TASK=omat` | passed | passed | alias path covered separately |
 | `ESEN` | Manual real-backend single point | same as `FAIRCHEM_V2` | `uma-s-1`, `FAIRCHEM_TASK=omat` | passed | passed | alias path covered separately; OC25 ESEN checkpoints require gated HF access |
-| `GRACE` | Manual real-backend single point | tensorflow 2.19.1, tensorpotential 0.5.7 | local `GRACE-2L-MP-r6` | passed | passed | CPU required hiding CUDA; CUDA used `XLA_FLAGS=--xla_gpu_cuda_data_dir=...` |
-| `DEEPMD` | Manual real-backend single point | torch 2.8.0+cu128, deepmd-kit 3.1.2 | local `DPA-3.1-3M.pt`, `DEEPMD_HEAD=Omat24` | passed | passed | required `LD_LIBRARY_PATH` to include the DeepMD environment library directory |
+| `GRACE` | Real single point, MD integration, and resident-server smoke | tensorflow 2.19.1 / 2.20.0, tensorpotential 0.5.7 / 0.6.0 | local `GRACE-2L-MP-r6`; named `GRACE-FS-OAM` | passed | passed | 0.6.0 registry-fallback and server identity passed on CPU; earlier CUDA run used `XLA_FLAGS=--xla_gpu_cuda_data_dir=...` |
+| `DEEPMD` | Manual real-backend single point plus resident smoke | torch 2.8.0+cu128 / deepmd-kit 3.1.2; resident retest with deepmd-kit 3.2.0b0 | local `DPA-3.1-3M.pt`, `DEEPMD_HEAD=Omat24` | passed | passed | required `LD_LIBRARY_PATH` to include the DeepMD environment library directory; resident CPU smoke passed with the explicit model type map |
 | `MATLANTIS` | External partner validation only | Matlantis cloud | external notebook | not run | not run | intentionally excluded from this author-run sweep |
 
 ### Smoke Result Values
@@ -124,6 +220,15 @@ backend matrix and skips optional backends unless packages, checkpoints, and
 environment variables are available.  The integration tests remain useful for
 workflow-level output checks (`CONTCAR`, `OUTCAR`, `XDATCAR`), while the manual
 sweep above records the wider real-backend compatibility status.
+
+`tests/test_consumer_roundtrip.py` is the consumer round-trip net: it runs the
+full `run_workdir` pipeline per run mode in a subprocess with
+`VPMDK_TEST_REAL_PYMATGEN=1` (the rest of the suite runs against lightweight
+pymatgen stubs from `tests/conftest.py`) and reads every artifact back through
+the real `ase.io` and pymatgen readers, asserting cross-artifact consistency.
+When adding or changing an output writer, extend this harness rather than
+asserting against the writer's own formatting — several historical defects were
+only visible to the reader on the other side.
 
 ## Interpreting "Validated"
 

@@ -149,7 +149,24 @@ traj = vpmdk.md(
 See [Python API](../user-guide/python-api.md) for the side-effect model and
 compatibility options.
 
-## 8. Use the Bundled Examples
+## 8. Scale a Repeated-Model Batch (Optional)
+
+If many calculation directories use the same model, POSIX server mode can keep
+the calculator resident instead of loading it once per `vpmdk` process:
+
+```bash
+vpmdk serve --dir ./model_config --daemon --idle-timeout 3600
+vpmdk run --dir ./calc-001
+vpmdk run --dir ./calc-002
+vpmdk stop
+```
+
+Start with normal one-shot mode unless model loading is a meaningful bottleneck.
+Before using the server in automation, read the
+[Server Mode guide](../user-guide/server-mode.md), especially its startup BCAR,
+timeout, cleanup, and security contracts.
+
+## 9. Use the Bundled Examples
 
 Runnable examples live under [`examples/`](../../examples/README.md):
 
@@ -158,6 +175,7 @@ Runnable examples live under [`examples/`](../../examples/README.md):
 - `neb_nequip_vtst`
 - `api_chgnet`
 - `chgcar_charge3net`
+- `server_batch`
 - `uspex_9_4_4_si`
 
 Those examples are the best place to see complete directory layouts and

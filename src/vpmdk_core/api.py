@@ -56,6 +56,7 @@ def _require_backend_config(backend: object) -> BackendConfig:
 
 
 _BASE_CAPABILITIES: dict[str, BackendCapabilities] = {
+    "BAM": BackendCapabilities(),
     "CHGNET": BackendCapabilities(spin=True),
     "MATGL": BackendCapabilities(spin=False),
     "M3GNET": BackendCapabilities(spin=False),
@@ -84,22 +85,23 @@ _BASE_CAPABILITIES: dict[str, BackendCapabilities] = {
     "DEEPMD": BackendCapabilities(fine_tune=True),
 }
 
-_DEFAULT_MODEL_ATTRS: dict[str, str] = {
-    "EQNORM": "DEFAULT_EQNORM_MODEL",
-    "MATRIS": "DEFAULT_MATRIS_MODEL",
-    "ALPHANET": "DEFAULT_ALPHANET_MODEL",
-    "HIENET": "DEFAULT_HIENET_MODEL",
-    "NEQUIX": "DEFAULT_NEQUIX_MODEL",
-    "SEVENNET": "DEFAULT_SEVENNET_MODEL",
-    "FLASHTP": "DEFAULT_SEVENNET_MODEL",
-    "ORB": "DEFAULT_ORB_MODEL",
-    "FAIRCHEM": "DEFAULT_FAIRCHEM_MODEL",
-    "FAIRCHEM_V2": "DEFAULT_FAIRCHEM_MODEL",
-    "ESEN": "DEFAULT_FAIRCHEM_MODEL",
-    "GRACE": "DEFAULT_GRACE_MODEL",
-}
-
 _STRUCTURE_INPUT_BACKENDS = frozenset({"ALPHANET", "DEEPMD"})
+
+
+def _resolve_backend_default_model(name: str) -> str | None:
+    """Return the model name the active backend implementation selects."""
+
+    root = _root()
+    normalized = name.upper()
+    if normalized == "ORB":
+        # ORB's named model is selected by ORB_MODEL; MODEL is an optional
+        # local weights override and therefore has a separate resolver policy.
+        return root.DEFAULT_ORB_MODEL
+    try:
+        return root._resolve_backend_model_reference(normalized, None).value
+    except ValueError:
+        # Required-MODEL backends intentionally have no default.
+        return None
 
 
 def _backend_available(name: str) -> bool:
@@ -107,6 +109,7 @@ def _backend_available(name: str) -> bool:
 
     root = _root()
     checks = {
+        "BAM": lambda: root.BAMCalculator is not None,
         "CHGNET": lambda: root.CHGNetCalculator is not None,
         "MATGL": lambda: root.M3GNetCalculator is not None,
         "M3GNET": lambda: root.M3GNetCalculator is not None,
@@ -203,15 +206,11 @@ def list_backends() -> list[BackendSpec]:
     )
     specs: list[BackendSpec] = []
     for name in names:
-        default_model_attr = _DEFAULT_MODEL_ATTRS.get(name)
-        default_model = (
-            getattr(root, default_model_attr, None) if default_model_attr is not None else None
-        )
         config = BackendConfig(mlp=name)
         specs.append(
             BackendSpec(
                 name=name,
-                default_model=default_model,
+                default_model=_resolve_backend_default_model(name),
                 supports_structure_input=name in _STRUCTURE_INPUT_BACKENDS,
                 capabilities=_resolve_backend_capabilities(config),
                 available=_backend_available(name),

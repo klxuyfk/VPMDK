@@ -12,6 +12,9 @@ focused on package metadata, the main README, and runnable examples.
   Core installation, backend packages, and environment setup patterns.
 - [CLI Workflows](user-guide/cli-workflows.md)
   VASP-style inputs, execution modes, outputs, NEB handling, and compatibility behavior.
+- [Server Mode](user-guide/server-mode.md)
+  Optional resident calculators for high-throughput local batches, including
+  lifecycle, GPU/scheduler operation, troubleshooting, and configuration safety.
 - [Python API](user-guide/python-api.md)
   Stable library usage without implicit filesystem side effects.
 - [Charge Density](user-guide/charge-density.md)
@@ -42,6 +45,10 @@ If you are new to the project:
 4. Keep [INCAR Reference](reference/incar-tags.md),
    [BCAR Reference](reference/bcar-tags.md), and
    [Backend Reference](reference/backends.md) open while configuring runs.
+
+Read [Server Mode](user-guide/server-mode.md) only when repeated model loading
+is a material cost across many CLI calculation directories. It is an optional
+batch optimization, not a prerequisite for normal VPMDK usage.
 
 If you are maintaining or extending the project:
 

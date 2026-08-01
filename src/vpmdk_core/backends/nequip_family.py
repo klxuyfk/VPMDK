@@ -28,12 +28,12 @@ def _build_nequip_family_calculator(
     if root.NequIPCalculator is None:
         raise RuntimeError(missing_message)
 
-    model_path = bcar_tags.get("MODEL")
     model_name = "Allegro" if require_allegro else "NequIP"
-    if not model_path:
-        raise ValueError(f"{model_name} requires MODEL pointing to a deployed model file.")
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"{model_name} model not found: {model_path}")
+    model_reference = root._resolve_backend_model_reference(
+        "ALLEGRO" if require_allegro else "NEQUIP",
+        bcar_tags.get("MODEL"),
+    )
+    model_path = str(model_reference.value)
 
     device = bcar_tags.get("DEVICE")
     if hasattr(root.NequIPCalculator, "from_deployed_model"):

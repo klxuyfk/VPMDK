@@ -8,6 +8,8 @@ from typing import Dict, Iterable
 import numpy as np
 from ase.calculators.calculator import Calculator, all_changes
 
+from ..backend_common import ModelReference
+
 
 def _root():
     return sys.modules["vpmdk_core"]
@@ -157,18 +159,29 @@ def _build_fairchem_calculator(bcar_tags: Dict[str, str]):
     if root.FAIRChemCalculator is None:
         raise RuntimeError("FAIRChemCalculator not available. Install fairchem and dependencies.")
 
-    model_name = bcar_tags.get("MODEL") or root.DEFAULT_FAIRCHEM_MODEL
-    task_name = bcar_tags.get("FAIRCHEM_TASK")
+    mlp = root._resolve_mlp_tag(bcar_tags, default="FAIRCHEM")
+    model_reference = root._resolve_backend_model_reference(
+        mlp, bcar_tags.get("MODEL")
+    )
+    model_name = str(model_reference.value)
+    # A present-but-empty FAIRCHEM_TASK means "unset" (use the default), matching
+    # how the resident config treats a blank optional tag; without ``or None`` a
+    # blank "" would skip the default below and reach the loader as an empty task.
+    task_name = (bcar_tags.get("FAIRCHEM_TASK") or "").strip() or None
     if task_name is None and model_name == root.DEFAULT_FAIRCHEM_MODEL:
         task_name = root.DEFAULT_FAIRCHEM_TASK
     inference_settings = bcar_tags.get("FAIRCHEM_INFERENCE_SETTINGS") or "default"
     device = bcar_tags.get("DEVICE")
 
-    return root.FAIRChemCalculator.from_model_checkpoint(
-        model_name,
-        task_name=task_name,
-        inference_settings=inference_settings,
-        device=device,
+    return root._require_loaded_model(
+        root.FAIRChemCalculator.from_model_checkpoint(
+            model_name,
+            task_name=task_name,
+            inference_settings=inference_settings,
+            device=device,
+        ),
+        backend_name="FAIRChem",
+        model=model_name,
     )
 
 
@@ -176,14 +189,15 @@ def _build_equiformer_v3_calculator(bcar_tags: Dict[str, str]):
     """Create an EquiformerV3 ASE calculator through the FAIRChem v1 runtime."""
 
     root = _root()
-    model_path = bcar_tags.get("MODEL")
-    if not model_path:
-        raise ValueError("EquiformerV3 requires MODEL pointing to a checkpoint file.")
-    if not root.os.path.exists(model_path):
-        raise FileNotFoundError(f"EquiformerV3 model not found: {model_path}")
+    model_reference = root._resolve_backend_model_reference(
+        "EQUIFORMER_V3", bcar_tags.get("MODEL")
+    )
 
     root._import_equiformer_v3_model(bcar_tags)
-    return root._build_fairchem_v1_calculator(bcar_tags)
+    return root._build_fairchem_v1_calculator(
+        bcar_tags,
+        model_reference=model_reference,
+    )
 
 
 def _pick_fairchem_prediction_value(prediction, keys: Iterable[str]):
@@ -209,7 +223,29 @@ def _as_numpy(value):
     return np.asarray(value)
 
 
+def _prediction_key_names(prediction) -> str:
+    if hasattr(prediction, "keys"):
+        try:
+            return ", ".join(sorted(str(key) for key in prediction.keys()))
+        except Exception:
+            pass
+    return type(prediction).__name__
+
+
 def _normalize_fairchem_prediction(prediction, atoms):
+    """Map a fairchem prediction onto (energy, forces, stress-or-None).
+
+    A prediction that carries no recognizable energy or forces must FAIL, not
+    default: filling in 0.0 eV / zero forces here produced a converged-looking
+    OUTCAR (TOTEN = 0.0, an all-zero TOTAL-FORCE table) with exit 0 whenever a
+    fairchem release renamed its output keys. Stress is different: S2EF-class
+    models legitimately have no stress head, so a missing stress returns None
+    and the calculator simply does not advertise the property -- an ISIF>=3
+    cell relaxation then fails loudly instead of relaxing against fabricated
+    zero stress ('external pressure = -0.00 kB') that pipelines read as
+    genuine physics.
+    """
+
     if isinstance(prediction, (list, tuple)):
         if not prediction:
             prediction = {}
@@ -228,21 +264,29 @@ def _normalize_fairchem_prediction(prediction, atoms):
 
     energy = _as_numpy(energy_value)
     if energy is None:
-        energy_float = 0.0
-    else:
-        energy_float = float(np.asarray(energy).reshape(-1)[0])
+        raise RuntimeError(
+            "FAIRChem prediction carries no recognizable energy (looked for "
+            "energy/energies/y_energy/y; prediction has: "
+            f"{_prediction_key_names(prediction)}). Refusing to substitute "
+            "0.0 eV."
+        )
+    energy_float = float(np.asarray(energy).reshape(-1)[0])
 
     forces = _as_numpy(forces_value)
     if forces is None:
-        forces_array = np.zeros((len(atoms), 3))
-    else:
-        forces_array = np.asarray(forces)
-        if forces_array.size == len(atoms) * 3:
-            forces_array = forces_array.reshape((len(atoms), 3))
+        raise RuntimeError(
+            "FAIRChem prediction carries no recognizable forces (looked for "
+            "forces/force/y_force/y_forces; prediction has: "
+            f"{_prediction_key_names(prediction)}). Refusing to substitute "
+            "zero forces."
+        )
+    forces_array = np.asarray(forces)
+    if forces_array.size == len(atoms) * 3:
+        forces_array = forces_array.reshape((len(atoms), 3))
 
     stress = _as_numpy(stress_value)
     if stress is None:
-        stress_array = np.zeros(6)
+        stress_array = None
     else:
         stress_array = np.asarray(stress).reshape(-1)
         if stress_array.size == 9:
@@ -258,7 +302,7 @@ def _normalize_fairchem_prediction(prediction, atoms):
                 ]
             )
         elif stress_array.size != 6:
-            stress_array = np.zeros(6)
+            stress_array = None
 
     return energy_float, forces_array, stress_array
 
@@ -288,14 +332,26 @@ class _FairChemV1PredictorCalculator(Calculator):
     def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
         super().calculate(atoms, properties, system_changes)
         if atoms is None:
-            self.results = {"energy": 0.0, "forces": [], "stress": [0.0] * 6}
-            return
+            atoms = self.atoms
+        if atoms is None:
+            # No structure to predict on: fabricating zero results here would
+            # look like converged physics downstream.
+            raise RuntimeError(
+                "FAIRChem v1 predictor calculator invoked without atoms."
+            )
         prediction = _run_fairchem_v1_prediction(self._predictor, atoms)
         energy, forces, stress = _normalize_fairchem_prediction(prediction, atoms)
-        self.results = {"energy": energy, "forces": forces, "stress": stress}
+        self.results = {"energy": energy, "forces": forces}
+        # Stress stays absent when the model has none (S2EF): get_stress then
+        # raises PropertyNotImplementedError -- a loud calculation failure --
+        # instead of handing an exact-zero stress to an ISIF>=3 cell filter.
+        if stress is not None:
+            self.results["stress"] = stress
 
 
-def _build_fairchem_v1_predictor(bcar_tags: Dict[str, str]):
+def _build_fairchem_v1_predictor(
+    bcar_tags: Dict[str, str], *, model_reference: ModelReference | None = None
+):
     """Create a FAIRChem v1 predictor-backed ASE calculator."""
 
     root = _root()
@@ -305,9 +361,11 @@ def _build_fairchem_v1_predictor(bcar_tags: Dict[str, str]):
             "FAIRChem v1 predictor not available. Install fairchem v1 (OCP) dependencies."
         )
 
-    model_path = bcar_tags.get("MODEL")
-    if not model_path:
-        raise ValueError("FAIRChem v1 requires MODEL pointing to a checkpoint file.")
+    if model_reference is None:
+        model_reference = root._resolve_backend_model_reference(
+            "FAIRCHEM_V1", bcar_tags.get("MODEL")
+        )
+    model_path = str(model_reference.value)
 
     config_path = bcar_tags.get("FAIRCHEM_CONFIG")
     device = bcar_tags.get("DEVICE")
@@ -323,7 +381,9 @@ def _build_fairchem_v1_predictor(bcar_tags: Dict[str, str]):
     return _FairChemV1PredictorCalculator(predictor)
 
 
-def _build_fairchem_v1_calculator(bcar_tags: Dict[str, str]):
+def _build_fairchem_v1_calculator(
+    bcar_tags: Dict[str, str], *, model_reference: ModelReference | None = None
+):
     """Create the FAIRChem v1 OCPCalculator configured from BCAR tags."""
 
     root = _root()
@@ -331,7 +391,10 @@ def _build_fairchem_v1_calculator(bcar_tags: Dict[str, str]):
     if predictor_tag is not None and root._coerce_bool_tag(
         predictor_tag, "FAIRCHEM_V1_PREDICTOR"
     ):
-        return root._build_fairchem_v1_predictor(bcar_tags)
+        return root._build_fairchem_v1_predictor(
+            bcar_tags,
+            model_reference=model_reference,
+        )
 
     calculator_cls = root._get_fairchem_v1_calculator_cls()
     if calculator_cls is None:
@@ -339,9 +402,11 @@ def _build_fairchem_v1_calculator(bcar_tags: Dict[str, str]):
             "FAIRChem v1 calculator not available. Install fairchem v1 (OCP) dependencies."
         )
 
-    model_path = bcar_tags.get("MODEL")
-    if not model_path:
-        raise ValueError("FAIRChem v1 requires MODEL pointing to a checkpoint file.")
+    if model_reference is None:
+        model_reference = root._resolve_backend_model_reference(
+            "FAIRCHEM_V1", bcar_tags.get("MODEL")
+        )
+    model_path = str(model_reference.value)
 
     config_path = bcar_tags.get("FAIRCHEM_CONFIG")
     device = bcar_tags.get("DEVICE")

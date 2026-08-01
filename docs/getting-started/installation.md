@@ -38,10 +38,27 @@ python -m vpmdk
 python vpmdk.py
 ```
 
-All three route into `vpmdk_core.main()`.
+For one-shot execution and `serve`, all three route into
+`vpmdk_core.main()`. The `run`, `status`, and `stop` commands are intercepted by
+a lightweight entrypoint before `vpmdk_core` is imported. This keeps client
+process startup independent of installed ML backends.
 
 Use `--dir PATH` only when you want to run against a calculation directory
 other than the current one.
+
+The optional resident-server subcommands are:
+
+```text
+vpmdk serve
+vpmdk run
+vpmdk status
+vpmdk stop
+```
+
+They require a POSIX platform with Unix-domain sockets. Installing VPMDK does
+not start a background service; a server exists only after an explicit
+`vpmdk serve`. See [Server Mode](../user-guide/server-mode.md) when repeated
+model loading justifies a resident process.
 
 ## Backend Packages
 

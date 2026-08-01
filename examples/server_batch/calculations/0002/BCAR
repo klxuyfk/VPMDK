@@ -1,0 +1,2 @@
+# Per-request output tags are allowed to differ from the startup BCAR.
+WRITE_PSEUDO_SCF=1

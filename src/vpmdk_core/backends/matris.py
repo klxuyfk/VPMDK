@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from typing import Dict
 
@@ -25,8 +24,16 @@ def _load_matris_checkpoint_model(checkpoint_path: str, *, device: str | None):
         map_location=torch.device("cpu"),
         weights_only=False,
     )
-    model = root.MatRISModel.from_dict(checkpoint_state)
-    return model.to(device or "cpu")
+    model = root._require_loaded_model(
+        root.MatRISModel.from_dict(checkpoint_state),
+        backend_name="MatRIS",
+        model=checkpoint_path,
+    )
+    return root._require_loaded_model(
+        model.to(device or "cpu"),
+        backend_name="MatRIS",
+        model=checkpoint_path,
+    )
 
 
 def _ensure_matris_named_model_checkpoint(model_name: str) -> str | None:
@@ -73,13 +80,16 @@ def _build_matris_calculator(bcar_tags: Dict[str, str]):
 
     device = root._resolve_device(bcar_tags.get("DEVICE"))
     task = (bcar_tags.get("MATRIS_TASK") or "efs").lower()
-    model_value = bcar_tags.get("MODEL") or root.DEFAULT_MATRIS_MODEL
+    model_reference = root._resolve_backend_model_reference(
+        "MATRIS", bcar_tags.get("MODEL")
+    )
+    model_value = str(model_reference.value)
     graph_converter_algorithm = root._resolve_graph_converter_algorithm(
         bcar_tags,
         backend_tag="MATRIS",
     )
 
-    if os.path.exists(model_value):
+    if model_reference.kind is root.ModelReferenceKind.LOCAL_PATH:
         model = root._load_matris_checkpoint_model(model_value, device=device)
         if graph_converter_algorithm is not None:
             model = root._override_model_graph_converter_algorithm(
@@ -88,12 +98,6 @@ def _build_matris_calculator(bcar_tags: Dict[str, str]):
                 backend_name="MatRIS",
             )
         return root._instantiate_matris_calculator(model=model, task=task, device=device)
-
-    if root._looks_like_filesystem_path(
-        model_value,
-        suffixes=(".ckpt", ".pt", ".pth", ".pth.tar", ".tar"),
-    ):
-        raise FileNotFoundError(f"MatRIS model not found: {model_value}")
 
     checkpoint_path = root._ensure_matris_named_model_checkpoint(model_value)
     if checkpoint_path is not None:
@@ -107,7 +111,15 @@ def _build_matris_calculator(bcar_tags: Dict[str, str]):
         return root._instantiate_matris_calculator(model=model, task=task, device=device)
 
     kwargs: Dict[str, object] = {}
-    if graph_converter_algorithm is not None and root._callable_supports_parameter(
+    # Take the kwarg path only when the calculator EXPLICITLY declares the
+    # parameter. _callable_supports_parameter is True for a bare ``**kwargs``
+    # signature, which would absorb and discard the requested algorithm AND skip
+    # the explicit _override_model_graph_converter_algorithm fallback below
+    # (because of the early return) -- silently running the model's default
+    # converter while `status` still advertises the requested one. With
+    # _callable_declares_parameter (False for ``**kwargs``) such a build falls
+    # through to that fallback, which applies the override verifiably.
+    if graph_converter_algorithm is not None and root._callable_declares_parameter(
         root.MatRISCalculator,
         "graph_converter_algorithm",
     ):

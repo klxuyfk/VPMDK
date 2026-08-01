@@ -6,33 +6,44 @@
 others require local checkpoints, and some can do both. The table below records
 the behavior implemented in `src/vpmdk_core/backends/`.
 
+All builders use the same three-way MODEL resolver: an omitted value selects
+the documented default, an existing filesystem value selects that local model,
+and a supported registry/name value selects that named model. An explicit value
+is never silently replaced with the backend default. Missing local paths for
+VPMDK-owned local-only selectors and unsupported static-registry names fail
+before calculator construction. For registries and checkpoint selectors whose
+contents are resolved by the optional upstream package, config, or service,
+VPMDK forwards the exact value and propagates rejection; an empty loader result
+is also an error.
+
 ## Force-Field Backends
 
 | Backend | Package / calculator | `MODEL` expectation | No-`MODEL` default | Key tags / notes |
 |---------|----------------------|---------------------|--------------------|------------------|
 | `CHGNET` | `chgnet` / `CHGNetCalculator` | local checkpoint path or upstream named/default model | upstream default loader | `DEVICE`, CHGNet graph-converter tags |
-| `MATGL` / `M3GNET` | `matgl` or legacy `m3gnet` / `M3GNetCalculator` | model directory or checkpoint path when supported | upstream default model | `DEVICE` |
-| `MACE` | `mace-torch` / `MACECalculator` | local model path | upstream default calculator behavior | `DEVICE` |
-| `MATTERSIM` | `mattersim` / `MatterSimCalculator` | optional local model path | calculator default | `DEVICE`, `MATTERSIM_COMPUTE_STRESS`, `MATTERSIM_STRESS_WEIGHT` |
-| `MATLANTIS` | `pfp-api-client` / estimator service | model version string or optional model name | `v8.0.0` | `MATLANTIS_MODEL_VERSION`, `MATLANTIS_PRIORITY`, `MATLANTIS_CALC_MODE` |
+| `MATGL` / `M3GNET` | `matgl` or legacy `m3gnet` / `M3GNetCalculator` or `PESCalculator` | modern MatGL registry name, model directory, or checkpoint path; legacy explicit models must be local files | MatGL `M3GNet-MP-2021.2.8-PES`, or the legacy calculator default | `DEVICE`; explicit MatGL registry names are loaded verbatim; explicit legacy files never fall back to the default when loading fails |
+| `MACE` | `mace-torch` / `MACECalculator` | local model path | upstream default calculator behavior when `MODEL` is omitted | `DEVICE`; an explicit missing/non-path `MODEL` is rejected rather than replaced with the default |
+| `MATTERSIM` | `mattersim` / `MatterSimCalculator` | optional existing local checkpoint or non-path `from_checkpoint` preset such as `mattersim-v1.0.0-5M` | calculator default | `DEVICE`, `MATTERSIM_COMPUTE_STRESS`, `MATTERSIM_STRESS_WEIGHT`; missing path-shaped values fail immediately; explicit presets require `from_checkpoint` or the legacy `load_path` API and are never replaced by the default |
+| `MATLANTIS` | `pfp-api-client` / estimator service | opaque model version string or optional model name | `v8.0.0` | `MATLANTIS_MODEL_VERSION`, `MATLANTIS_PRIORITY`, `MATLANTIS_CALC_MODE`; same-named local files do not change version resolution |
 | `EQNORM` | `eqnorm` / `EqnormCalculator` | local checkpoint or named model | `eqnorm-mptrj` | `EQNORM_VARIANT`, `EQNORM_COMPILE`; named models cached in `~/.cache/eqnorm` |
 | `MATRIS` | `matris` / `MatRISCalculator` | local checkpoint or named model | `matris_10m_oam` | `MATRIS_TASK`, graph-converter tags; named models cached in `~/.cache/matris` |
 | `ALPHANET` | `alphanet` / `AlphaNetCalculator` | local checkpoint plus JSON config, or named model | `AlphaNet-MATPES-r2scan` | `ALPHANET_CONFIG`, `ALPHANET_PRECISION`; named models cached in `~/.cache/alphanet` |
 | `HIENET` | `hienet` / `HIENetCalculator` | local checkpoint / torchscript file, or named model | `HIENet-0` | `HIENET_FILE_TYPE`; named models cached in `~/.cache/hienet` |
-| `NEQUIX` | `nequix` / `NequixCalculator` | local model file or named model | `nequix-mp-1` | `NEQUIX_BACKEND`, kernel/compile tags |
+| `NEQUIX` | `nequix` / `NequixCalculator` | local model file or named model | `nequix-mp-1` | `NEQUIX_BACKEND`, kernel/compile tags; names are checked against `URLS` when exposed, otherwise forwarded to the upstream runtime |
 | `SEVENNET` | `sevenn` / `SevenNetCalculator` | local checkpoint / torchscript or named model | `7net-0` | `SEVENNET_FILE_TYPE`, `SEVENNET_MODAL`, accelerator tags |
 | `FLASHTP` | `sevenn` + `flashTP_e3nn` | same as SevenNet, but checkpoint mode for flash acceleration | `7net-0` | forces flash acceleration and rejects conflicting accelerator flags |
+| `BAM` | `bam-torch` / `RACECalculator` | required local checkpoint file, e.g. the published `BAM-MP-core.pkl` from Hugging Face `myung-group/BAM_MPtrj_v1` | none | `MODEL` required, `DEVICE`; no named-model downloader exists upstream |
 | `NEQUIP` | `nequip` / `NequIPCalculator` | required local deployed or compiled model file | none | `MODEL` required |
 | `ALLEGRO` | `allegro` + `nequip` / `NequIPCalculator` | required local deployed or compiled model file | none | `MODEL` required |
 | `ORB` | `orb-models` / `ORBCalculator` | optional local weights path plus optional ORB model key | `orb-v3-conservative-20-omat` | `ORB_MODEL`, `ORB_PRECISION`, `ORB_COMPILE` |
 | `UPET` | `upet` / `UPETCalculator` | required local checkpoint or named model | none | `UPET_VERSION`, `UPET_NON_CONSERVATIVE`, `UPET_NEIGHBORLIST_DEVICE` / `UPET_NL_DEVICE` |
 | `TACE` | `TACE` / `TACEAseCalc` | required local checkpoint or named foundation model | none | `TACE_DTYPE`, `TACE_SPIN_ON`, `TACE_NEIGHBORLIST_BACKEND`, `TACE_FIDELITY_IDX` / `TACE_LEVEL` |
-| `EQUFLASH` | `sevenn` + `flashTP_e3nn` checkpoint-dependent adapter | required local SevenNet/EquFlash checkpoint file | none | uses the FlashTP-accelerated SevenNet path; no public named checkpoint is currently validated |
+| `EQUFLASH` | `sevenn` + `flashTP_e3nn` checkpoint-dependent adapter | required local SevenNet/EquFlash checkpoint file | none | uses checkpoint mode and forces FlashTP (`CUEQ=false`, `FLASH=true`, `OEQ=false`); no public named checkpoint is currently validated |
 | `EQUIFORMER_V3` | official `atomicarchitects/equiformer_v3` FAIRChem v1/OCP runtime / `OCPCalculator` | required local EquiformerV3 checkpoint | none | `EQUIFORMER_V3_MODULE`, `FAIRCHEM_CONFIG`, `DEVICE`; imports the EquiformerV3 registration module before using the FAIRChem v1 builder |
-| `FAIRCHEM` / `FAIRCHEM_V2` / `ESEN` | `fairchem-core` 2.x / `FAIRChemCalculator` | named checkpoint/model identifier | `uma-s-1p1` with `FAIRCHEM_TASK=omat` | `FAIRCHEM_TASK`, `FAIRCHEM_INFERENCE_SETTINGS`, `DEVICE` |
-| `FAIRCHEM_V1` | `fairchem-core==1.10.0` baseline or compatible OCP/FAIRChem v1 install / `OCPCalculator` or predictor | required local checkpoint; config usually required | none | `FAIRCHEM_CONFIG`, `FAIRCHEM_V1_PREDICTOR`, `DEVICE` |
-| `GRACE` | TensorPotential / `TPCalculator` or `grace_fm` | local model path or foundation-model name | `GRACE-2L-MP-r6` when available | GRACE padding/dtype tags |
-| `DEEPMD` | `deepmd-kit` / `DP` | required local frozen model or supported checkpoint | none | `DEEPMD_TYPE_MAP`, `DEEPMD_HEAD` |
+| `FAIRCHEM` / `FAIRCHEM_V2` / `ESEN` | `fairchem-core` 2.x / `FAIRChemCalculator` | upstream checkpoint/model selector, including names, paths, and provider-resolved path-shaped identifiers | `uma-s-1p1` with `FAIRCHEM_TASK=omat` | `FAIRCHEM_TASK`, `FAIRCHEM_INFERENCE_SETTINGS`, `DEVICE`; unresolved selectors are forwarded exactly to `from_model_checkpoint` |
+| `FAIRCHEM_V1` | `fairchem-core==1.10.0` baseline or compatible OCP/FAIRChem v1 install / `OCPCalculator` or predictor | required checkpoint selector: existing local path or value resolved by OCP/config | none | `FAIRCHEM_CONFIG`, `FAIRCHEM_V1_PREDICTOR`, `DEVICE`; unresolved selectors are forwarded exactly and never replaced by a default |
+| `GRACE` | TensorPotential / `TPCalculator` or `grace_fm` | local model path or foundation-model name | `GRACE-2L-MP-r6` when present in the installed registry; otherwise that registry's first model | Unknown non-path names emit a warning and use that effective default, matching TensorPotential-era behavior; status reports the model actually loaded; GRACE padding/dtype tags |
+| `DEEPMD` | `deepmd-kit` / `DP` | required local frozen model or supported checkpoint | none | `DEEPMD_TYPE_MAP`, `DEEPMD_HEAD`; server mode requires an explicit model-ordered type map |
 
 ## Non-Obvious Entrypoints and Aliases
 
@@ -63,6 +74,16 @@ capability model. Highlights:
 
 These metadata are descriptive and are not a full runtime guarantee.
 
+A workdir run (`vpmdk --dir ...` and server mode) always reports per-atom
+forces, so a backend configuration whose capability model declares `forces=False`
+-- currently only `MATRIS_TASK=e` -- is refused up front with exit 1 instead of
+computing anything. In server mode the decision uses the RESIDENT's effective
+configuration, so a request that inherits the backend tags instead of restating
+them gets the same exit code and the same warnings. Use `MATRIS_TASK=ef` or `efs` there; the energy-only
+configuration remains available through the Python API for energy work. A
+configuration without stress (`MATRIS_TASK=ef`) still runs: the OUTCAR/vasprun
+stress block is omitted and a warning says so.
+
 ## Device Handling
 
 Device handling is backend-specific:
@@ -74,6 +95,13 @@ Device handling is backend-specific:
   and otherwise stay on the backend's own default device behavior
 - `NEQUIX_BACKEND=torch` supports explicit post-construction device transfer
 - `NEQUIX_BACKEND=jax` follows the active JAX runtime rather than VPMDK moving the model
+- `GRACE` ignores `DEVICE` entirely (a warning is printed when it is set):
+  TPCalculator takes no device argument, so placement follows the installed
+  TensorFlow build. GPU execution requires a CUDA-enabled `tensorflow`
+  (tensorpotential pins `tensorflow<2.20`) that supports the local GPU and
+  driver; on stacks where that combination is unavailable, GRACE-2L and the
+  other TensorFlow GRACE models effectively run CPU-only. The upstream
+  GRACE/FS C++ path is a separate CPU-oriented implementation.
 
 ## Named-Model Downloads Implemented by VPMDK
 
@@ -99,6 +127,11 @@ it supports that concept.
 
 ## Known Backend-Specific Caveats
 
+- `BAM` imports `e3nn`. On installs with `e3nn < 0.5` and `torch >= 2.6`,
+  `e3nn` itself can only be imported when `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD`
+  is set; VPMDK's own MACE import sets it when `mace-torch` is installed, but
+  in an environment with neither `mace-torch` nor `e3nn >= 0.5.6` (BAM's
+  declared requirement) the `BAM` backend reports itself unavailable.
 - `FAIRCHEM_V1` and `FAIRCHEM_V2` are not environment-compatible in practice;
   use separate environments and pin `fairchem-core` versions intentionally.
 - EquiformerV2 / eqV2 checkpoints use `MLP=FAIRCHEM_V1`. VPMDK intentionally

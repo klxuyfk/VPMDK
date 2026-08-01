@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import re
+import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -98,6 +100,116 @@ class DummyNEBOptimizer:
         return False
 
 
+def test_construct_ase_neb_omits_shared_keyword_for_older_ase(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class OldASEStyleNEB:
+        def __init__(self, images, *, k, climb, method):
+            captured.update(
+                {"images": images, "k": k, "climb": climb, "method": method}
+            )
+
+    images = [object(), object(), object()]
+    monkeypatch.setattr(vpmdk, "NEB", OldASEStyleNEB)
+
+    neb = vpmdk._construct_ase_neb(
+        images=images,
+        spring_constant=5.0,
+        climb=False,
+        method="aseneb",
+    )
+
+    assert isinstance(neb, OldASEStyleNEB)
+    assert captured == {
+        "images": images,
+        "k": 5.0,
+        "climb": False,
+        "method": "aseneb",
+    }
+
+
+def test_construct_ase_neb_enables_supported_resident_calculator_sharing(
+    monkeypatch,
+):
+    captured: dict[str, object] = {}
+
+    class NewASEStyleNEB:
+        def __init__(
+            self,
+            images,
+            *,
+            k,
+            climb,
+            method,
+            allow_shared_calculator=False,
+        ):
+            captured["allow_shared_calculator"] = allow_shared_calculator
+
+    monkeypatch.setattr(vpmdk, "NEB", NewASEStyleNEB)
+
+    vpmdk._construct_ase_neb(
+        images=[object(), object(), object()],
+        spring_constant=5.0,
+        climb=True,
+        method="aseneb",
+        calculator=DummyCalculator(),
+    )
+
+    assert captured["allow_shared_calculator"] is True
+
+
+def test_construct_ase_neb_proxies_resident_calculator_on_older_ase(monkeypatch):
+    shared_calculator = DummyCalculator()
+    images = [Atoms("H", positions=[[index * 0.1, 0.0, 0.0]]) for index in range(3)]
+    for image in images:
+        image.calc = shared_calculator
+
+    class OldASEStyleNEB:
+        def __init__(self, images, *, k, climb, method):
+            calculators = [image.calc for image in images]
+            assert len(set(calculators)) == len(calculators)
+
+    monkeypatch.setattr(vpmdk, "NEB", OldASEStyleNEB)
+
+    neb = vpmdk._construct_ase_neb(
+        images=images,
+        spring_constant=5.0,
+        climb=False,
+        method="aseneb",
+        calculator=shared_calculator,
+    )
+
+    assert isinstance(neb, OldASEStyleNEB)
+    assert all(image.calc is not shared_calculator for image in images)
+    assert all(image.calc._calculator is shared_calculator for image in images)
+    assert all(np.isfinite(image.get_potential_energy()) for image in images)
+
+
+def test_construct_ase_neb_uses_proxies_instead_of_generic_kwargs(monkeypatch):
+    captured: dict[str, object] = {}
+    shared_calculator = DummyCalculator()
+    images = [SimpleNamespace(calc=shared_calculator) for _ in range(3)]
+
+    class KwargsOnlyNEB:
+        def __init__(self, images, *, k, climb, method, **kwargs):
+            captured["kwargs"] = kwargs
+            captured["calculators"] = [image.calc for image in images]
+
+    monkeypatch.setattr(vpmdk, "NEB", KwargsOnlyNEB)
+
+    vpmdk._construct_ase_neb(
+        images=images,
+        spring_constant=5.0,
+        climb=False,
+        method="aseneb",
+        calculator=shared_calculator,
+    )
+
+    calculators = captured["calculators"]
+    assert captured["kwargs"] == {}
+    assert len(set(calculators)) == len(calculators)
+
+
 @pytest.mark.parametrize(
     "potential",
     [
@@ -126,6 +238,7 @@ class DummyNEBOptimizer:
         "FAIRCHEM_V1",
         "GRACE",
         "DEEPMD",
+        "BAM",
     ],
 )
 def test_single_point_energy_for_all_potentials(
@@ -143,9 +256,12 @@ def test_single_point_energy_for_all_potentials(
         "TACE",
         "EQUFLASH",
         "EQUIFORMER_V3",
+        "BAM",
     }:
         model_name = (
-            "pet-oam-xl-v1.0.0.ckpt"
+            "BAM-MP-core.pkl"
+            if potential == "BAM"
+            else "pet-oam-xl-v1.0.0.ckpt"
             if potential == "UPET"
             else (
                 "tace-model.pt"
@@ -211,6 +327,7 @@ def test_single_point_energy_for_all_potentials(
     )
     monkeypatch.setattr(vpmdk, "_build_grace_calculator", lambda tags: factory("GRACE"))
     monkeypatch.setattr(vpmdk, "DeePMDCalculator", lambda *a, **k: factory("DEEPMD"))
+    monkeypatch.setattr(vpmdk, "BAMCalculator", lambda *a, **k: factory("BAM"))
 
     class _DummyFairChem:
         @classmethod
@@ -401,8 +518,10 @@ def test_fairchem_calculator_uses_bcar_overrides(tmp_path: Path, prepare_inputs)
     }
 
 
-def test_fairchem_v1_builder_uses_bcar_overrides():
+def test_fairchem_v1_builder_uses_bcar_overrides(tmp_path: Path):
     seen: dict[str, object] = {}
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    checkpoint_path.write_text("placeholder")
 
     class _DummyFairChemV1:
         def __init__(self, **kwargs):
@@ -419,7 +538,7 @@ def test_fairchem_v1_builder_uses_bcar_overrides():
     calculator = vpmdk.get_calculator(
         vpmdk.BackendConfig(
             mlp="FAIRCHEM_V1",
-            model="checkpoint.pt",
+            model=str(checkpoint_path),
             device="cpu",
             options={"FAIRCHEM_CONFIG": "config.yml"},
         )
@@ -429,7 +548,7 @@ def test_fairchem_v1_builder_uses_bcar_overrides():
 
     assert isinstance(calculator, _DummyFairChemV1)
     assert seen == {
-        "checkpoint_path": "checkpoint.pt",
+        "checkpoint_path": str(checkpoint_path),
         "cpu": True,
         "config_yml": "config.yml",
     }
@@ -719,7 +838,7 @@ def test_main_ibrion5_uses_potim_and_nfree2_for_finite_difference_fc(
 
 
 def test_main_ibrion5_rejects_unsupported_nfree(
-    tmp_path: Path, prepare_inputs, monkeypatch
+    tmp_path: Path, prepare_inputs, monkeypatch, capsys
 ):
     prepare_inputs(
         tmp_path,
@@ -729,8 +848,13 @@ def test_main_ibrion5_rejects_unsupported_nfree(
     monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
 
-    with pytest.raises(NotImplementedError, match="NFREE=1, NFREE=2, and NFREE=4"):
+    # The one-shot CLI reports this like every other input error: a clean
+    # one-line diagnostic on stderr and exit 1, matching what `vpmdk run` returns
+    # for the same directory. It used to escape as a raw traceback.
+    with pytest.raises(SystemExit) as excinfo:
         vpmdk.main()
+    assert excinfo.value.code == 1
+    assert "NFREE=1, NFREE=2, and NFREE=4" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -1002,6 +1126,27 @@ def test_build_grace_calculator_uses_foundation_model_when_available():
     assert isinstance(calc, DummyCalculator)
     assert selected["model"] == "GRACE-FOUNDATION"
     assert selected["kwargs"] == {}
+
+
+def test_build_grace_calculator_uses_first_model_when_named_default_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    selected: dict[str, object] = {}
+
+    def fake_grace_fm(model, **kwargs):
+        selected["model"] = model
+        return DummyCalculator()
+
+    monkeypatch.setattr(vpmdk, "grace_fm", fake_grace_fm)
+    monkeypatch.setattr(
+        vpmdk, "GRACE_MODEL_NAMES", ["GRACE-INSTALLED", "GRACE-OTHER"]
+    )
+    monkeypatch.setattr(vpmdk, "TPCalculator", DummyCalculator)
+
+    calculator = vpmdk._build_grace_calculator({})
+
+    assert isinstance(calculator, DummyCalculator)
+    assert selected["model"] == "GRACE-INSTALLED"
 
 
 @pytest.mark.parametrize(
@@ -1579,6 +1724,729 @@ def test_main_runs_neb_images_from_numbered_directories(tmp_path: Path, prepare_
         assert (tmp_path / image / "CONTCAR").exists()
 
 
+def test_resident_neb_runs_with_older_ase_constructor(
+    tmp_path: Path, prepare_inputs, monkeypatch
+):
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "2", "IMAGES": "1"},
+    )
+    _write_numbered_neb_poscars(tmp_path)
+    shared_calculator = DummyCalculator()
+    actual_neb = vpmdk.NEB
+    captured: dict[str, object] = {}
+
+    class OldASEStyleNEB:
+        def __new__(cls, images, *, k, climb, method):
+            calculators = [image.calc for image in images]
+            captured["calculators"] = calculators
+            assert len(set(calculators)) == len(calculators)
+            return actual_neb(
+                images,
+                k=k,
+                climb=climb,
+                method=method,
+                allow_shared_calculator=False,
+            )
+
+    monkeypatch.setattr(vpmdk, "NEB", OldASEStyleNEB)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
+
+    vpmdk.run_workdir(str(tmp_path), calculator=shared_calculator)
+
+    calculators = captured["calculators"]
+    assert len(set(calculators)) == 3
+    assert all(calc._calculator is shared_calculator for calc in calculators)
+    assert shared_calculator.called > 0
+    for image in ("00", "01", "02"):
+        assert (tmp_path / image / "OUTCAR").exists()
+
+
+def test_malformed_incar_is_classified_as_input_error(tmp_path):
+    # A malformed INCAR (NSW = not-a-number) must raise WorkdirInputError so both
+    # one-shot mode (exit 1) and server mode (input_error) honor the documented
+    # invalid-input contract instead of reporting a calculation_error (exit 2).
+    (tmp_path / "INCAR").write_text("NSW = not-a-number\n")
+    with pytest.raises(vpmdk.WorkdirInputError):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+def test_malformed_poscar_is_classified_as_input_error(tmp_path):
+    (tmp_path / "POSCAR").write_text("this is not a valid POSCAR file\n")
+    with pytest.raises(vpmdk.WorkdirInputError):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+def test_malformed_neb_image_poscar_is_classified_as_input_error(
+    tmp_path: Path, prepare_inputs
+):
+    # A malformed NEB *image* POSCAR must be classified as input, exactly like a
+    # malformed top-level POSCAR: the NEB branch reads image structures inside
+    # run_neb_images, so those reads are wrapped (via _read_neb_image_structure)
+    # and raise WorkdirInputError -> server input_error (exit 1), not the
+    # calculation_error (exit 2) an unwrapped parse exception would produce.
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0", "IBRION": "-1", "IMAGES": "1"},
+    )
+    _write_numbered_neb_poscars(tmp_path)
+    (tmp_path / "01" / "POSCAR").write_text("garbage not a valid poscar\n@@@\n")
+    with pytest.raises(vpmdk.WorkdirInputError):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+def test_neb_images_with_inconsistent_atom_counts_are_input_error():
+    # Adjacent NEB images with different atom counts are inconsistent user input.
+    # _validate_neb_path must classify them as WorkdirInputError (input_error /
+    # exit 1) via an explicit shape check, not let numpy's raw shape-mismatch
+    # ValueError leak out as a calculation_error (exit 2). Consistent with the
+    # duplicate-geometry check and the wrapped per-image structure reads.
+    from vpmdk_core.runtime import neb as neb_module
+
+    left = Atoms("H2", positions=[[0, 0, 0], [0.7, 0, 0]], cell=[10, 10, 10])
+    right = Atoms("H3", positions=[[0, 0, 0], [0.7, 0, 0], [1.4, 0, 0]], cell=[10, 10, 10])
+    with pytest.raises(vpmdk.WorkdirInputError, match="inconsistent atom counts"):
+        neb_module._validate_neb_path([left, right])
+
+
+@pytest.mark.parametrize(
+    "incar_text",
+    [
+        "IMAGES = 1\nSPRING = -5\nNSW = 0\nIBRION = -1\n",  # single-point/MD branch
+        "IMAGES = 1\nSPRING = -5\nNSW = 2\nIBRION = 2\n",  # ASE optimization branch
+    ],
+)
+@pytest.mark.parametrize("defect", ["species-order"])
+def test_inconsistent_neb_band_is_input_error_in_both_branches(
+    tmp_path, incar_text, defect
+):
+    # ASE's own band-consistency rejections (atom count, pbc, species order) were
+    # raised from root.NEB(...) with no wrapper, so the
+    # optimization branch reported a permanently broken directory as
+    # calculation_error (exit 2, documented RETRYABLE) while one-shot exits 1 --
+    # and the single-point branch never checked at all, single-pointing every
+    # image and writing a tangent computed between images describing different
+    # systems as a successful run. Both branches must reject these as input. (The
+    # CELL rule is branch-dependent -- see
+    # test_slightly_different_neb_cells_only_block_the_optimizer -- because the
+    # single-point branch evaluates each image in isolation.)
+    def poscar(cell, x, species="H He"):
+        return f"AB\n1.0\n{cell}\n{species}\n1 1\nCartesian\n0 0 0\n{x} 0 0\n"
+
+    cell_a = "5 0 0\n0 5 0\n0 0 5"
+    if defect == "cell":
+        images = [
+            poscar(cell_a, 1.0),
+            poscar("5.2 0 0\n0 5 0\n0 0 5", 1.5),
+            poscar(cell_a, 2.0),
+        ]
+    else:
+        images = [
+            poscar(cell_a, 1.0),
+            poscar(cell_a, 1.5, species="He H"),
+            poscar(cell_a, 2.0),
+        ]
+
+    (tmp_path / "INCAR").write_text(incar_text)
+    (tmp_path / "BCAR").write_text("MLP = CHGNET\n")
+    for index, text in enumerate(images):
+        image_dir = tmp_path / f"0{index}"
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(text)
+
+    with pytest.raises(vpmdk.WorkdirInputError):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+def test_slightly_different_neb_cells_only_block_the_optimizer(tmp_path, capsys):
+    # The cell rule is the ONE band rule whose severity legitimately differs by
+    # branch. The optimizer must subtract images, so ASE (and we) refuse a varying
+    # periodic cell. The single-point/MD branch evaluates every image in
+    # ISOLATION -- only the aggregate TANGENT/CHAIN-FORCE summary is affected --
+    # and the 1e-8 A tolerance trips on nothing more than independently
+    # ISIF>=3-relaxed endpoints or POSCAR text precision, so making it a hard
+    # error there aborted previously-working "independent image single points"
+    # runs with ZERO outputs. It must warn there instead.
+    cells = (
+        "6.0000001 0 0\n0 6 0\n0 0 6",
+        "6.0 0 0\n0 6 0\n0 0 6",
+        "5.9999999 0 0\n0 6 0\n0 0 6",
+    )
+
+    def build(directory, incar_text):
+        directory.mkdir(exist_ok=True)
+        (directory / "INCAR").write_text(incar_text)
+        (directory / "BCAR").write_text("MLP = CHGNET\n")
+        for index, cell in enumerate(cells):
+            image_dir = directory / f"0{index}"
+            image_dir.mkdir()
+            (image_dir / "POSCAR").write_text(
+                f"X\n1.0\n{cell}\nH\n1\nCartesian\n{index * 0.5} 0 0\n"
+            )
+
+    single_point = tmp_path / "sp"
+    build(single_point, "IMAGES = 1\nSPRING = -5\nNSW = 0\nIBRION = -1\n")
+    vpmdk.run_workdir(str(single_point), calculator=DummyCalculator())
+    assert "different periodic cell" in capsys.readouterr().out
+    # Every image still produced its independent result.
+    for index in range(3):
+        assert (single_point / f"0{index}" / "OUTCAR").exists()
+
+    optimization = tmp_path / "opt"
+    build(optimization, "IMAGES = 1\nSPRING = -5\nNSW = 2\nIBRION = 2\n")
+    with pytest.raises(vpmdk.WorkdirInputError, match="different periodic cell"):
+        vpmdk.run_workdir(str(optimization), calculator=DummyCalculator())
+
+
+def test_consistent_neb_band_still_runs_in_both_branches(tmp_path):
+    # Guard the check above: the rules are copied from ASE, so a band ASE accepts
+    # must still run in both branches.
+    cell = "5 0 0\n0 5 0\n0 0 5"
+    # Direct coordinates: the conftest pymatgen STUB reads a 'Cartesian' block
+    # as fractional, which placed the second atom at 1.0 of the 5 A cell --
+    # i.e. coincident with the first under PBC, tripping the R137
+    # coincident-atom input guard on a band that is fine under real pymatgen.
+    for index, x in enumerate((0.2, 0.3, 0.4)):
+        image_dir = tmp_path / f"0{index}"
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(
+            f"AB\n1.0\n{cell}\nH He\n1 1\nDirect\n0 0 0\n{x} 0 0\n"
+        )
+    (tmp_path / "BCAR").write_text("MLP = CHGNET\n")
+    (tmp_path / "INCAR").write_text("IMAGES = 1\nSPRING = -5\nNSW = 0\nIBRION = -1\n")
+    vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+    assert (tmp_path / "OUTCAR").exists()
+
+
+def test_chgcar_grid_check_classifies_the_incar_not_a_diverged_run(tmp_path):
+    # The grid pre-check must run on the INPUT structure, before anything is
+    # computed. `atoms` is mutated in place by the relaxation/MD, so checking it
+    # afterwards fed a DIVERGED cell (NaN from a blown-up structure) into the grid
+    # math, and _read_workdir_input rewrote that genuine calculation failure into
+    # input_error/exit 1 -- blaming an INCAR that is perfectly valid.
+    import numpy as np
+
+    poscar = "H\n1.0\n5 0 0\n0 5 0\n0 0 5\nH\n1\nCartesian\n0 0 0\n"
+
+    class _Diverging(DummyCalculator):
+        def get_forces(self, *args, **kwargs):
+            return np.full((1, 3), np.nan)
+
+        def get_stress(self, *args, **kwargs):
+            return np.full(6, np.nan)
+
+    # A genuinely unresolvable INCAR grid is still input_error -- and now fails
+    # BEFORE the calculation runs, so no OUTCAR is produced.
+    bad_incar = tmp_path / "bad"
+    bad_incar.mkdir()
+    (bad_incar / "INCAR").write_text("NSW = 0\nIBRION = -1\n")
+    (bad_incar / "BCAR").write_text("MLP = CHGNET\nWRITE_CHGCAR = 1\n")
+    (bad_incar / "POSCAR").write_text(poscar)
+    with pytest.raises(vpmdk.WorkdirInputError, match="CHGCAR grid"):
+        vpmdk.run_workdir(str(bad_incar), calculator=DummyCalculator())
+    assert not (bad_incar / "OUTCAR").exists()
+
+    # A valid INCAR whose RUN diverges is a calculation failure, not input.
+    diverged = tmp_path / "diverged"
+    diverged.mkdir()
+    (diverged / "INCAR").write_text("ENCUT = 400\nIBRION = 2\nNSW = 1\nISIF = 3\n")
+    (diverged / "BCAR").write_text("MLP = CHGNET\nWRITE_CHGCAR = 1\n")
+    (diverged / "POSCAR").write_text(poscar)
+    with pytest.raises(Exception) as excinfo:
+        vpmdk.run_workdir(str(diverged), calculator=_Diverging())
+    assert not isinstance(excinfo.value, vpmdk.WorkdirInputError)
+
+
+@pytest.mark.parametrize("spelling", ["nan", "inf", "1e400"])
+@pytest.mark.parametrize(
+    "incar_mode",
+    ["NSW = 3\nIBRION = 0\n", "NSW = 1\nIBRION = 5\n"],
+)
+def test_non_finite_potim_is_rejected_before_anything_runs(tmp_path, spelling, incar_mode):
+    # POTIM was the one numeric INCAR tag still parsed with a bare float(), so
+    # nan/inf passed the input phase and only failed later -- mid-MD as a raw
+    # ValueError the server reports as calculation_error (exit 2, documented
+    # RETRYABLE) for a permanently invalid INCAR, or, under IBRION=5/6, as an
+    # all-NaN hessian WRITTEN OUT as a successful run (`displacement <= 0.0` is
+    # False for nan). It must be an input error, with nothing produced.
+    directory = tmp_path / f"wd-{spelling}-{abs(hash(incar_mode)) % 100}"
+    directory.mkdir()
+    (directory / "INCAR").write_text(incar_mode + f"POTIM = {spelling}\n")
+    (directory / "BCAR").write_text("MLP = CHGNET\n")
+    (directory / "POSCAR").write_text(
+        "H\n1.0\n5 0 0\n0 5 0\n0 0 5\nH\n1\nCartesian\n0 0 0\n"
+    )
+
+    with pytest.raises(vpmdk.WorkdirInputError, match="POTIM"):
+        vpmdk.run_workdir(str(directory), calculator=DummyCalculator())
+    assert not (directory / "vasprun.xml").exists()
+    assert not (directory / "OUTCAR").exists()
+
+
+def test_non_finite_ediffg_warns_instead_of_silently_changing_fmax(tmp_path, capsys):
+    # nan/inf makes BOTH `ediffg > 0` and `ediffg < 0` False, so force_limit
+    # silently fell back to fmax=0.05 -- a convergence criterion the INCAR never
+    # asked for, with no warning at all.
+    from vpmdk_core.settings import incar as incar_module
+
+    settings = incar_module._load_incar_settings({"NSW": 1, "IBRION": 2, "EDIFFG": float("nan")})
+    assert settings.ediffg == -0.02
+    assert settings.force_limit == 0.02
+    assert "EDIFFG" in capsys.readouterr().out
+
+
+def test_bcar_selector_errors_classify_the_same_in_flat_and_neb_dirs(tmp_path):
+    # The two NEB per-image build sites were left behind when the flat path gained
+    # the (ValueError, FileNotFoundError) -> WorkdirInputError guard, so the SAME
+    # BCAR typo was a clean one-line diagnostic in a flat workdir and a raw
+    # traceback in a NEB one. The rule now lives in one shared helper.
+    poscar = "H\n1.0\n5 0 0\n0 5 0\n0 0 5\nH\n1\nCartesian\n{x} 0 0\n"
+
+    flat = tmp_path / "flat"
+    flat.mkdir()
+    (flat / "INCAR").write_text("NSW = 0\nIBRION = -1\n")
+    (flat / "POSCAR").write_text(poscar.format(x=0))
+    (flat / "BCAR").write_text("MLP = CHGNETT\n")
+
+    band = tmp_path / "band"
+    band.mkdir()
+    (band / "INCAR").write_text("IMAGES = 1\nSPRING = -5\nNSW = 10\nIBRION = 1\n")
+    (band / "BCAR").write_text("MLP = CHGNETT\n")
+    for index in range(3):
+        image_dir = band / f"0{index}"
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(poscar.format(x=index))
+
+    for directory in (flat, band):
+        with pytest.raises(vpmdk.WorkdirInputError, match="Invalid BCAR backend settings"):
+            vpmdk.run_workdir(str(directory))
+
+
+def test_bcar_backend_selector_errors_are_input_not_a_traceback(tmp_path, capsys):
+    # _build_calculator_from_tags was the only BCAR consumer in run_workdir not
+    # routed through the input-error layer, so the MOST COMMON BCAR mistake still
+    # dumped a raw multi-frame traceback while every sibling parse printed one
+    # clean line. The catch is narrow on purpose: a missing backend PACKAGE raises
+    # RuntimeError ("... not available. Install ..."), which is an environment
+    # failure and must keep its own classification.
+    poscar = "H\n1.0\n5 0 0\n0 5 0\n0 0 5\nH\n1\nCartesian\n0 0 0\n"
+
+    def workdir(bcar_text: str) -> str:
+        directory = tmp_path / f"wd{abs(hash(bcar_text)) % 10000}"
+        directory.mkdir(exist_ok=True)
+        (directory / "INCAR").write_text("NSW = 0\nIBRION = -1\n")
+        (directory / "POSCAR").write_text(poscar)
+        (directory / "BCAR").write_text(bcar_text)
+        return str(directory)
+
+    # Backend-independent selector errors (a MODEL-path case would first hit the
+    # backend's own availability check, which is environment dependent).
+    for bcar_text, expected in (
+        ("MLP = BOGUS\n", "Unsupported MLP type"),
+        ("MLP =\n", "present but empty"),
+    ):
+        with pytest.raises(vpmdk.WorkdirInputError) as excinfo:
+            vpmdk.run_workdir(workdir(bcar_text))
+        message = str(excinfo.value)
+        assert "Invalid BCAR backend settings" in message
+        assert expected in message  # the specific cause is preserved
+
+    # A backend whose package is absent stays an environment error.
+    with pytest.raises(RuntimeError) as excinfo:
+        vpmdk.run_workdir(workdir("MLP = MATLANTIS\n"))
+    assert not isinstance(excinfo.value, vpmdk.WorkdirInputError)
+    assert "not available" in str(excinfo.value)
+
+
+def test_unknown_charge_backend_is_input_error(tmp_path):
+    # Every other CHARGE_* value is validated in the wrapped input phase, but the
+    # backend SELECTOR was only rejected later at dispatch inside
+    # predict_charge_density -- after the single point had already completed and
+    # written OUTCAR/CONTCAR. A typo therefore escaped as a plain ValueError and
+    # server mode reported calculation_error (exit 2, documented RETRYABLE), so a
+    # retry driver resubmits a permanently broken BCAR forever.
+    (tmp_path / "INCAR").write_text("NSW = 0\nIBRION = -1\nENCUT = 300\n")
+    (tmp_path / "POSCAR").write_text(
+        "H\n1.0\n5 0 0\n0 5 0\n0 0 5\nH\n1\nCartesian\n0 0 0\n"
+    )
+    (tmp_path / "BCAR").write_text(
+        "MLP = CHGNET\nWRITE_CHGCAR = 1\nCHARGE_MLP = CHARGE3NE\n"
+    )
+    with pytest.raises(vpmdk.WorkdirInputError, match="charge-density backend"):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+    # A documented alias is still accepted by the validation (it resolves to a
+    # supported backend; whether that backend is installed is a separate concern).
+    assert vpmdk._normalize_charge_backend_name("DEEP_DFT") in (
+        vpmdk._SUPPORTED_CHARGE_BACKENDS
+    )
+    assert vpmdk._normalize_charge_backend_name(None) in (
+        vpmdk._SUPPORTED_CHARGE_BACKENDS
+    )
+
+
+def test_zero_row_neb_cell_is_rejected_by_both_branches(tmp_path):
+    # get_scaled_positions() is NOT a sufficient degeneracy probe: ASE's
+    # Cell.complete() silently substitutes unit vectors for all-zero lattice rows,
+    # so a POSCAR whose third vector is `0 0 0` sailed through the optimization
+    # branch, ran the entire NEB relaxation, and only then died on a raw
+    # AssertionError deep in the recorder setup -- while the single-point branch
+    # and the flat workdir path both classify it as input.
+    zero_row = "H\n1.0\n5 0 0\n0 5 0\n0 0 0\nH\n1\nDirect\n0.1 0.1 0.0\n"
+    for index in range(3):
+        image_dir = tmp_path / f"0{index}"
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(zero_row)
+    (tmp_path / "BCAR").write_text("MLP = CHGNET\n")
+
+    for incar_text in (
+        "IMAGES = 1\nSPRING = -5\nNSW = 0\nIBRION = -1\n",
+        "IMAGES = 1\nSPRING = -5\nNSW = 2\nIBRION = 3\n",
+    ):
+        (tmp_path / "INCAR").write_text(incar_text)
+        with pytest.raises(vpmdk.WorkdirInputError):
+            vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+def test_huge_incar_integer_is_tolerated_in_both_python_spellings():
+    # Real pymatgen parses a several-hundred-digit INCAR literal into a Python
+    # INT, and float(huge_int) raises OverflowError -- not ValueError -- so the
+    # int path escaped from the VTST/NEB parse sites that run OUTSIDE
+    # _read_workdir_input, surfacing as calculation_error (exit 2, documented
+    # RETRYABLE) for a permanently broken INCAR. Only the STRING spelling reaches
+    # the isfinite guard (float("9"*400) is inf), which is why the earlier
+    # regression test missed this. Both spellings must be tolerated.
+    from vpmdk_core.settings import incar as incar_module
+
+    assert incar_module._parse_optional_float(int("9" * 400), key="ICHAIN") is None
+    assert incar_module._parse_optional_float("9" * 400, key="ICHAIN") is None
+    assert incar_module._parse_optional_float(3, key="ICHAIN") == 3.0
+    assert incar_module._parse_optional_float("2.5", key="ICHAIN") == 2.5
+
+
+def test_unreadable_optional_input_files_do_not_abort_the_run(tmp_path):
+    # os.path.exists() only proves the entry is there, not that it can be read.
+    # An unreadable (mode 000) or directory POTCAR/KPOINTS made the unguarded
+    # open() raise while writing OUTCAR header metadata, which server mode
+    # reported as calculation_error (exit 2, documented RETRYABLE) for a
+    # permanent permission/type problem -- for KPOINTS, a file VPMDK explicitly
+    # announces as "detected but not used". Both must degrade to "no data".
+    from vpmdk_core.io import vasp_compat as vasp_compat_module
+
+    directory = tmp_path / "POTCAR_as_dir"
+    directory.mkdir()
+    assert vasp_compat_module._extract_potcar_titles(str(directory)) == []
+    assert vasp_compat_module._read_non_comment_lines(str(directory)) == []
+
+    unreadable = tmp_path / "KPOINTS"
+    unreadable.write_text("Automatic mesh\n")
+    unreadable.chmod(0o000)
+    try:
+        assert vasp_compat_module._read_non_comment_lines(str(unreadable)) == []
+        assert vasp_compat_module._extract_potcar_titles(str(unreadable)) == []
+    finally:
+        unreadable.chmod(0o644)
+    # A readable file still parses.
+    assert vasp_compat_module._read_non_comment_lines(str(unreadable)) == [
+        "Automatic mesh"
+    ]
+
+
+@pytest.mark.parametrize(
+    "incar_text",
+    [
+        "IMAGES = 1\nSPRING = -5\nNSW = 0\nIBRION = -1\n",  # single-point/MD branch
+        "IMAGES = 1\nSPRING = -5\nNSW = 5\nIBRION = 3\n",  # ASE optimization branch
+    ],
+)
+def test_degenerate_neb_image_lattice_is_input_error(tmp_path, incar_text):
+    # Only the image READ was input-error-classified; the get_atoms/wrap()/MAGMOM
+    # steps that follow ran outside it, so a degenerate image lattice escaped as a
+    # raw LinAlgError -> calculation_error (exit 2, which SERVER_MODE_SPEC 2.5
+    # documents as RETRYABLE, so a retry driver resubmits a permanently broken
+    # directory forever) -- while the byte-identical POSCAR in a flat workdir is
+    # input_error (exit 1). Both NEB branches must now agree with the flat one.
+    singular = "H\n1.0\n1 0 0\n2 0 0\n0 0 1\nH\n1\nCartesian\n0 0 0\n"
+    healthy = "H\n1.0\n5 0 0\n0 5 0\n0 0 5\nH\n1\nCartesian\n0 0 0\n"
+
+    (tmp_path / "INCAR").write_text(incar_text)
+    (tmp_path / "BCAR").write_text("MLP = CHGNET\n")
+    for index, text in ((0, healthy), (1, singular), (2, healthy)):
+        image_dir = tmp_path / f"0{index}"
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(text)
+
+    with pytest.raises(vpmdk.WorkdirInputError):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+def test_healthy_neb_band_still_runs(tmp_path):
+    # Guard the fix above: forcing the cell inversion inside the input wrapper
+    # must not reject a legitimate band.
+    (tmp_path / "INCAR").write_text("IMAGES = 1\nSPRING = -5\nNSW = 0\nIBRION = -1\n")
+    (tmp_path / "BCAR").write_text("MLP = CHGNET\n")
+    for index, shift in ((0, 0.0), (1, 0.5), (2, 1.0)):
+        image_dir = tmp_path / f"0{index}"
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(
+            f"H\n1.0\n5 0 0\n0 5 0\n0 0 5\nH\n1\nCartesian\n{shift} 0 0\n"
+        )
+
+    vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+    assert (tmp_path / "OUTCAR").exists()
+
+
+def test_neb_atom_count_check_is_shared_by_both_run_branches():
+    # run_neb_images has two branches: the ASE optimization path (NSW>0 and
+    # IBRION>0) validated the band, while the single-point/MD path did not -- so a
+    # directory with mismatched image atom counts was rejected as invalid input by
+    # one branch and silently mis-computed by the other, writing an all-zero
+    # TANGENT/CHAIN-FORCE summary that looks like a successful run. The SHAPE rule
+    # is now shared; the duplicate-geometry rule stays exclusive to the optimizer,
+    # where a zero tangent has no direction to project onto (identical adjacent
+    # images are a legitimate single-point/MD input).
+    import numpy as np
+
+    from vpmdk_core.runtime import neb as neb_module
+
+    mismatched = [np.zeros((2, 3)), np.ones((3, 3))]
+    duplicated = [np.zeros((2, 3)), np.zeros((2, 3))]
+    distinct = [np.zeros((2, 3)), np.ones((2, 3))]
+
+    # Shared check (both branches): shape only.
+    with pytest.raises(vpmdk.WorkdirInputError, match="inconsistent atom counts"):
+        neb_module._validate_neb_image_shapes(mismatched)
+    neb_module._validate_neb_image_shapes(duplicated)
+    neb_module._validate_neb_image_shapes(distinct)
+
+    # Optimizer-only check: the shared band rules PLUS duplicates. Real Atoms are
+    # used because _validate_neb_path also enforces ASE's band-consistency rules
+    # (species order, pbc, periodic cell), which a positions-only stub cannot
+    # express.
+    def image(positions):
+        return Atoms("H" * len(positions), positions=positions, cell=[10, 10, 10])
+
+    with pytest.raises(vpmdk.WorkdirInputError, match="inconsistent atom counts"):
+        neb_module._validate_neb_path([image(p) for p in mismatched])
+    with pytest.raises(vpmdk.WorkdirInputError, match="duplicate adjacent"):
+        neb_module._validate_neb_path([image(p) for p in duplicated])
+    neb_module._validate_neb_path([image(p) for p in distinct])
+
+
+def test_malformed_lammps_traj_interval_is_classified_as_input_error(
+    tmp_path: Path, prepare_inputs
+):
+    # LAMMPS_TRAJ_INTERVAL is parsed during the input phase; a malformed value
+    # must raise WorkdirInputError (input_error / exit 1), matching the other
+    # malformed-input tags, rather than propagating as a calculation_error.
+    prepare_inputs(tmp_path, potential="CHGNET")
+    (tmp_path / "BCAR").write_text(
+        "MLP = CHGNET\nWRITE_LAMMPS_TRAJ = 1\nLAMMPS_TRAJ_INTERVAL = abc\n"
+    )
+    with pytest.raises(vpmdk.WorkdirInputError):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+def test_huge_images_value_does_not_crash_neb_detection():
+    # _is_neb_like_incar coerces IMAGES via int(float(...)), which raises
+    # OverflowError (not ValueError) for a huge value (e.g. a several-hundred-digit
+    # IMAGES). That must be tolerated like any other malformed IMAGES -- falling
+    # back to SPRING/LCLIMB -- not propagate as an uncaught OverflowError (which a
+    # server would mislabel calculation_error/exit 2 vs one-shot exit 1).
+    class _FakeIncar(dict):
+        def keys(self):
+            return list(super().keys())
+
+    huge = "9" * 400
+    assert vpmdk._is_neb_like_incar(_FakeIncar({"IMAGES": huge})) is False
+    # A huge IMAGES must not suppress NEB detection via other indicators.
+    assert vpmdk._is_neb_like_incar(_FakeIncar({"IMAGES": huge, "SPRING": "-5"})) is True
+    # A valid IMAGES still selects NEB.
+    assert vpmdk._is_neb_like_incar(_FakeIncar({"IMAGES": "3"})) is True
+
+    # _parse_neb_image_count (used by the NEB runtime for the image-count hint)
+    # coerces via int(float(...)); inf/nan/huge must be ignored (return None),
+    # not raise an uncaught OverflowError/ValueError, matching _is_neb_like_incar.
+    for bad in (huge, "1e400", "nan", "-inf"):
+        assert vpmdk._parse_neb_image_count(_FakeIncar({"IMAGES": bad})) is None
+    assert vpmdk._parse_neb_image_count(_FakeIncar({"IMAGES": "3"})) == 3
+
+    # Root guard: _parse_optional_float maps a non-finite result to None, so every
+    # int(_parse_optional_float(...)) site (ICHAIN/IOPT/IMAGES/...) falls back to
+    # its default instead of raising. Verified for the VTST ICHAIN and NEB IOPT
+    # selectors, whose bare int(parsed) previously crashed on inf/nan.
+    from vpmdk_core.settings import incar as _incar_mod
+    from vpmdk_core.runtime import neb as _neb_mod
+
+    for bad in (huge, "1e400", "nan", "-inf"):
+        assert _incar_mod._parse_optional_float(bad, key="X") is None
+        assert _incar_mod._parse_vtst_ichain(_FakeIncar({"ICHAIN": bad})) == 0
+        assert _neb_mod._parse_neb_iopt(_FakeIncar({"IOPT": bad})) == 0
+    # Valid values are still parsed.
+    assert _incar_mod._parse_optional_float("2.5", key="X") == 2.5
+    assert _incar_mod._parse_vtst_ichain(_FakeIncar({"ICHAIN": "2"})) == 2
+
+    # Direct int(float(...)) "tolerate-a-malformed-value" branches must also catch
+    # OverflowError (not just ValueError), so a non-finite value is ignored/
+    # defaulted consistently with a non-numeric one instead of escaping.
+    from vpmdk_core.io import inputs as _io_inputs
+
+    for bad in ("inf", "9" * 400, "nan"):
+        # NHC_NCHAINS: warn + ignore -> not recorded (MD uses the default chain).
+        assert "NHC_NCHAINS" not in _incar_mod._extract_thermostat_parameters(
+            _FakeIncar({"NHC_NCHAINS": bad})
+        )
+        # MAGMOM repeat count: malformed token is skipped, not crashed.
+        assert _io_inputs._parse_magmom_values(f"{bad}*2.0") == []
+    # Valid forms still work.
+    assert _incar_mod._extract_thermostat_parameters(
+        _FakeIncar({"NHC_NCHAINS": "4"})
+    )["NHC_NCHAINS"] == 4.0
+    assert _io_inputs._parse_magmom_values("2*1.5") == [1.5, 1.5]
+
+
+def test_malformed_bcar_is_classified_as_input_error(tmp_path):
+    # A malformed/unreadable BCAR is user input; run_workdir must raise
+    # WorkdirInputError (exit 1 one-shot / input_error server), not let a bare
+    # UnicodeDecodeError/OSError escape as an uncaught traceback (one-shot) or be
+    # misclassified as calculation_error (server).
+    (tmp_path / "INCAR").write_text("NSW = 0\nIBRION = -1\n")
+    (tmp_path / "POSCAR").write_text(
+        "H2\n1.0\n5 0 0\n0 5 0\n0 0 5\nH\n1\nCartesian\n0 0 0\n"
+    )
+    (tmp_path / "BCAR").write_bytes(b"MLP = CHGNET\n\xff\xfe not utf-8\n")
+    with pytest.raises(vpmdk.WorkdirInputError):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+def test_neb_layout_error_is_classified_as_input_error(
+    tmp_path: Path, prepare_inputs
+):
+    # An NEB optimization directory with too few image directories is a user
+    # layout problem: it must raise WorkdirInputError (input_error / exit 1),
+    # consistent with the per-image structure reads, not a plain RuntimeError that
+    # server mode would report as calculation_error (exit 2).
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "5", "IBRION": "2", "IMAGES": "1"},
+    )
+    for image, delta in (("00", 0.0), ("01", 0.02)):  # only two dirs (need >=3)
+        image_dir = tmp_path / image
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(
+            _shift_first_direct_position((tmp_path / "POSCAR").read_text(), delta)
+        )
+    with pytest.raises(vpmdk.WorkdirInputError):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+def test_malformed_force_constants_displacement_is_input_error(tmp_path):
+    # FORCE_CONSTANTS_DISPLACEMENT (IBRION 7/8) is a BCAR-tag input parse; a
+    # malformed value must raise WorkdirInputError (input_error / exit 1), like
+    # the other input tags, not surface as calculation_error (exit 2) in server
+    # mode. Only the parse is wrapped; the force-constants run stays a calc.
+    (tmp_path / "INCAR").write_text("IBRION = 7\nNSW = 1\n")
+    (tmp_path / "POSCAR").write_text(
+        "H2\n1.0\n5 0 0\n0 5 0\n0 0 5\nH\n1\nCartesian\n0 0 0\n"
+    )
+    (tmp_path / "BCAR").write_text(
+        "MLP = CHGNET\nFORCE_CONSTANTS_DISPLACEMENT = abc\n"
+    )
+    with pytest.raises(vpmdk.WorkdirInputError):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+def test_malformed_charge_option_is_input_error(tmp_path):
+    # CHARGE_* charge-density options are BCAR-tag input parses; a malformed value
+    # must raise WorkdirInputError (input_error / exit 1), not be misclassified as
+    # calculation_error in server mode. The density prediction itself stays a calc.
+    (tmp_path / "INCAR").write_text("NSW = 0\nIBRION = -1\n")
+    (tmp_path / "POSCAR").write_text(
+        "H2\n1.0\n5 0 0\n0 5 0\n0 0 5\nH\n1\nCartesian\n0 0 0\n"
+    )
+    (tmp_path / "BCAR").write_text(
+        "MLP = CHGNET\nWRITE_CHGCAR = 1\nCHARGE_CUTOFF = abc\n"
+    )
+    with pytest.raises(vpmdk.WorkdirInputError):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+@pytest.mark.parametrize(
+    "incar_text",
+    [
+        "NSW = 0\nIBRION = -1\n",  # no ENCUT and no NGX*/NGXF*: grid unresolvable
+        "NSW = 0\nIBRION = -1\nNGXF = abc\nNGYF = 1\nNGZF = 1\n",  # malformed grid tag
+        "NSW = 0\nIBRION = -1\nPREC = Awesome\nENCUT = 300\n",  # unsupported PREC
+    ],
+)
+def test_unresolvable_chgcar_grid_is_input_error(tmp_path, incar_text):
+    # The CHGCAR grid comes from the user's INCAR (ENCUT / NGX* / NGXF* / PREC),
+    # but only the adjacent BCAR tag parse was wrapped: the INCAR-derived grid
+    # resolution happened deep inside predict_charge_density, so the same class of
+    # user error surfaced as calculation_error (exit 2, documented RETRYABLE) and a
+    # retry driver would resubmit a permanently broken INCAR forever.
+    (tmp_path / "INCAR").write_text(incar_text)
+    (tmp_path / "POSCAR").write_text(
+        "H2\n1.0\n5 0 0\n0 5 0\n0 0 5\nH\n1\nCartesian\n0 0 0\n"
+    )
+    (tmp_path / "BCAR").write_text("MLP = CHGNET\nWRITE_CHGCAR = 1\n")
+    with pytest.raises(vpmdk.WorkdirInputError):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+def test_degenerate_poscar_lattice_is_input_error(tmp_path):
+    # A geometrically invalid POSCAR lattice must be input_error (exit 1), never
+    # the retryable calculation_error. Empirically the singular cell below is
+    # caught inside read_structure (already wrapped), so this pins the
+    # USER-VISIBLE contract; the conversion/wrap/MAGMOM steps that follow are
+    # wrapped too, as defense in depth -- they consume the same user input, so
+    # their failures belong on the same side of the classification boundary.
+    (tmp_path / "INCAR").write_text("NSW = 0\nIBRION = -1\n")
+    # A degenerate (zero-volume) cell: all three lattice vectors are collinear.
+    (tmp_path / "POSCAR").write_text(
+        "H\n1.0\n1 0 0\n2 0 0\n3 0 0\nH\n1\nCartesian\n0 0 0\n"
+    )
+    (tmp_path / "BCAR").write_text("MLP = CHGNET\n")
+    with pytest.raises(vpmdk.WorkdirInputError):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+def test_poscar_not_found_message_is_not_duplicated(tmp_path: Path, capsys):
+    # Regression for the diagnostic-surfacing fix: run_workdir already prints
+    # "POSCAR not found." to stdout before raising, so _legacy_main must NOT echo
+    # it again to stderr (which would change exact ``vpmdk --dir`` output and
+    # double the message). The message is marked reported=True for exactly this.
+    (tmp_path / "INCAR").write_text("NSW = 0\nIBRION = -1\n")
+    (tmp_path / "BCAR").write_text("MLP = CHGNET\n")
+    with pytest.raises(SystemExit) as excinfo:
+        vpmdk.main(["--dir", str(tmp_path)])
+    assert excinfo.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out.count("POSCAR not found") == 1
+    assert "POSCAR not found" not in captured.err
+
+
+def test_legacy_main_reports_malformed_input_diagnostic(tmp_path: Path, capsys):
+    # Regression: the one-shot entrypoint must surface the WorkdirInputError
+    # message before exiting 1. Previously _legacy_main did
+    # ``raise SystemExit(1) from None``, discarding the diagnostic, so a malformed
+    # one-shot run exited 1 with no output at all and never named the bad value
+    # (server mode still reported it as input_error -- an asymmetric loss).
+    (tmp_path / "INCAR").write_text("NSW = not-a-number\n")
+    (tmp_path / "POSCAR").write_text(
+        "H2\n1.0\n5 0 0\n0 5 0\n0 0 5\nH\n1\nCartesian\n0 0 0\n"
+    )
+    (tmp_path / "BCAR").write_text("MLP = CHGNET\n")
+    with pytest.raises(SystemExit) as excinfo:
+        vpmdk.main(["--dir", str(tmp_path)])
+    assert excinfo.value.code == 1
+    captured = capsys.readouterr()
+    assert "not-a-number" in (captured.out + captured.err).lower()
+
+
 def test_run_neb_images_uses_parent_incar_for_pseudo_scf_settings(
     tmp_path: Path, prepare_inputs
 ):
@@ -1778,7 +2646,7 @@ def test_main_neb_runner_rejects_ase_neb_without_moving_images(
 
 
 def test_main_neb_runner_rejects_unsupported_vtst_ts_mode_without_numbered_images(
-    tmp_path: Path, prepare_inputs
+    tmp_path: Path, prepare_inputs, capsys
 ):
     prepare_inputs(
         tmp_path,
@@ -1794,14 +2662,18 @@ def test_main_neb_runner_rejects_unsupported_vtst_ts_mode_without_numbered_image
     monkeypatch.setattr(vpmdk, "run_relaxation", fail)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
     try:
-        with pytest.raises(NotImplementedError, match="ICHAIN=2"):
+        # Clean exit-1 diagnostic, not a raw traceback (server mode reports the
+        # same condition as input_error).
+        with pytest.raises(SystemExit) as excinfo:
             vpmdk.main()
+        assert excinfo.value.code == 1
+        assert "ICHAIN=2" in capsys.readouterr().err
     finally:
         monkeypatch.undo()
 
 
 def test_main_neb_runner_rejects_unsupported_vtst_ts_mode_before_per_image_dispatch(
-    tmp_path: Path, prepare_inputs
+    tmp_path: Path, prepare_inputs, capsys
 ):
     prepare_inputs(
         tmp_path,
@@ -1818,8 +2690,12 @@ def test_main_neb_runner_rejects_unsupported_vtst_ts_mode_before_per_image_dispa
     monkeypatch.setattr(vpmdk, "run_single_point", fail)
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(tmp_path)])
     try:
-        with pytest.raises(NotImplementedError, match="ICHAIN=2"):
+        # Clean exit-1 diagnostic, not a raw traceback (server mode reports the
+        # same condition as input_error).
+        with pytest.raises(SystemExit) as excinfo:
             vpmdk.main()
+        assert excinfo.value.code == 1
+        assert "ICHAIN=2" in capsys.readouterr().err
     finally:
         monkeypatch.undo()
 
@@ -2373,7 +3249,7 @@ def test_main_writes_chgcar_when_requested(tmp_path: Path, prepare_inputs):
     assert seen["spin_shape"] == (2, 2, 2)
     assert seen["n_atoms"] == 2
     assert seen["incar"]["PREC"] == "N"
-    assert seen["incar"]["ENCUT"] == "400"
+    assert float(seen["incar"]["ENCUT"]) == 400.0
     assert seen["reference"] is not None
 
 
@@ -2552,8 +3428,2836 @@ def test_main_preserves_caller_relative_charge_env_paths_under_dir(
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(run_dir)])
     try:
         vpmdk.main()
+        assert seen["predict_cwd"] == run_dir
+        assert seen["charge_env_base_dir"] == str(caller_dir)
+
+        # Server mode runs in the server process cwd, but must retain the cwd
+        # transmitted by the submitting client for relative environment paths.
+        server_dir = tmp_path / "server-cwd"
+        server_dir.mkdir()
+        seen.clear()
+        monkeypatch.chdir(server_dir)
+        vpmdk.run_workdir(
+            str(run_dir),
+            calculator=DummyCalculator(),
+            charge_base_dir=str(caller_dir),
+        )
+        assert seen["predict_cwd"] == run_dir
+        assert seen["charge_env_base_dir"] == str(caller_dir)
     finally:
         monkeypatch.undo()
 
-    assert seen["predict_cwd"] == run_dir
-    assert seen["charge_env_base_dir"] == str(caller_dir)
+
+def test_non_finite_ediff_falls_back_to_the_documented_default(capsys):
+    # R125: the OUTCAR header writer formats EDIFF with f"{value:.8E}" and then
+    # splits the mantissa from the exponent. For inf/nan that string is 'INF'/'NAN'
+    # with no 'E', so the split raised a bare ValueError DURING the run -- surfaced
+    # as calculation_error (exit 2, documented RETRYABLE) for an INCAR that can
+    # never succeed. The pseudo-SCF helper already tolerates unparseable tags.
+    from vpmdk_core.io import vasp_compat
+
+    for raw in (float("inf"), float("nan"), "1e400"):
+        settings = vasp_compat._pseudo_scf_settings_from_incar(
+            {"EDIFF": raw}, enabled=True
+        )
+        assert settings.ediff == 1.0e-4, raw
+        assert "EDIFF" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("period", ["0", "-100"])
+def test_non_positive_csvr_period_is_an_input_error(period: str):
+    # R126: ase.md.bussi.Bussi is mathematically undefined for taut <= 0 (taut=0
+    # raises ZeroDivisionError in exp(-dt/taut), taut<0 raises "math domain error"
+    # from the sqrt in calculate_alpha), so the failure landed MID-RUN and server
+    # mode classified it as calculation_error -- exit 2, which SERVER_MODE_SPEC 2.5
+    # documents as RETRYABLE, so a retry driver resubmits a permanently invalid
+    # INCAR forever. The sibling NHC_PERIOD<=0 was already an input error (exit 1);
+    # R120's self-audit missed this one.
+    from ase.build import bulk
+
+    with pytest.raises(vpmdk.WorkdirInputError) as excinfo:
+        vpmdk._select_md_dynamics(
+            bulk("Si", "diamond", a=5.43),
+            mdalgo=5,
+            timestep=1.0,
+            initial_temperature=300.0,
+            smass=None,
+            thermostat_params={"CSVR_PERIOD": float(period)},
+        )
+
+    assert "CSVR_PERIOD must be positive" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("corruption", ["lattice", "positions"])
+def test_non_finite_poscar_geometry_is_an_input_error_in_both_layouts(
+    tmp_path, corruption: str
+):
+    # R126: a nan/inf in a POSCAR lattice row or a fractional coordinate (typical of
+    # a CONTCAR from a diverged upstream run reused as the next POSCAR) passed the
+    # flat-workdir input phase entirely: Cell.complete() substitutes unit vectors
+    # only for an all-ZERO row, wrap() raises only for a FINITE singular cell, and a
+    # calculator given an atom at nan simply finds no neighbours -- so the run
+    # reported exit 0 with a finite but meaningless energy, forces of exactly 0.0
+    # (which IBRION=2 reads as immediate convergence) and a CONTCAR propagating the
+    # nan. The NEB branch checked only the cell determinant, so it caught the
+    # lattice case but not the positions case. One shared rule now covers both.
+    from ase.build import bulk
+    from ase.io import write as ase_write
+
+    from vpmdk_core.io import inputs as inputs_module
+
+    source = tmp_path / "POSCAR"
+    ase_write(str(source), bulk("Si", "diamond", a=5.43), format="vasp")
+    lines = source.read_text().splitlines()
+    if corruption == "lattice":
+        lines[3] = "     0.0000000 nan 0.0000000"
+    else:
+        marker = next(
+            index
+            for index, line in enumerate(lines)
+            if line.strip().lower().startswith(("direct", "cartesian"))
+        )
+        parts = lines[marker + 1].split()
+        parts[0] = "nan"
+        lines[marker + 1] = "  " + " ".join(parts)
+    source.write_text("\n".join(lines) + "\n")
+
+    structure = vpmdk.read_structure(str(source))
+    atoms = vpmdk.AseAtomsAdaptor.get_atoms(structure)
+
+    with pytest.raises(ValueError) as excinfo:
+        inputs_module._validate_finite_geometry(atoms)
+    assert "non-finite values" in str(excinfo.value)
+
+    # An entirely zero cell still means "no cell given" (a legitimate molecular run).
+    molecule = vpmdk.AseAtomsAdaptor.get_atoms(
+        vpmdk.read_structure(str(source))
+    )
+    molecule.set_cell(np.zeros((3, 3)))
+    # Distinct positions: all-zero coordinates are two ions on the same site,
+    # which the R137 coincident-atom guard rightly rejects even for molecules.
+    molecule.set_positions(
+        np.arange(len(molecule) * 3, dtype=float).reshape(-1, 3)
+    )
+    inputs_module._validate_finite_geometry(molecule)
+
+
+def test_tiny_finite_cell_is_an_input_error_not_a_hang():
+    # R136 (P3): a tiny-but-finite cell (a POSCAR scale-factor typo of 0.01, or
+    # a collapsed CONTCAR from a diverged variable-cell run reused as POSCAR)
+    # passed both the finiteness and det==0 checks, and the backend's periodic-
+    # image enumeration then grows as (cutoff/width)^3 -- measured: a 0.3 A
+    # cell wedged CHGNet's first energy call beyond 280 s, a permanent silent
+    # hang of a resident worker. The geometry is pure input; judge it there.
+    from ase import Atoms
+
+    from vpmdk_core.io import inputs as inputs_module
+
+    tiny = Atoms("Cu2", scaled_positions=[[0, 0, 0], [0.5, 0.5, 0.5]],
+                 cell=np.eye(3) * 0.3, pbc=True)
+    with pytest.raises(ValueError, match="below the supported minimum"):
+        inputs_module._validate_finite_geometry(tiny)
+
+    # A near-degenerate cell whose vectors are individually long but whose
+    # perpendicular width has collapsed is the same failure mode.
+    collapsed = Atoms(
+        "Cu",
+        positions=[[0.0, 0.0, 0.0]],
+        cell=[[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [10.0, 10.0, 0.001]],
+        pbc=True,
+    )
+    with pytest.raises(ValueError, match="below the supported minimum"):
+        inputs_module._validate_finite_geometry(collapsed)
+
+    # Ordinary cells -- including small-but-physical ones -- still pass.
+    inputs_module._validate_finite_geometry(
+        Atoms("Cu", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3) * 2.0, pbc=True)
+    )
+
+
+def test_overflow_range_cell_is_an_input_error_not_a_silent_nan_run():
+    # R137 (P2): the R136 width guard silently disabled itself for the
+    # EXPANDING mirror of the case it was built for: a lattice in the 1e150+
+    # range (a diverged variable-cell CONTCAR reused as POSCAR, or a scale
+    # typo like 5.43e200) has finite entries but det and face areas overflow
+    # to inf, width becomes inf/inf = nan, and every nan comparison is False.
+    # Measured: exit 0 with 'Calculation completed.', nan stress blocks and
+    # an inf volume in vasprun.xml that pymatgen parses without complaint.
+    from ase import Atoms
+
+    from vpmdk_core.io import inputs as inputs_module
+
+    overflowing = Atoms(
+        "Si", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3) * 1e154, pbc=True
+    )
+    with pytest.raises(ValueError, match="overflows a float"):
+        inputs_module._validate_finite_geometry(overflowing)
+
+    # Huge-but-representable is still absurd: nothing physical is wider than
+    # 0.1 mm per axis.
+    huge = Atoms(
+        "Si", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3) * 1e8, pbc=True
+    )
+    with pytest.raises(ValueError, match="above the supported maximum"):
+        inputs_module._validate_finite_geometry(huge)
+
+    # A large vacuum slab box stays legitimate.
+    inputs_module._validate_finite_geometry(
+        Atoms("Si", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3) * 500.0, pbc=True)
+    )
+
+
+def test_coincident_atoms_are_an_input_error_not_a_nan_run():
+    # R137 (P3): two ions on the same site (a duplicated POSCAR coordinate
+    # line, or fractional 0.0 and 1.0 coinciding under PBC) passed the entire
+    # input phase and then deterministically produced nan on the first
+    # evaluation in every tested backend -- classified as a RETRYABLE
+    # calculation failure (exit 2) after a full model load, for a permanently
+    # broken POSCAR.
+    from ase import Atoms
+
+    from vpmdk_core.io import inputs as inputs_module
+
+    duplicated = Atoms(
+        "Si2",
+        scaled_positions=[[0.25, 0.25, 0.25], [0.25, 0.25, 0.25]],
+        cell=np.eye(3) * 5.43,
+        pbc=True,
+    )
+    with pytest.raises(ValueError, match="occupy the same site"):
+        inputs_module._validate_finite_geometry(duplicated)
+
+    # 0.0 and 1.0 are the same site under periodic boundary conditions.
+    wrapped = Atoms(
+        "Si2",
+        scaled_positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.999999]],
+        cell=np.eye(3) * 5.43,
+        pbc=True,
+    )
+    with pytest.raises(ValueError, match="occupy the same site"):
+        inputs_module._validate_finite_geometry(wrapped)
+
+    # Real short bonds stay legitimate (H2 is 0.74 A).
+    h2 = Atoms(
+        "H2",
+        positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.74]],
+        cell=np.eye(3) * 10.0,
+        pbc=True,
+    )
+    inputs_module._validate_finite_geometry(h2)
+
+    # Above the pairwise-matrix bound only EXACT duplicates are detected --
+    # and they still are.
+    many = Atoms(
+        "H" + str(5000),
+        scaled_positions=np.random.default_rng(7).uniform(0.0, 1.0, (5000, 3)),
+        cell=np.eye(3) * 200.0,
+        pbc=True,
+    )
+    inputs_module._validate_finite_geometry(many)
+    positions = many.get_scaled_positions()
+    positions[4999] = positions[0]
+    many.set_scaled_positions(positions)
+    with pytest.raises(ValueError, match="occupy the same site"):
+        inputs_module._validate_finite_geometry(many)
+
+
+def test_bcar_device_tag_is_case_folded_at_parse(tmp_path):
+    # R137 (P3): torch device strings are lowercase-only ('CPU' raises
+    # RuntimeError), while the server's SPEC 3.4 comparison case-folds DEVICE
+    # -- so a VASP-style 'DEVICE = CPU' was ACCEPTED and computed by the
+    # server (exit 0) but crashed one-shot on the byte-identical directory
+    # (exit 1). Folding at the single BCAR parse point makes every reader see
+    # the same value.
+    path = tmp_path / "BCAR"
+    path.write_text("MLP=CHGNET\nDEVICE = CUDA:0\nMODEL = /Models/CaseSensitive.pth\n")
+
+    tags = vpmdk.parse_key_value_file(str(path))
+
+    assert tags["DEVICE"] == "cuda:0"
+    # Paths stay case-sensitive: only DEVICE is folded.
+    assert tags["MODEL"] == "/Models/CaseSensitive.pth"
+
+
+def test_corrupted_numeric_token_is_rejected_not_digit_extracted(tmp_path):
+    # R137 (P3): pymatgen's proc_val extracts the leading digits of a
+    # corrupted numeric token, so 'TEBEG = 5OO' (letter O typo for 500) ran
+    # the MD at 5 K and 'NSW = 0x10' ran a single point -- both exit 0 with
+    # the OUTCAR echoing the user's original text, where VASP refuses the
+    # file. The R131 guard skipped these because the raw token does not parse
+    # as a float at all. Driven directly with the typed mapping real pymatgen
+    # produces (the conftest stub keeps values as strings).
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text("TEBEG = 5OO\n")
+    with pytest.raises(ValueError, match="not a number"):
+        incar_module._reject_truncated_integer_tags({"TEBEG": 5.0}, str(path))
+
+    other = tmp_path / "INCAR2"
+    other.write_text("NSW = 0x10\n")
+    with pytest.raises(ValueError, match="not a number"):
+        incar_module._reject_truncated_integer_tags({"NSW": 0}, str(other))
+
+    # Non-numeric text for a genuinely non-numeric tag stays legal.
+    system = tmp_path / "INCAR3"
+    system.write_text("SYSTEM = D2O sample\n")
+    incar_module._reject_truncated_integer_tags({"SYSTEM": "D2O sample"}, str(system))
+
+
+def test_trailing_comma_scalar_values_stay_legal(tmp_path):
+    # R138 (P2, SPEC 1.1 regression of the R137 guard): a trailing comma is a
+    # legal Fortran list-directed terminator -- VASP reads 'NSW = 3,' as 3 and
+    # so does pymatgen, and the committed tree ran such files correctly. The
+    # first version of the corrupted-token branch rejected them.
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text("NSW = 3,\nTEBEG = 300,\nEDIFFG = -0.01,\n")
+    incar_module._reject_truncated_integer_tags(
+        {"NSW": 3, "TEBEG": 300.0, "EDIFFG": -0.01}, str(path)
+    )
+
+    # The comma must not weaken the guard: a MISREAD comma value still rejects.
+    bad = tmp_path / "INCAR2"
+    bad.write_text("NSW = 1e5,\n")
+    with pytest.raises(ValueError):
+        incar_module._reject_truncated_integer_tags({"NSW": 1}, str(bad))
+
+
+def test_corrupted_token_for_untyped_numeric_tags_is_rejected(tmp_path):
+    # R138 (P2): the R137 guard fired only when PYMATGEN typed the tag as a
+    # number -- but VPMDK's own _NUMERIC_RE readers digit-extract too, for the
+    # tags pymatgen leaves as text: 'CSVR_PERIOD = 5OO' came back as the
+    # string '5oo', was skipped by the guard, and _parse_optional_float read
+    # 5 -- a thermostat 100x stiffer than requested, exit 0, no warning. And
+    # 'LANGEVIN_GAMMA = 1O' arrives as the LIST [1], invisible to the typed
+    # check. The rejection is now keyed on the RAW token for every scalar
+    # numeric tag, no matter which parser types it.
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text("CSVR_PERIOD = 5OO\n")
+    with pytest.raises(ValueError, match="not a number"):
+        incar_module._reject_truncated_integer_tags(
+            {"CSVR_PERIOD": "5oo"}, str(path)
+        )
+
+    other = tmp_path / "INCAR2"
+    other.write_text("LANGEVIN_GAMMA = 1O\n")
+    with pytest.raises(ValueError, match="not a number"):
+        incar_module._reject_truncated_integer_tags(
+            {"LANGEVIN_GAMMA": [1]}, str(other)
+        )
+
+    # A digit-free unparseable value keeps the established warn-and-ignore
+    # path of the thermostat readers (nothing can be extracted from it).
+    inert = tmp_path / "INCAR3"
+    inert.write_text("NHC_NCHAINS = abc\n")
+    incar_module._reject_truncated_integer_tags({"NHC_NCHAINS": "abc"}, str(inert))
+
+    # MAGMOM's 'N*value' mini-language legitimately fails float() and must
+    # stay out of this rule.
+    magmom = tmp_path / "INCAR4"
+    magmom.write_text("MAGMOM = 4*1.0\n")
+    incar_module._reject_truncated_integer_tags({"MAGMOM": [1.0] * 4}, str(magmom))
+
+
+def test_huge_incar_repeat_counts_are_rejected_before_expansion(tmp_path):
+    # R139 (P2): pymatgen's proc_val expands 'MAGMOM = 10000000000*1.0' into a
+    # 1e10-element list (~160 GB) AT PARSE TIME -- before any guard downstream
+    # of Incar.from_file could run -- inside the resident server process. The
+    # exponent spelling escapes pymatgen's int() and instead detonated VPMDK's
+    # own expander mid-run. Both layers are now behind a raw-text bound that
+    # runs BEFORE the parse, and must fail FAST.
+    import time as time_module
+
+    from vpmdk_core.settings import incar as incar_module
+
+    for value in ("10000000000*1.0", "10000000000e0*2.0"):
+        path = tmp_path / "INCAR"
+        path.write_text(f"MAGMOM = {value}\n")
+        started = time_module.monotonic()
+        with pytest.raises(ValueError, match="repeat token"):
+            incar_module._load_incar(str(path))
+        assert time_module.monotonic() - started < 5.0
+
+    # Ordinary MAGMOM repeats stay legal.
+    path = tmp_path / "INCAR"
+    path.write_text("MAGMOM = 4*1.0 2*-0.5\n")
+    incar_module._load_incar(str(path))
+
+    # A repeat token for a SCALAR-read tag is a misread either way (Fortran
+    # reads the repeated value, pymatgen/VPMDK extract the count), so the
+    # R138 corrupted-token rule correctly rejects it rather than silently
+    # running with friction 3 where the user wrote 3*10.
+    path.write_text("LANGEVIN_GAMMA = 3*10\n")
+    with pytest.raises(ValueError, match="not a number"):
+        incar_module._load_incar(str(path))
+
+    # Defense in depth: the library-API expander enforces the same bound.
+    from vpmdk_core.io import inputs as inputs_module
+
+    with pytest.raises(ValueError, match="repeat token"):
+        inputs_module._parse_magmom_values("2000000000*1.0")
+    assert inputs_module._parse_magmom_values("4*1.0") == [1.0] * 4
+
+
+def test_absurd_poscar_ion_counts_are_rejected_before_expansion(tmp_path):
+    # R139 (P3): a corrupted counts line ('2000000000') made Poscar.from_file
+    # itself allocate tens of GB of per-atom lists before any VPMDK check ran.
+    import time as time_module
+
+    header = "Si\n1.0\n5 0 0\n0 5 0\n0 0 5\n"
+    # VASP 5 (species line then counts) and VASP 4 (counts on line 6).
+    for body in ("Si\n2000000000\nDirect\n0 0 0\n", "2000000000\nDirect\n0 0 0\n"):
+        path = tmp_path / "POSCAR"
+        path.write_text(header + body)
+        started = time_module.monotonic()
+        with pytest.raises(ValueError, match="supported maximum"):
+            vpmdk.read_structure(str(path))
+        assert time_module.monotonic() - started < 5.0
+
+    # Ordinary files still read.
+    path = tmp_path / "POSCAR"
+    path.write_text(header + "Si\n1\nDirect\n0.1 0.2 0.3\n")
+    assert vpmdk.read_structure(str(path)) is not None
+
+
+def test_md_scalar_magnitudes_are_bounded(tmp_path):
+    # R139 (P3): overflow-scale TEBEG/TEEND/POTIM/LANGEVIN_GAMMA (an exponent
+    # typo: 1e300 for 1e3) passed the finiteness checks, produced nan in the
+    # first force call, and failed as RETRYABLE exit 2 for a permanently
+    # broken INCAR. Bounded at 1e9 -- >1000x beyond the largest value
+    # measured to complete (TEBEG=1e6), so nothing that runs today is
+    # rejected.
+    from vpmdk_core.settings import incar as incar_module
+
+    for tag in ("TEBEG", "TEEND", "POTIM"):
+        with pytest.raises(ValueError, match="supported magnitude"):
+            incar_module._load_incar_settings({tag: 1e300, "IBRION": 0})
+    with pytest.raises(ValueError, match="supported magnitude"):
+        incar_module._load_incar_settings(
+            {"IBRION": 0, "MDALGO": 3, "LANGEVIN_GAMMA": 1e300}
+        )
+
+    # The completing control stays legal.
+    settings = incar_module._load_incar_settings({"TEBEG": 1e6, "IBRION": 0})
+    assert settings.tebeg == 1e6
+
+
+def test_smass_and_nhc_period_magnitudes_are_bounded():
+    # R140 (P2): the R139 magnitude bound covered TEBEG/TEEND/POTIM/
+    # LANGEVIN_GAMMA only. SMASS=1e300 raised a raw OverflowError from
+    # tdamp**2 inside ASE's Nose-Hoover chain (one-shot exit 1 traceback,
+    # server exit 2 RETRYABLE), NHC_PERIOD=1e300 the same, and SMASS=-1e300's
+    # Langevin promotion used gamma=|SMASS| WITHOUT the LANGEVIN_GAMMA bound.
+    from vpmdk_core.settings import incar as incar_module
+
+    for value in (1e300, -1e300):
+        with pytest.raises(ValueError, match="supported magnitude"):
+            incar_module._load_incar_settings({"IBRION": 0, "SMASS": value})
+    with pytest.raises(ValueError, match="supported magnitude"):
+        incar_module._load_incar_settings(
+            {"IBRION": 0, "MDALGO": 2, "SMASS": 1.0, "NHC_PERIOD": 1e300}
+        )
+
+    settings = incar_module._load_incar_settings({"IBRION": 0, "SMASS": 100.0})
+    assert settings.smass == 100.0
+
+
+def test_fifo_input_files_are_rejected_not_hung(tmp_path):
+    # R140 (P2): a FIFO planted as POSCAR/INCAR/BCAR blocked the worker
+    # thread forever in open() (a FIFO read-open waits for a writer): status
+    # reported busy forever, queued jobs timed out, and even stop --force
+    # could not preempt the blocked open -- one pathological request wedged
+    # the resident permanently. os.stat never blocks, so the shared readers
+    # reject non-regular files before any open().
+    import time as time_module
+
+    from vpmdk_core.io import inputs as inputs_module
+    from vpmdk_core.settings import incar as incar_module
+
+    fifo = tmp_path / "POSCAR"
+    os.mkfifo(fifo)
+    started = time_module.monotonic()
+    with pytest.raises(ValueError, match="not a regular file"):
+        vpmdk.read_structure(str(fifo))
+    with pytest.raises(ValueError, match="not a regular file"):
+        inputs_module.parse_key_value_file(str(fifo))
+    with pytest.raises(ValueError, match="not a regular file"):
+        incar_module._load_incar(str(fifo))
+    assert time_module.monotonic() - started < 5.0
+
+    # Symlinks to REGULAR files stay legitimate inputs.
+    real = tmp_path / "real_bcar"
+    real.write_text("MLP=CHGNET\n")
+    link = tmp_path / "BCAR"
+    link.symlink_to(real)
+    assert inputs_module.parse_key_value_file(str(link))["MLP"] == "CHGNET"
+
+
+def test_fifo_kpoints_and_output_artifacts_do_not_hang(tmp_path):
+    # R141 (P2 x2): the R140 FIFO sweep missed (a) KPOINTS -- read at OUTPUT
+    # time by _read_non_comment_lines, whose 'except OSError' cannot catch a
+    # FIFO because open() blocks instead of raising -- and (b) the WRITE half
+    # of the surface: open(..., 'w') on a readerless FIFO planted at
+    # OUTCAR/OSZICAR/vasprun.xml/... blocks until a reader appears. Both
+    # wedged the resident worker with stop --force unable to preempt.
+    import time as time_module
+
+    from vpmdk_core.io import vasp_compat as vasp_compat_module
+
+    fifo = tmp_path / "KPOINTS"
+    os.mkfifo(fifo)
+    started = time_module.monotonic()
+    assert vasp_compat_module._read_non_comment_lines(str(fifo)) == []
+    assert time_module.monotonic() - started < 5.0
+
+    out_fifo = tmp_path / "OUTCAR"
+    os.mkfifo(out_fifo)
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    try:
+        with pytest.raises(vpmdk.WorkdirInputError, match="not a regular file"):
+            vasp_compat_module._require_writable_artifact_path("OUTCAR")
+        # Directories keep their established IsADirectoryError classification.
+        (tmp_path / "CONTCAR").mkdir()
+        with pytest.raises(IsADirectoryError):
+            vasp_compat_module._require_writable_artifact_path("CONTCAR")
+        # A dangling symlink stays legal: open('w') creates the target.
+        (tmp_path / "OSZICAR").symlink_to(tmp_path / "does-not-exist-yet")
+        vasp_compat_module._require_writable_artifact_path("OSZICAR")
+        # And the recorder initializer fails fast BEFORE any computation.
+        from ase import Atoms
+
+        with pytest.raises(vpmdk.WorkdirInputError, match="not a regular file"):
+            vpmdk._initialize_vasp_compat_outputs(
+                Atoms("H", positions=[[0.0, 0.0, 0.0]]), ibrion=-1
+            )
+    finally:
+        monkeypatch.undo()
+
+
+def test_free_text_system_titles_stay_legal(tmp_path):
+    # R141 (P2, SPEC 1.1 regression): the finiteness and Fortran-D-exponent
+    # checks ran for EVERY raw INCAR key, so a free-text title whose first
+    # token happens to look numeric ('SYSTEM = 1D5 sample', 'SYSTEM =
+    # Infinity study', 'SYSTEM = NaN') aborted a directory that ran at HEAD.
+    from vpmdk_core.settings import incar as incar_module
+
+    for title in ("1D5 sample", "Infinity study", "NaN"):
+        path = tmp_path / "INCAR"
+        path.write_text(f"SYSTEM = {title}\nNSW = 2\n")
+        incar_module._reject_truncated_integer_tags(
+            {"SYSTEM": title, "NSW": 2}, str(path)
+        )
+
+    # Genuinely numeric tags keep every rejection.
+    bad = tmp_path / "INCAR2"
+    bad.write_text("TEBEG = Infinity\n")
+    with pytest.raises(ValueError, match="finite"):
+        incar_module._reject_truncated_integer_tags({"TEBEG": float("inf")}, str(bad))
+    bad.write_text("EDIFFG = -1.0D-03\n")
+    with pytest.raises(ValueError, match="would be read as"):
+        incar_module._reject_truncated_integer_tags({"EDIFFG": -1.0}, str(bad))
+
+
+def test_neb_image_artifacts_carry_the_pstress_convention(tmp_path):
+    # R141 (P2): the NEB per-image single-point/MD branches did not forward
+    # settings.pstress, so under PSTRESS the image artifacts used the RAW
+    # stress convention ('Pullay stress = 0.00', plain E in vasprun) while
+    # the PARENT reported the corrected one for the SAME image -- a
+    # pressure-dependent barrier computed from image files disagreed with the
+    # parent by the full PV with no warning.
+    import numpy as np
+
+    cell = "5 0 0\n0 5 0\n0 0 5"
+    for index, x in enumerate((0.2, 0.3, 0.4)):
+        image_dir = tmp_path / f"0{index}"
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(
+            f"AB\n1.0\n{cell}\nH He\n1 1\nDirect\n0 0 0\n{x} 0 0\n"
+        )
+    (tmp_path / "BCAR").write_text("MLP = CHGNET\n")
+    (tmp_path / "INCAR").write_text(
+        "IMAGES = 1\nSPRING = -5\nNSW = 0\nIBRION = -1\nISIF = 3\nPSTRESS = 500\n"
+    )
+
+    class StressDummyCalculator(DummyCalculator):
+        def calculate(self, atoms=None, properties=("energy",), system_changes=()):
+            super().calculate(atoms=atoms, properties=properties, system_changes=system_changes)
+            self.results["stress"] = np.zeros(6)
+
+    vpmdk.run_workdir(str(tmp_path), calculator=StressDummyCalculator())
+
+    image_outcar = (tmp_path / "01" / "OUTCAR").read_text()
+    assert "Pullay stress =      500.00 kB" in image_outcar
+    parent_outcar = (tmp_path / "OUTCAR").read_text()
+    assert "Pullay stress =      500.00 kB" in parent_outcar
+
+
+def test_ibrion_44_is_rejected_not_minimized(tmp_path):
+    # R141 (P2): stock VASP's improved-dimer TS search fell into the catch-all
+    # 'other >0 relaxation' branch and silently ran a BFGS MINIMIZATION --
+    # moving AWAY from the requested saddle point -- with exit 0 and
+    # IBRION=44 echoed everywhere. The VTST spelling (ICHAIN=2) was already
+    # rejected; the stock spelling now gets the same honest refusal.
+    (tmp_path / "POSCAR").write_text(
+        "Si\n1.0\n5 0 0\n0 5 0\n0 0 5\nSi\n1\nDirect\n0.1 0.1 0.1\n"
+    )
+    (tmp_path / "INCAR").write_text("IBRION = 44\nNSW = 3\nEDIFFG = -0.01\n")
+    (tmp_path / "BCAR").write_text("MLP=CHGNET\n")
+
+    with pytest.raises(vpmdk.UnsupportedInputError, match="IBRION=44"):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+def test_fractional_integer_tags_are_rejected_not_floored(tmp_path):
+    # R142 (P3): 'NSW = 2.7' floors to 2 through pymatgen's int-regex and
+    # passed the guard (int(2.7) == 2), so the run silently used a number the
+    # file never named; real VASP refuses the file. A trailing dot stays
+    # legal ('100.' is integral).
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text("NSW = 2.7\n")
+    with pytest.raises(ValueError, match="not an integer"):
+        incar_module._reject_truncated_integer_tags({"NSW": 2}, str(path))
+
+    path.write_text("NSW = 100.\n")
+    incar_module._reject_truncated_integer_tags({"NSW": 100}, str(path))
+
+
+def test_lammps_trajectory_fifo_is_rejected_not_hung(tmp_path):
+    # R142 (P2): lammps.lammpstrj was the one output artifact the fixed-name
+    # FIFO sweep missed (its path is configurable), so the guard lives in the
+    # writer function itself per lesson xvi.
+    import time as time_module
+
+    from ase import Atoms
+
+    fifo = tmp_path / "lammps.lammpstrj"
+    os.mkfifo(fifo)
+    atoms = Atoms(
+        "H", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3) * 5.0, pbc=True
+    )
+    started = time_module.monotonic()
+    with pytest.raises(vpmdk.WorkdirInputError, match="not a regular file"):
+        vpmdk._write_lammps_trajectory_step(str(fifo), atoms, 0)
+    assert time_module.monotonic() - started < 5.0
+
+
+def test_client_write_line_survives_a_broken_pipe(tmp_path):
+    # R142 (P2): BrokenPipeError from a closed stdout consumer (`vpmdk run |
+    # head -1`) escaped client_cli uncaught -- exit 120 with a raw traceback,
+    # outside the documented 0-5 table, for a calculation the server
+    # COMPLETED. Output delivery is best-effort; the exit code is the
+    # contract.
+    import vpmdk_client as client_module
+
+    read_fd, write_fd = os.pipe()
+    os.close(read_fd)  # the consumer is gone
+    stream = os.fdopen(write_fd, "w")
+    try:
+        client_module._write_line("line one", stream=stream)
+        client_module._write_line("line two", stream=stream)  # still silent
+    finally:
+        import contextlib
+
+        with contextlib.suppress(OSError):
+            stream.close()
+
+
+def test_spring_survives_pymatgen_int_typing(tmp_path):
+    # R143 (P2, SPEC 1.1 regression + legacy floor): SPRING is REAL in
+    # VASP/VTST but pymatgen int-types it, so 'SPRING = -5.5' came back as -5
+    # -- the R142 guard then rejected the legal file, and the committed tree
+    # silently ran with the FLOORED spring. The raw token holds the truth and
+    # is written back into the mapping.
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text("SPRING = -5.5\n")
+    mapping = {"SPRING": -5}  # what real pymatgen produces
+    incar_module._repair_mistyped_real_tags(mapping, str(path))
+    assert mapping["SPRING"] == -5.5
+    # And the guard accepts the repaired mapping.
+    incar_module._reject_truncated_integer_tags(mapping, str(path))
+
+    # Integral SPRING stays as-is; the stub's string typing is tolerated.
+    path.write_text("SPRING = -5\n")
+    mapping = {"SPRING": -5}
+    incar_module._repair_mistyped_real_tags(mapping, str(path))
+    assert mapping["SPRING"] == -5
+    text_mapping = {"SPRING": "-5.5"}
+    incar_module._repair_mistyped_real_tags(text_mapping, str(path))
+    assert text_mapping["SPRING"] == "-5.5"
+
+
+def test_integer_semantic_float_typed_tags_reject_fractions(tmp_path):
+    # R143 (P3): the R142 fractional rule was keyed on pymatgen's typing, so
+    # integer-SEMANTIC tags pymatgen leaves as float were still silently
+    # floored by VPMDK's own int(float(...)) coercers: 'NHC_NCHAINS = 2.7'
+    # ran a 2-link chain, 'IOPT = 7.5' selected FIRE, 'ICHAIN = 0.7' ran
+    # plain NEB where VASP refuses the file.
+    from vpmdk_core.settings import incar as incar_module
+
+    for tag, value in (("NHC_NCHAINS", 2.7), ("IOPT", 7.5), ("ICHAIN", 0.7)):
+        path = tmp_path / "INCAR"
+        path.write_text(f"{tag} = {value}\n")
+        with pytest.raises(ValueError, match="not an integer"):
+            incar_module._reject_truncated_integer_tags({tag: value}, str(path))
+
+    # Integral spellings stay legal.
+    path = tmp_path / "INCAR"
+    path.write_text("NHC_NCHAINS = 3.0\n")
+    incar_module._reject_truncated_integer_tags({"NHC_NCHAINS": 3.0}, str(path))
+
+
+def test_relative_socket_path_from_deleted_cwd_is_a_clean_error(monkeypatch):
+    # R143 (P3): resolving a RELATIVE socket path consults os.getcwd() inside
+    # VPMDKClient's constructor -- outside client_cli's exception mapping --
+    # so run/status/stop from a deleted cwd died with a raw traceback at
+    # interpreter-default exit 1 (off-contract for status's 0/3). The
+    # resolver now maps it to the clean ValueError client_cli reports, and
+    # the constructor moved inside the mapped try.
+    import vpmdk_protocol as protocol_module
+
+    def deleted_cwd():
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(protocol_module.os, "getcwd", deleted_cwd)
+    with pytest.raises(ValueError, match="no longer exists"):
+        protocol_module.resolve_socket_path("rel.sock")
+    # An absolute path needs no cwd and keeps working.
+    assert protocol_module.resolve_socket_path("/tmp/abs.sock") == "/tmp/abs.sock"
+
+
+def test_species_beyond_model_coverage_is_an_input_error(tmp_path):
+    # R144 (P2): a POSCAR with Cm (Z=96) against the default CHGNET backend
+    # fails every forward pass with a torch shape RuntimeError ('1x96 and
+    # 94x1') -- classified retryable exit 2 in server mode while one-shot
+    # exited 1 via traceback. The coverage is a fixed property of the model
+    # and the species of the input, so it is decided before anything runs.
+    from ase import Atoms
+
+    from vpmdk_core import cli as cli_module
+
+    curium = Atoms("Cm2", positions=[[0, 0, 0], [0, 0, 2.0]])
+    with pytest.raises(vpmdk.WorkdirInputError, match="Z=96"):
+        cli_module._check_backend_species_coverage(curium, {"MLP": "CHGNET"})
+
+    # Z=94 (Pu) is the last covered element; other backends skip the check.
+    plutonium = Atoms("Pu", positions=[[0, 0, 0]])
+    cli_module._check_backend_species_coverage(plutonium, {"MLP": "CHGNET"})
+    cli_module._check_backend_species_coverage(curium, {"MLP": "MACE"})
+
+    # End to end: the gate fires at input time, before any computation.
+    (tmp_path / "POSCAR").write_text(
+        "Cm2\n1.0\n6 0 0\n0 6 0\n0 0 6\nCm\n2\nDirect\n0.1 0.1 0.1\n0.5 0.5 0.5\n"
+    )
+    (tmp_path / "INCAR").write_text("NSW = 0\nIBRION = -1\n")
+    (tmp_path / "BCAR").write_text("MLP=CHGNET\n")
+    with pytest.raises(vpmdk.WorkdirInputError, match="coverage"):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+def test_serve_stdout_death_cannot_override_the_exit_code(monkeypatch):
+    # R144 (P2): with stdout on a dead pipe or full filesystem, the daemon
+    # parent's buffered success print made CPython's interpreter-exit flush
+    # fail and override serve_cli's 0 with 120 -- a launcher then read a
+    # LIVE resident as a failed start. The command now drains stdout itself
+    # and points a broken stream at /dev/null.
+    import vpmdk_core.server as server_module
+
+    read_fd, write_fd = os.pipe()
+    os.close(read_fd)
+    broken = os.fdopen(write_fd, "w")
+    monkeypatch.setattr(sys, "stdout", broken)
+    print("buffered success line")  # sits in the buffer, reader is gone
+    server_module._drain_stream_guarded(sys.stdout)  # must not raise
+    # After the guard the stream points at /dev/null, so even a BARE flush --
+    # the exact operation CPython's finalization performs -- cannot raise.
+    print("late line")
+    sys.stdout.flush()
+
+
+def test_fractional_grid_and_pseudo_scf_tags_are_rejected(tmp_path):
+    # R144 (P3): the R143 integer-semantic set missed the families read
+    # OUTSIDE _load_incar_settings: 'NGXF = 100.5' silently resolved a
+    # 100-point grid, and 'NELM = 2.7' wrote three contradictory echoes (raw
+    # 2.7, header 2, vasprun 2) where VASP refuses the file.
+    from vpmdk_core.settings import incar as incar_module
+
+    for tag in ("NGXF", "NGX", "NELM", "NELMIN", "NELMDL"):
+        path = tmp_path / "INCAR"
+        path.write_text(f"{tag} = 100.5\n")
+        with pytest.raises(ValueError, match="not an integer"):
+            incar_module._reject_truncated_integer_tags({tag: 100}, str(path))
+
+    path = tmp_path / "INCAR"
+    path.write_text("NGXF = 100\n")
+    incar_module._reject_truncated_integer_tags({"NGXF": 100}, str(path))
+
+
+def test_species_gate_covers_matris_declared_sets_and_inheriting_requests():
+    # R145 (P2 x3, one root): (a) MATRIS carries a hard-wired 94-row atom
+    # embedding (IndexError for Z>=95) but was missing from the static table;
+    # (b) MATGL coverage is a HOLED set the loaded model itself declares
+    # (element_types) -- a max-Z number cannot express it; (c) the NEB gate
+    # resolved the backend from the request BCAR alone, so a tag-inheriting
+    # request under a non-CHGNET resident was checked against the CHGNET
+    # default.
+    from ase import Atoms
+    from types import SimpleNamespace
+
+    from vpmdk_core import cli as cli_module
+
+    americium = Atoms("Am", positions=[[0, 0, 0]])
+    with pytest.raises(vpmdk.WorkdirInputError, match="Z=95"):
+        cli_module._check_backend_species_coverage(americium, {"MLP": "MATRIS"})
+
+    # (c) inheriting request: empty BCAR + resident tags select the backend.
+    with pytest.raises(vpmdk.WorkdirInputError, match="Z=95"):
+        cli_module._check_backend_species_coverage(
+            americium, {}, backend_tags={"MLP": "MATRIS"}
+        )
+    # An inheriting request under a covered structure stays accepted.
+    cli_module._check_backend_species_coverage(
+        Atoms("Pu", positions=[[0, 0, 0]]), {}, backend_tags={"MLP": "MATRIS"}
+    )
+
+    # (b) model-declared element table (matgl shape): holes are respected.
+    calculator = DummyCalculator()
+    calculator.model = SimpleNamespace(element_types=("H", "He", "Bi"))
+    polonium = Atoms("Po", positions=[[0, 0, 0]])
+    with pytest.raises(vpmdk.WorkdirInputError, match="Po"):
+        cli_module._check_model_declared_species_coverage(polonium, calculator)
+    cli_module._check_model_declared_species_coverage(
+        Atoms("Bi", positions=[[0, 0, 0]]), calculator
+    )
+    # A model that declares nothing is skipped.
+    cli_module._check_model_declared_species_coverage(polonium, DummyCalculator())
+
+
+def test_neb_without_lclimb_discloses_the_vtst_default(tmp_path, capsys):
+    # R145 (P2): VTST's documented default is LCLIMB=.TRUE. (climbing image);
+    # VPMDK's absent-tag default runs PLAIN NEB, underestimating the barrier
+    # (measured 24% low) with exit 0 and no disclosure. Same warn+document
+    # remedy as ANDERSEN_PROB (default unchanged per SPEC 1.1).
+    cell = "5 0 0\n0 5 0\n0 0 5"
+    for index, x in enumerate((0.2, 0.3, 0.4)):
+        image_dir = tmp_path / f"0{index}"
+        image_dir.mkdir()
+        (image_dir / "POSCAR").write_text(
+            f"AB\n1.0\n{cell}\nH He\n1 1\nDirect\n0 0 0\n{x} 0 0\n"
+        )
+    (tmp_path / "BCAR").write_text("MLP = CHGNET\n")
+    (tmp_path / "INCAR").write_text(
+        "IMAGES = 1\nSPRING = -5\nNSW = 2\nIBRION = 1\nEDIFFG = -0.5\n"
+    )
+    vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+    out = capsys.readouterr().out
+    assert "LCLIMB" in out and "VTST" in out and "climbing" in out
+
+    # An explicit value -- either way -- stays silent.
+    (tmp_path / "INCAR").write_text(
+        "IMAGES = 1\nSPRING = -5\nNSW = 2\nIBRION = 1\nEDIFFG = -0.5\n"
+        "LCLIMB = .TRUE.\n"
+    )
+    vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+    assert "Warning: LCLIMB" not in capsys.readouterr().out
+
+
+def test_spring_repair_survives_real_pymatgen_setitem(tmp_path):
+    # R146 (P2): the R143 SPRING repair assigned through Incar.__setitem__,
+    # which stringifies and RE-RUNS proc_val -- re-flooring the repair to the
+    # same truncated int. Measured no-op against real pymatgen (it only
+    # worked on plain dicts). The repair now writes into the UserDict backing
+    # store. Simulated here with a UserDict whose __setitem__ re-floors,
+    # mirroring real Incar; the real library is exercised by the subprocess
+    # tests' VPMDK_TEST_REAL_PYMATGEN path.
+    from collections import UserDict
+
+    from vpmdk_core.settings import incar as incar_module
+
+    class RefloorDict(UserDict):
+        def __setitem__(self, key, value):
+            super().__setitem__(key, int(float(value)))  # proc_val analogue
+
+    path = tmp_path / "INCAR"
+    path.write_text("SPRING = -5.5\n")
+    mapping = RefloorDict()
+    dict.__setitem__(mapping.data, "SPRING", -5)
+    incar_module._repair_mistyped_real_tags(mapping, str(path))
+    assert mapping.get("SPRING") == -5.5
+
+
+def test_tiny_positive_damping_times_are_rejected():
+    # R146 (P3): SMASS or NHC_PERIOD of 1e-300 passed the positive and 1e9
+    # magnitude guards, but Q = 3N*kT*tdamp^2 underflowed to exactly 0.0 and
+    # the first MD step was nan -- retryable exit 2 for a permanently broken
+    # INCAR.
+    with pytest.raises(vpmdk.WorkdirInputError, match="underflows"):
+        vpmdk._estimate_tdamp(1e-300, 2.0, {})
+    with pytest.raises(vpmdk.WorkdirInputError, match="underflows"):
+        vpmdk._estimate_tdamp(None, 2.0, {"NHC_PERIOD": 1e-301})
+    # Ordinary damping times keep working (with at most the stiffness warn).
+    assert vpmdk._estimate_tdamp(100.0, 2.0, {}) == 100.0
+
+
+def test_potcar_pomass_divergence_is_disclosed(tmp_path, capsys):
+    # R146 (P3): an isotope-edited POTCAR (POMASS = 2.014, the canonical VASP
+    # deuterium workflow) ran at ASE's protium mass with exit 0 and zero
+    # disclosure. The masses stay unchanged (SPEC 1.1); the divergence is
+    # warned about, like LCLIMB/ANDERSEN_PROB.
+    from vpmdk_core.io import inputs as inputs_module
+
+    potcar = tmp_path / "POTCAR"
+    potcar.write_text(
+        "  PAW_PBE H 15Jun2001\n"
+        "  TITEL  = PAW_PBE H 15Jun2001\n"
+        "  POMASS =    2.014; ZVAL   =    1.000\n"
+    )
+    inputs_module._warn_potcar_pomass_ignored(str(potcar), None)
+    out = capsys.readouterr().out
+    assert "POMASS" in out and "2.014" in out and "1.008" in out
+
+    # A standard-mass POTCAR stays silent.
+    potcar.write_text(
+        "  TITEL  = PAW_PBE H 15Jun2001\n"
+        "  POMASS =    1.000; ZVAL   =    1.000\n"
+    )
+    inputs_module._warn_potcar_pomass_ignored(str(potcar), None)
+    assert "POMASS is not read" not in capsys.readouterr().out
+
+
+def test_magmom_inertness_is_disclosed(capsys):
+    # R147 (P2): MAGMOM is parsed, listed as supported, and attached as ASE
+    # initial moments -- which no backend reads, so FM vs AFM requests gave
+    # byte-identical results with exit 0 and zero disclosure (while ISPIN got
+    # an ignored-warning). The application stays (SPEC 1.1); the inertness is
+    # disclosed.
+    from ase import Atoms
+
+    from vpmdk_core.io import inputs as inputs_module
+
+    atoms = Atoms("Fe2", positions=[[0, 0, 0], [0, 0, 2.0]])
+    inputs_module._apply_initial_magnetization(atoms, {"MAGMOM": "3.0 -3.0"})
+    out = capsys.readouterr().out
+    assert "MAGMOM" in out and "identical results" in out
+
+    # All-zero moments (the do-nothing spelling) stay silent.
+    inputs_module._apply_initial_magnetization(atoms, {"MAGMOM": "0.0 0.0"})
+    assert "identical results" not in capsys.readouterr().out
+
+
+def test_serve_stdout_guard_survives_a_closed_fd(monkeypatch):
+    # R147 (P2): with fd 1 CLOSED ('vpmdk serve ... 1>&-') sys.stdout is
+    # None, and the R144 guard's sys.stdout.flush() raised AttributeError out
+    # of serve_cli's finally -- a successful daemon start exited 1.
+    import vpmdk_core.server as server_module
+
+    monkeypatch.setattr(sys, "stdout", None)
+    server_module._drain_stream_guarded(sys.stdout)  # must not raise
+
+
+def test_device_index_edge_cases(tmp_path):
+    # R147 (P3 x2): (a) the bare string ':0' was stripped to '' and rerouted
+    # into blank-DEVICE autodetect -- the server computed a request one-shot
+    # crashes on; (b) 'cpu:1' vs 'cpu' was rejected exit 5 although torch's
+    # cpu type has ONE underlying device and one-shot computes it.
+    import vpmdk_core.server as server_module
+
+    assert server_module._resolve_backend_device("CHGNET", ":0") == ":0"
+    assert server_module._resolve_backend_device("CHGNET", "cpu:1") == "cpu"
+    assert server_module._resolve_backend_device("CHGNET", "cpu:0") == "cpu"
+    assert server_module._resolve_backend_device("CHGNET", "cuda:0") == "cuda"
+    assert server_module._resolve_backend_device("CHGNET", "cuda:1") == "cuda:1"
+
+
+def test_spring_magnitude_is_bounded(tmp_path):
+    # R147 (P2): SPRING was the one scalar the absurd-finite sweep missed:
+    # SPRING=-1e300 froze the NEB band silently with exit 0.
+    with pytest.raises(vpmdk.WorkdirInputError, match="supported magnitude"):
+        vpmdk._parse_neb_spring_constant({"SPRING": -1e300})
+    assert vpmdk._parse_neb_spring_constant({"SPRING": -5.5}) == 5.5
+
+
+def test_nsw_without_ibrion_discloses_the_vasp_default(capsys):
+    # R147 (P3): NSW>1 with IBRION absent runs a SINGLE POINT in VPMDK
+    # (default -1) where real VASP defaults to IBRION=0 (MD) -- silently.
+    from vpmdk_core.settings import incar as incar_module
+
+    incar_module._load_incar_settings({"NSW": 5})
+    out = capsys.readouterr().out
+    assert "IBRION omitted" in out and "SINGLE POINT" in out
+
+    incar_module._load_incar_settings({"NSW": 5, "IBRION": 2})
+    assert "IBRION omitted" not in capsys.readouterr().out
+    incar_module._load_incar_settings({"NSW": 0})
+    assert "IBRION omitted" not in capsys.readouterr().out
+
+
+def test_coincident_atom_guard_is_fast_and_lean_for_large_cells():
+    # R148 (P1): the guard built ase's ALL-PAIRS MIC matrix for anything up
+    # to 4096 atoms -- ~17 GB RSS and ~17 s at input time for an ordinary
+    # supercell, with a MemoryError rewritten into an input error for a fine
+    # structure. The grid-bucket rewrite is O(N); an ordinary 4096-atom cell
+    # must pass in a few seconds with negligible memory.
+    import time as time_module
+
+    import numpy as np
+    from ase import Atoms
+
+    from vpmdk_core.io import inputs as inputs_module
+
+    rng = np.random.default_rng(11)
+    atoms = Atoms(
+        "H4096",
+        scaled_positions=rng.uniform(0.0, 1.0, (4096, 3)),
+        cell=np.eye(3) * 40.0,
+        pbc=True,
+    )
+    started = time_module.monotonic()
+    inputs_module._validate_finite_geometry(atoms)
+    assert time_module.monotonic() - started < 5.0
+
+    # Correctness is preserved at scale: a wrapped-boundary coincidence deep
+    # in the list is still found.
+    positions = atoms.get_scaled_positions()
+    positions[4095] = np.mod(positions[7] + [0.0, 0.0, 1.0 - 1e-9], 1.0)
+    atoms.set_scaled_positions(positions)
+    with pytest.raises(ValueError, match="occupy the same site"):
+        inputs_module._validate_finite_geometry(atoms)
+
+
+def test_total_repeat_expansion_is_bounded(tmp_path):
+    # R148 (P3): the per-token 1e6 repeat cap was the axis-not-resource
+    # mistake again -- many tokens of 1e6 each still expanded without bound.
+    import time as time_module
+
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text("MAGMOM = " + "1000000*1.0 " * 10 + "\n")
+    started = time_module.monotonic()
+    with pytest.raises(ValueError, match="expands to"):
+        incar_module._load_incar(str(path))
+    assert time_module.monotonic() - started < 5.0
+
+    path.write_text("MAGMOM = 4*1.0 2*-0.5\n")
+    incar_module._load_incar(str(path))
+
+
+def test_nested_repeat_expansion_is_bounded(tmp_path):
+    # R149 (P1): pymatgen's proc_val supports the NESTED repeat spelling
+    # 'count1*count2*value' and multiplies BOTH counts, while the raw-text
+    # guard read only the FIRST factor -- so 'MAGMOM = 100000*100000*1.0'
+    # (1e10 entries, ~80 GB) passed the per-token cap AND the R148 sum cap
+    # and detonated inside Incar.from_file in the resident server. The bound
+    # is now the PRODUCT of all leading numeric factors.
+    import time as time_module
+
+    from vpmdk_core.settings import incar as incar_module
+
+    for value in ("100000*100000*1.0", "1*999999999*2.0", "2*1000000000*1.0"):
+        path = tmp_path / "INCAR"
+        path.write_text(f"MAGMOM = {value}\n")
+        started = time_module.monotonic()
+        with pytest.raises(ValueError, match="repeat token"):
+            incar_module._load_incar(str(path))
+        assert time_module.monotonic() - started < 5.0
+
+    # The legal nested spelling keeps parsing (pymatgen documents 2*3*1.0;
+    # the conftest pymatgen stub does not expand repeats, so the expansion
+    # itself is asserted on VPMDK's own expander below).
+    path = tmp_path / "INCAR"
+    path.write_text("MAGMOM = 2*3*1.0\n")
+    incar_module._load_incar(str(path))
+
+    # Defense in depth: VPMDK's own recursive expander applied its cap PER
+    # NESTING LEVEL, so '1000*1000*1000*1.0' (1e9 entries) passed three
+    # individually-legal levels. The product across levels is now bounded,
+    # and so is the total across tokens.
+    from vpmdk_core.io import inputs as inputs_module
+
+    with pytest.raises(ValueError, match="expands to"):
+        inputs_module._parse_magmom_values("1000*1000*1000*1.0")
+    with pytest.raises(ValueError, match="expands to"):
+        inputs_module._parse_magmom_values("1000000*1.0 1000000*2.0")
+    assert inputs_module._parse_magmom_values("2*3*1.0") == [1.0] * 6
+
+
+def test_finite_difference_displacement_underflow_is_rejected():
+    # R149 (P3): the finite-difference guards rejected only non-finite and
+    # <= 0 displacements, so POTIM = 1e-30 (IBRION=5/6) underflowed the
+    # position update to a bit-for-bit no-op -- F(+d) == F(-d) exactly --
+    # and an ALL-ZERO Hessian was written to vasprun.xml as a SUCCESSFUL
+    # run. The underflow mirror of the R124 non-finite-POTIM fix: absurd
+    # values have both ends.
+    from vpmdk_core.runtime import single as single_module
+
+    for bad in (1e-30, 1e-8, 0.0, -0.01, float("nan"), float("inf")):
+        with pytest.raises(vpmdk.WorkdirInputError, match="displacement"):
+            single_module._finite_difference_force_constants(
+                None, None, displacement=bad, nfree=2
+            )
+        with pytest.raises(vpmdk.WorkdirInputError, match="displacement"):
+            single_module._finite_difference_force_response(
+                None, 0, None, displacement=bad, nfree=2
+            )
+        with pytest.raises(vpmdk.WorkdirInputError, match="displacement"):
+            single_module._symmetry_reduced_finite_difference_force_constants(
+                None, None, displacement=bad, nfree=2
+            )
+
+    # The BCAR reader (IBRION=7/8 path) mirrors the same floor.
+    with pytest.raises(ValueError, match="at least"):
+        single_module._force_constants_displacement_from_bcar(
+            {"FORCE_CONSTANTS_DISPLACEMENT": "1e-30"}
+        )
+    # The smallest displacement in real use keeps working.
+    assert single_module._force_constants_displacement_from_bcar(
+        {"FORCE_CONSTANTS_DISPLACEMENT": "0.001"}
+    ) == 0.001
+
+
+def test_pstress_magnitude_is_bounded(tmp_path):
+    # R138 (P3): a huge-but-finite PSTRESS (exponent typo: 1e300 for 1e3)
+    # passed the finiteness check, overflowed BFGS's step-length norm so every
+    # step scaled to zero, and the run COMPLETED with exit 0 and CONTCAR
+    # identical to POSCAR -- the requested pressure silently had no effect --
+    # while the OUTCAR pressure fields carried 300-digit values.
+    from vpmdk_core.settings import incar as incar_module
+
+    with pytest.raises(ValueError, match="exceeds the supported magnitude"):
+        incar_module._load_incar_settings({"PSTRESS": 1e300})
+
+    settings = incar_module._load_incar_settings({"PSTRESS": 500.0})
+    assert settings.pstress == 500.0
+
+
+@pytest.mark.parametrize(
+    "parsed,token,rejected",
+    [
+        ("NSW", "1e5", True),
+        ("MDALGO", "1e400", True),
+        ("IMAGES", "1e300", True),
+        # Values that already round-trip must keep working: this guard must never be
+        # able to reject an INCAR that previously ran correctly.
+        ("NSW", "100", False),
+        ("NSW", "100.", False),
+        ("NSW", "100 # comment stripped upstream", False),
+    ],
+)
+def test_scientific_notation_integer_tags_are_rejected_not_truncated(
+    tmp_path, parsed: str, token: str, rejected: bool
+):
+    # R128: pymatgen's Incar.proc_val reads int-typed keys with
+    # int(re.match(r"^-?[0-9]+", value)), so `NSW = 1e5` becomes 1 and the rest of the
+    # token is discarded with no error. Nothing downstream could tell: the relaxation
+    # ran ONE ionic step instead of 100000, wrote an unconverged CONTCAR, printed
+    # "Calculation completed." and exited 0.
+    #
+    # NOTE: tests/conftest.py installs a pymatgen STUB whose Incar keeps every value
+    # as a string, so the truncation cannot occur through _load_incar in this suite.
+    # The guard is therefore driven directly with the int-valued mapping that REAL
+    # pymatgen produces; test_scientific_notation_survives_real_pymatgen covers the
+    # end-to-end path in a subprocess with the real library.
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text(f"{parsed} = {token}\n")
+    truncated = int(re.match(r"^-?[0-9]+", token).group(0))
+
+    if rejected:
+        with pytest.raises(ValueError):
+            incar_module._reject_truncated_integer_tags({parsed: truncated}, str(path))
+    else:
+        incar_module._reject_truncated_integer_tags({parsed: truncated}, str(path))
+
+    # Bool- and list-typed tags are not numbers and must be left alone. Use a
+    # separate file: the guard scans the INCAR text itself, so a rejectable value
+    # in the same file would fire regardless of the mapping passed in.
+    other = tmp_path / "OTHER"
+    other.write_text("LWAVE = .FALSE.\nMAGMOM = 4*1.0\nSYSTEM = D2O sample\n")
+    incar_module._reject_truncated_integer_tags({"LWAVE": False}, str(other))
+    incar_module._reject_truncated_integer_tags({"MAGMOM": [1.0, 1.0]}, str(other))
+
+
+def test_scientific_notation_survives_real_pymatgen(tmp_path):
+    # End-to-end with the REAL library (the suite otherwise stubs pymatgen), so this
+    # pins the actual production behavior rather than the stub's.
+    workdir = tmp_path / "run"
+    workdir.mkdir()
+    (workdir / "INCAR").write_text("NSW = 1e5\nIBRION = 2\n")
+    script = (
+        "import sys\n"
+        "from vpmdk_core.settings import incar as m\n"
+        "try:\n"
+        "    m._load_incar(sys.argv[1])\n"
+        "except ValueError as exc:\n"
+        "    print('REJECTED', exc)\n"
+        "else:\n"
+        "    print('ACCEPTED')\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(workdir / "INCAR")],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "VPMDK_TEST_REAL_PYMATGEN": "1"},
+    )
+    if "ModuleNotFoundError" in completed.stderr:
+        pytest.skip("real pymatgen is not installed")
+    assert "REJECTED" in completed.stdout, completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize(
+    "tag,token,parsed,rejected",
+    [
+        # Fortran's D exponent is legal in an INCAR and is what pymatgen truncates
+        # worst -- including on FLOAT tags, which R128's integer-only guard could
+        # never see: EDIFFG = -1.0D-03 was read as -1.0, three orders of magnitude
+        # off, and POTIM = 2.0D-03 as 2.0.
+        ("NSW", "1D3", 1, True),
+        ("EDIFFG", "-1.0D-03", -1.0, True),
+        ("POTIM", "2.0D-03", 2.0, True),
+        ("EDIFFG", "-1.0E-03", -0.001, False),
+        ("POTIM", "2.0", 2.0, False),
+        ("NSW", "1000", 1000, False),
+    ],
+)
+def test_fortran_d_exponent_incar_values_are_rejected_not_truncated(
+    tmp_path, tag: str, token: str, parsed, rejected: bool
+):
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text(f"{tag} = {token}\n")
+
+    if rejected:
+        with pytest.raises(ValueError):
+            incar_module._reject_truncated_integer_tags({tag: parsed}, str(path))
+    else:
+        incar_module._reject_truncated_integer_tags({tag: parsed}, str(path))
+
+
+@pytest.mark.parametrize(
+    "body,rejected",
+    [
+        # VASP allows several tags on ONE line separated by ';', and pymatgen
+        # parses them. The guard re-read the file with parse_key_value_file, a
+        # one-tag-per-line reader, so for `NSW = 1e5; IBRION = 2` it saw the
+        # single pair ("NSW", "1e5; IBRION = 2") -- whose first token fails
+        # float() and skips the check -- and never saw IBRION at all. Every tag
+        # on such a line escaped, i.e. exactly the manglings R128/R129/R130
+        # closed came back for anyone who writes VASP's compact INCAR style.
+        ("IBRION = 2 ; NSW = 50 ; EDIFFG = -1.0D-03\n", True),
+        ("EDIFFG = -0.01 ; POTIM = 2.0D-01\n", True),
+        # Backslash line continuations are joined by pymatgen too.
+        ("IBRION = 2\nPOTIM = \\\n2.0D-01\n", True),
+        # ...and correctly written compact INCARs must still be accepted.
+        ("IBRION = 2 ; NSW = 50 ; EDIFFG = -1.0E-03\n", False),
+        ("SYSTEM = D2O sample ; NSW = 20\n", False),
+        # A value after a comment marker is not a tag at all for either reader.
+        ("NSW = 20 # note ; EDIFFG = -1.0D-03\n", False),
+        # A repeated tag keeps its LAST value in pymatgen; the earlier one must
+        # not be compared against it.
+        ("NSW = 5\nNSW = 20\n", False),
+    ],
+)
+def test_multiple_incar_tags_on_one_line_are_checked_too(
+    tmp_path, body: str, rejected: bool
+):
+    # R131.
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text(body)
+
+    if rejected:
+        with pytest.raises(ValueError, match="read as"):
+            incar_module._load_incar(str(path))
+    else:
+        assert dict(incar_module._load_incar(str(path))) is not None
+
+
+def test_raw_incar_assignments_matches_pymatgens_own_tokenizer(tmp_path):
+    # The guard can only compare a parsed value against what the user WROTE, so
+    # the raw reader has to see the file the way Incar.from_str does: comments
+    # stripped per line, '\'-continuations joined, several assignments per line,
+    # quoted values kept whole, last occurrence wins.
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text(
+        'IBRION = 2 ; NSW = 50\n'
+        "EDIFFG = -1.0E-03 # trailing ; POTIM = 9\n"
+        "POTIM = \\\n"
+        "  0.5\n"
+        'SYSTEM = "a ; b"\n'
+        "NSW = 60\n"
+        "ISIF = 3 ! bang comment\n"
+    )
+
+    assert incar_module._raw_incar_assignments(str(path)) == {
+        "IBRION": "2",
+        "NSW": "60",
+        "EDIFFG": "-1.0E-03",
+        "POTIM": "0.5",
+        "SYSTEM": "a ; b",
+        "ISIF": "3",
+    }
+
+
+def test_semicolon_separated_incar_survives_real_pymatgen(tmp_path):
+    # End-to-end with the REAL library: the suite's pymatgen stub keeps values as
+    # strings, so only a subprocess can show that `IBRION = 2 ; NSW = 50 ;
+    # EDIFFG = -1.0D-03` was accepted and read as EDIFFG=-1.0 (a relaxation that
+    # stops at fmax<1.0 eV/A and writes an unconverged CONTCAR with exit 0),
+    # while the byte-identical values one per line were rejected.
+    script = (
+        "import sys\n"
+        "from vpmdk_core.settings import incar as m\n"
+        "try:\n"
+        "    parsed = m._load_incar(sys.argv[1])\n"
+        "except ValueError as exc:\n"
+        "    print('REJECTED', exc)\n"
+        "else:\n"
+        "    print('ACCEPTED', dict(parsed))\n"
+    )
+
+    def run(body: str, name: str) -> subprocess.CompletedProcess:
+        path = tmp_path / name
+        path.write_text(body)
+        return subprocess.run(
+            [sys.executable, "-c", script, str(path)],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "VPMDK_TEST_REAL_PYMATGEN": "1"},
+        )
+
+    mangled = run("IBRION = 2 ; NSW = 50 ; EDIFFG = -1.0D-03\n", "INCAR_semi")
+    if "ModuleNotFoundError" in mangled.stderr:
+        pytest.skip("real pymatgen is not installed")
+    assert "REJECTED" in mangled.stdout, mangled.stdout + mangled.stderr
+
+    # The int truncation needs the real library too: only real pymatgen types
+    # NSW, and it reads `1e5` as 1 -- one ionic step instead of 100000.
+    truncated = run("IBRION = 2; NSW = 1e5\n", "INCAR_e5")
+    assert "REJECTED" in truncated.stdout, truncated.stdout + truncated.stderr
+
+    ok = run("IBRION = 2 ; NSW = 50 ; EDIFFG = -1.0E-03\n", "INCAR_ok")
+    assert "ACCEPTED" in ok.stdout, ok.stdout + ok.stderr
+    assert "'EDIFFG': -0.001" in ok.stdout
+
+
+def test_bcar_with_a_utf8_bom_still_selects_the_requested_backend(tmp_path):
+    # R129: parse_key_value_file opened the file without stripping a UTF-8 BOM, so
+    # the FIRST key became "﻿MLP" and the requested backend was silently
+    # replaced by the CHGNET default -- a whole run on the wrong potential, with no
+    # warning anywhere.
+    path = tmp_path / "BCAR"
+    path.write_bytes("﻿MLP = MACE\nDEVICE = cpu\n".encode("utf-8"))
+
+    tags = vpmdk.parse_key_value_file(str(path))
+
+    assert list(tags) == ["MLP", "DEVICE"]
+    assert vpmdk._resolve_mlp_tag(tags) == "MACE"
+
+
+def test_out_of_range_symprec_is_an_input_error_not_a_retryable_failure():
+    # R129: SYMPREC is a DISTANCE tolerance, so whether a value works depends on the
+    # structure (1e-5 is fine; the classic `1E5` typo makes spglib raise "too close
+    # distance between atoms"). A static range check would reject values that are
+    # fine for some cells, so the failure is classified where it happens: unusable
+    # input (exit 1), not a retryable calculation failure (exit 2).
+    pytest.importorskip("spglib")
+    from ase.build import bulk
+
+    from vpmdk_core.runtime import single as single_module
+
+    atoms = bulk("Si", "diamond", a=5.43)
+
+    with pytest.raises(vpmdk.WorkdirInputError, match="SYMPREC"):
+        single_module._symmetry_operations(atoms, symprec=1e5)
+
+    operations = single_module._symmetry_operations(atoms, symprec=1e-5)
+    assert operations
+
+
+@pytest.mark.parametrize(
+    "body,rejected",
+    [
+        # Tags pymatgen leaves as raw text reach VPMDK's own _NUMERIC_RE, which also
+        # stops at the Fortran 'D', so the thermostat ran at 1 instead of 100.
+        ("NHC_PERIOD = 1D2\n", True),
+        ("CSVR_PERIOD = 5D1\n", True),
+        # pymatgen can even turn a D exponent into a LIST.
+        ("LANGEVIN_GAMMA = 1D1\n", True),
+        ("NHC_PERIOD = 100\n", False),
+        ("CSVR_PERIOD = 5E1\n", False),
+        ("LANGEVIN_GAMMA = 1.0 2.0\n", False),
+        # Non-numeric text that merely contains "D<digit>" must not be touched.
+        ("SYSTEM = D2O sample\n", False),
+        ("IOPT = 3\n", False),
+    ],
+)
+def test_fortran_d_exponent_is_caught_for_untyped_incar_tags(
+    tmp_path, body: str, rejected: bool
+):
+    # R130: R129's guard only inspected values pymatgen returned as int/float, so
+    # VPMDK's OWN tags (NHC_PERIOD, CSVR_PERIOD, LANGEVIN_GAMMA, ICHAIN, IOPT) --
+    # which pymatgen leaves as strings or mangles into lists -- were not covered.
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text(body)
+
+    if rejected:
+        with pytest.raises(ValueError, match="would be read as"):
+            incar_module._load_incar(str(path))
+    else:
+        assert dict(incar_module._load_incar(str(path)))
+
+
+def test_missing_backend_forces_are_reported_instead_of_written_as_zeros():
+    # R131 (P2): _safe_get_forces fell back to np.zeros((N, 3)) whenever the
+    # calculator could not supply forces, which turns "there are no forces" into
+    # the one value every VASP consumer reads as PERFECTLY CONVERGED. The
+    # documented energy-only selection MATRIS_TASK=e stores results['forces'] =
+    # None, so atoms.get_forces() RETURNS None instead of raising: the run wrote
+    # an all-zero TOTAL-FORCE table, "FORCES: max atom, RMS 0.00000000
+    # 0.00000000" and an all-zero forces varray for a structure with ~1.5 eV/A
+    # residual forces, then exited 0 with "Calculation completed.".
+    from vpmdk_core.io import vasp_compat
+
+    class ReturnsNone:
+        def __len__(self):
+            return 2
+
+        def get_forces(self, apply_constraint=True):
+            return None
+
+    class Raises:
+        def __len__(self):
+            return 2
+
+        def get_forces(self, apply_constraint=True):
+            raise NotImplementedError("forces")
+
+    with pytest.raises(RuntimeError, match="no usable forces"):
+        vasp_compat._safe_get_forces(ReturnsNone())
+    with pytest.raises(RuntimeError, match="per-atom forces"):
+        vasp_compat._safe_get_forces(Raises())
+
+    class Works:
+        def __len__(self):
+            return 2
+
+        def get_forces(self, apply_constraint=True):
+            return [[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]]
+
+    assert vasp_compat._safe_get_forces(Works()).shape == (2, 3)
+
+
+def test_energy_only_backend_is_rejected_before_anything_is_computed(tmp_path: Path):
+    # Same defect, one layer up: MATRIS_TASK=e is a permanent INPUT problem, so
+    # it must exit 1 up front rather than surface from deep inside the run as a
+    # calculation failure (exit 2, documented RETRYABLE) after the whole
+    # calculation has been paid for. The capability model derives forces=False
+    # from the very tag that configures the backend.
+    from vpmdk_core import cli as cli_module
+
+    workdir = tmp_path / "energy_only"
+    workdir.mkdir()
+    (workdir / "INCAR").write_text("IBRION = -1\nNSW = 0\nISIF = 3\n")
+    (workdir / "BCAR").write_text("MLP = MATRIS\nMATRIS_TASK = e\n")
+
+    # No POSCAR on purpose: the gate must fire before any input is even read,
+    # and certainly before a backend is built.
+    with pytest.raises(vpmdk.WorkdirInputError, match="energy only"):
+        vpmdk.run_workdir(str(workdir))
+    assert not (workdir / "OUTCAR").exists()
+
+    # R169 (P2): ISIF>=3 in the RELAXATION branch makes stress part of the
+    # dynamics, so a stress-less backend is rejected up front there; the
+    # output-only cases below keep the warning.
+    settings = vpmdk._load_incar_settings({"IBRION": 2, "NSW": 5, "ISIF": 2})
+
+    # A force-capable but stress-less configuration keeps running -- ISIF
+    # defaults to 2 for every relaxation, so rejecting it would break working
+    # ion-only setups -- but the omission is announced instead of silent.
+    cli_module._check_backend_output_capabilities(
+        {"MLP": "MATRIS", "MATRIS_TASK": "ef"}, settings
+    )
+    cli_module._check_backend_output_capabilities({"MLP": "CHGNET"}, settings)
+
+
+def test_energy_only_backend_gate_announces_a_missing_stress_block(
+    tmp_path: Path, capsys
+):
+    from vpmdk_core import cli as cli_module
+
+    settings = vpmdk._load_incar_settings({"IBRION": 2, "NSW": 5, "ISIF": 2})
+
+    cli_module._check_backend_output_capabilities(
+        {"MLP": "MATRIS", "MATRIS_TASK": "ef"}, settings
+    )
+    warned = capsys.readouterr().out
+    assert "does not provide stress" in warned
+
+    cli_module._check_backend_output_capabilities(
+        {"MLP": "MATRIS", "MATRIS_TASK": "efs"}, settings
+    )
+    assert "does not provide stress" not in capsys.readouterr().out
+
+    # An unknown backend must not be pre-empted here: the selector error belongs
+    # to _build_workdir_calculator, with its own message.
+    cli_module._check_backend_output_capabilities({"MLP": "NO_SUCH_BACKEND"}, settings)
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize(
+    "body,parsed,swallowed",
+    [
+        # The reported P1: an empty value consumes the next line, so IBRION is
+        # simply absent from the parsed INCAR and the run silently degrades to a
+        # single point instead of the requested relaxation.
+        ("SYSTEM =\nIBRION = 2\nNSW = 50\n", {"SYSTEM": "IBRION = 2", "NSW": 50}, True),
+        # A comment line in between does not help: comments are blanked first.
+        ("SYSTEM =\n# note\nIBRION = 2\n", {"SYSTEM": "IBRION = 2"}, True),
+        # Other doors of the same shape, including an int-typed swallower.
+        ("IBRION = 0\nENCUT =\nNSW = 100\n", {"IBRION": 0, "ENCUT": "NSW = 100"}, True),
+        ("NSW =\nIBRION = 2\n", {"NSW": "IBRION = 2"}, True),
+        # R134: pymatgen TYPES the swallower, so the swallowed text does not come
+        # back as a string at all -- `LWAVE =` above `TEBEG = 900` parses to
+        # LWAVE=True and `MAGMOM =` to [True, 900], with TEBEG simply gone and
+        # the MD silently running at the 300 K default while OUTCAR still echoes
+        # TEBEG = 900. Detected via the tag on the NEXT line missing from the
+        # parse, which is still anchored on a blank-valued tag.
+        ("LWAVE =\nTEBEG = 900\nIBRION = 0\n", {"LWAVE": True, "IBRION": 0}, True),
+        ("MAGMOM =\nTEBEG = 900\n", {"MAGMOM": [True, 900]}, True),
+        ("LCHARG =\nTEEND = 900\nIBRION = 0\n", {"LCHARG": True, "IBRION": 0}, True),
+        # ...and a bool tag that actually HAS a value swallows nothing.
+        (
+            "LWAVE = .FALSE.\nTEBEG = 900\n",
+            {"LWAVE": False, "TEBEG": 900.0},
+            False,
+        ),
+        # A blank tag on the LAST line swallows nothing; the parser just drops it.
+        ("IBRION = 2\nNSW = 50\nSYSTEM =\n", {"IBRION": 2, "NSW": 50}, False),
+        # Ordinary files, including the compact styles the previous round added.
+        ("SYSTEM = test\nIBRION = 2\n", {"SYSTEM": "test", "IBRION": 2}, False),
+        ("IBRION = 2 ; NSW = 50\n", {"IBRION": 2, "NSW": 50}, False),
+        ("IBRION = 2\nPOTIM = \\\n0.5\n", {"IBRION": 2, "POTIM": 0.5}, False),
+        ("NSW = 5\nNSW = 20\n", {"NSW": 20}, False),
+        # A parser that splits lines differently than this reader (conftest's
+        # Incar stub does not split on ';') must NOT look like a swallow: the
+        # check compares ONE tag's raw and parsed value, never "a tag I can see
+        # is missing", which would reject every compact INCAR on such a parser.
+        ("IBRION = 2 ; NSW = 50 ; EDIFFG = -1.0E-03\n", {"IBRION": 2}, False),
+        # A blank tag followed by a stray non-assignment line loses nothing (the
+        # deferred `NSW =` / bare `50` input), so it stays accepted.
+        ("NSW =\n50\nIBRION = 2\n", {"NSW": 50, "IBRION": 2}, False),
+    ],
+)
+def test_incar_tag_swallowed_by_an_empty_value_is_rejected(
+    tmp_path, body: str, parsed: dict, swallowed: bool
+):
+    # R133 (P1): pymatgen's Incar pattern is `(\w+)\s*=\s*([^#!;\n]*)` and `\s*`
+    # MATCHES A NEWLINE, so an empty value continues onto the following lines.
+    # Real VASP reads its INCAR line by line and is unaffected, so the same file
+    # relaxes under VASP and silently single-points here (exit 0,
+    # "Calculation completed.", CONTCAR identical to the input).
+    #
+    # Driven with the mapping REAL pymatgen produces: conftest's Incar stub is
+    # line-based, so the suite cannot reproduce the swallow through _load_incar;
+    # test_incar_swallowed_tag_survives_real_pymatgen covers that end to end.
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text(body)
+
+    if swallowed:
+        with pytest.raises(ValueError, match="empty value"):
+            incar_module._reject_swallowed_incar_tags(parsed, str(path))
+    else:
+        incar_module._reject_swallowed_incar_tags(parsed, str(path))
+
+
+def test_incar_swallowed_tag_survives_real_pymatgen(tmp_path):
+    # End-to-end with the REAL library: the same INCAR with and without the
+    # blank line, so the silent mode change is visible as a parsed-settings diff.
+    script = (
+        "import sys\n"
+        "from vpmdk_core.settings import incar as m\n"
+        "try:\n"
+        "    parsed = m._load_incar(sys.argv[1])\n"
+        "except ValueError as exc:\n"
+        "    print('REJECTED', exc)\n"
+        "else:\n"
+        "    settings = m._load_incar_settings(parsed)\n"
+        "    print('ACCEPTED ibrion=%d nsw=%d' % (settings.ibrion, settings.nsw))\n"
+    )
+
+    def run(body: str, name: str) -> subprocess.CompletedProcess:
+        path = tmp_path / name
+        path.write_text(body)
+        return subprocess.run(
+            [sys.executable, "-c", script, str(path)],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "VPMDK_TEST_REAL_PYMATGEN": "1"},
+        )
+
+    swallowed = run("SYSTEM =\nIBRION = 2\nNSW = 50\nEDIFFG = -0.02\n", "INCAR_blank")
+    if "ModuleNotFoundError" in swallowed.stderr:
+        pytest.skip("real pymatgen is not installed")
+    assert "REJECTED" in swallowed.stdout, swallowed.stdout + swallowed.stderr
+    assert "SYSTEM" in swallowed.stdout and "IBRION" in swallowed.stdout
+
+    ok = run("SYSTEM = test\nIBRION = 2\nNSW = 50\nEDIFFG = -0.02\n", "INCAR_ok")
+    assert "ACCEPTED ibrion=2 nsw=50" in ok.stdout, ok.stdout + ok.stderr
+
+    # The pre-fix behavior this pins down: without the guard the blank-value file
+    # parses to ibrion=-1 (single point) while the byte-identical file with a
+    # value relaxes.
+    tail = run("IBRION = 2\nNSW = 50\nSYSTEM =\n", "INCAR_blank_last")
+    assert "ACCEPTED ibrion=2 nsw=50" in tail.stdout, tail.stdout + tail.stderr
+
+    # R134: a BOOL-typed swallower returns True, not a string, so the
+    # string-only rule missed it and the MD ran at the 300 K default with
+    # TEBEG = 900 still echoed in OUTCAR.
+    typed = run("LWAVE =\nTEBEG = 900\nIBRION = 0\nNSW = 3\n", "INCAR_bool")
+    assert "REJECTED" in typed.stdout, typed.stdout + typed.stderr
+    assert "TEBEG" in typed.stdout and "LWAVE" in typed.stdout
+
+
+def test_resident_neb_images_get_a_per_image_result_cache():
+    # R150 (P2): server mode attached the ONE resident calculator to every NEB
+    # image, so each image's evaluation evicted the previous image's ASE result
+    # cache: a 5-image / 21-step band measured 420 forward passes where the
+    # byte-identical one-shot run (separate calculator per image) measured 35,
+    # 92% of them recomputing geometries the model had already computed. Each
+    # image now gets its own result cache in front of the shared model.
+    from vpmdk_core.runtime import neb as neb_module
+
+    delegate = DummyCalculator()
+    image_a = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3) * 3.0, pbc=True)
+    image_b = Atoms("H", positions=[[0.5, 0.0, 0.0]], cell=np.eye(3) * 3.0, pbc=True)
+    image_a.calc = neb_module._PerImageResultCache(delegate)
+    image_b.calc = neb_module._PerImageResultCache(delegate)
+
+    energy_a = image_a.get_potential_energy()
+    forces_a = image_a.get_forces()
+    image_b.get_potential_energy()
+    evaluations = delegate.called
+    # Interleaved access must NOT evict image A's cache (the defect): touching
+    # A again after B costs zero delegate evaluations.
+    assert image_a.get_potential_energy() == energy_a
+    assert np.allclose(image_a.get_forces(), forces_a)
+    assert delegate.called == evaluations
+    # A genuine geometry change still recomputes.
+    image_a.positions[0, 0] += 0.1
+    image_a.get_potential_energy()
+    assert delegate.called == evaluations + 1
+
+
+def test_per_image_result_cache_stores_raw_forces_for_constrained_images():
+    # The cache evaluates through a constraint-free copy: calculators cache RAW
+    # forces (the constraint adjustment belongs to the Atoms layer, where the
+    # caller applies it either way), so a constrained image must not poison its
+    # calculator-level cache with adjusted forces.
+    from ase.calculators.calculator import Calculator, all_changes
+    from ase.constraints import FixAtoms
+    from vpmdk_core.runtime import neb as neb_module
+
+    class OnesCalculator(Calculator):
+        implemented_properties = ["energy", "forces"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+            super().calculate(atoms, properties, system_changes)
+            self.results = {
+                "energy": 1.0,
+                "forces": np.ones((len(atoms), 3)),
+            }
+
+    image = Atoms(
+        "H2",
+        positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.8]],
+        cell=np.eye(3) * 3.0,
+        pbc=True,
+    )
+    image.set_constraint(FixAtoms(indices=[0]))
+    image.calc = neb_module._PerImageResultCache(OnesCalculator())
+
+    constrained = image.get_forces()
+    assert np.allclose(constrained[0], 0.0)
+    assert np.allclose(constrained[1], 1.0)
+    assert np.allclose(image.calc.results["forces"], 1.0)
+
+
+def test_non_regular_potcar_in_a_neb_workdir_is_an_input_error(
+    tmp_path, prepare_inputs
+):
+    # R150 (P2): the NEB branch of run_workdir called
+    # _warn_potcar_pomass_ignored OUTSIDE _read_workdir_input, so the
+    # non-regular-POTCAR ValueError escaped unclassified: exit 2 (documented
+    # RETRYABLE) in server mode and a raw traceback one-shot, while the
+    # byte-identical POTCAR in a FLAT workdir is input_error / exit 1.
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "2", "IMAGES": "1"},
+    )
+    _write_numbered_neb_poscars(tmp_path)
+    potcar = tmp_path / "POTCAR"
+    if potcar.exists():
+        potcar.unlink()
+    potcar.mkdir()
+
+    with pytest.raises(vpmdk.WorkdirInputError, match="Failed to read POTCAR"):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+def test_run_workdir_attaches_per_image_caches_for_a_resident_calculator(
+    tmp_path, prepare_inputs, monkeypatch
+):
+    # Pins the WIRING of the R150 per-image cache: a resident calculator
+    # handed to run_workdir must reach the band as one _PerImageResultCache
+    # per image, all delegating to the same resident object.
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "2", "IMAGES": "1"},
+    )
+    _write_numbered_neb_poscars(tmp_path)
+    from vpmdk_core.runtime import neb as neb_module
+
+    shared_calculator = DummyCalculator()
+    actual_neb = vpmdk.NEB
+    captured: dict[str, object] = {}
+
+    class CapturingNEB:
+        def __new__(cls, images, **kwargs):
+            captured["calculators"] = [image.calc for image in images]
+            return actual_neb(images, **kwargs)
+
+    monkeypatch.setattr(vpmdk, "NEB", CapturingNEB)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
+
+    vpmdk.run_workdir(str(tmp_path), calculator=shared_calculator)
+
+    calculators = captured["calculators"]
+    assert len(calculators) == 3
+    assert all(
+        isinstance(calc, neb_module._PerImageResultCache) for calc in calculators
+    )
+    assert all(calc._calculator is shared_calculator for calc in calculators)
+
+
+def test_model_declared_species_gate_fires_in_oneshot_neb(
+    tmp_path, prepare_inputs, monkeypatch
+):
+    # R151 (P2): both NEB call sites passed calculator= (None in one-shot) to
+    # the species gate, and the per-image calculator built on the very next
+    # line was never re-checked -- so a band whose elements the loaded model
+    # does not declare (matgl's holed element_types) died one-shot with a raw
+    # KeyError traceback after writing partial per-image artifacts, while the
+    # flat path and the resident-server submission both got the clean
+    # input-error diagnostic. Mirrors the flat path's "second half of the
+    # species gate".
+    from types import SimpleNamespace
+
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "2", "IMAGES": "1"},
+    )
+    _write_numbered_neb_poscars(tmp_path)
+
+    declared = DummyCalculator()
+    declared.model = SimpleNamespace(element_types=("H", "He"))
+    monkeypatch.setattr(
+        vpmdk,
+        "_build_workdir_calculator",
+        lambda bcar, *, structure, workdir_abs: declared,
+    )
+
+    # Optimizer branch (_build_neb_images).
+    with pytest.raises(vpmdk.WorkdirInputError, match="element table"):
+        vpmdk.run_workdir(str(tmp_path))
+
+    # Per-image single-point branch.
+    incar_text = (tmp_path / "INCAR").read_text()
+    (tmp_path / "INCAR").write_text(
+        incar_text.replace("NSW = 1", "NSW = 0").replace("IBRION = 2", "IBRION = -1")
+    )
+    with pytest.raises(vpmdk.WorkdirInputError, match="element table"):
+        vpmdk.run_workdir(str(tmp_path))
+
+
+def test_unbalanced_incar_quote_swallowed_tags_are_rejected(tmp_path):
+    # R151 (P1): pymatgen's Incar.from_str is compiled with re.DOTALL and its
+    # quoted alternative spans newlines, so 'SYSTEM = "Cu bulk' (closing quote
+    # forgotten) swallowed every tag up to the next quote in the file -- a
+    # requested 200-step relaxation ran as a single point with exit 0 while
+    # the OUTCAR INCAR echo still listed IBRION=2/NSW=200. The swallowing
+    # tag's RAW value is non-empty, so the R133 blank-tag tests never looked
+    # at it; a parsed STRING value spanning a newline is now rejected (no
+    # VASP tag takes a multi-line value). The conftest pymatgen stub does not
+    # reproduce the DOTALL parse, so the guard is exercised directly with the
+    # parse shape the real library produces.
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text(
+        'SYSTEM = "Cu bulk\nISPIN = 2\nIBRION = 2\nNSW = 200\nGGA = "PE"\n'
+    )
+    swallowed_parse = {
+        "SYSTEM": 'Cu bulk\nISPIN = 2\nIBRION = 2\nNSW = 200\nGGA ='
+    }
+    with pytest.raises(ValueError, match="spanning multiple lines"):
+        incar_module._reject_swallowed_incar_tags(swallowed_parse, str(path))
+
+    # A BALANCED quoted value stays legal (no newline in the parsed string).
+    path.write_text('SYSTEM = "a ; b"\nNSW = 5\n')
+    incar_module._reject_swallowed_incar_tags({"SYSTEM": "a ; b", "NSW": 5}, str(path))
+
+
+def test_neb_projections_line_has_exactly_two_fields_for_vtst(
+    tmp_path, prepare_inputs, monkeypatch
+):
+    # R152 (P1): the OUTCAR "NEB: projections on to tangent (spring, REAL)"
+    # line carried THREE numbers where real VTST writes two. VTST's
+    # nebbarrier.pl takes the LAST whitespace field as the interior-image
+    # force and nebspline.pl uses it as -dE/ds; the appended third field (a
+    # non-negative max perpendicular-force magnitude) fed the spline a slope
+    # <= 0 at every interior image and fabricated saddle points and minima
+    # that do not exist in the computed energies (measured: a strictly
+    # monotonic band gained a spurious saddle 36% above its highest image).
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "1", "IBRION": "2", "IMAGES": "1"},
+    )
+    _write_numbered_neb_poscars(tmp_path)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
+
+    vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+    for image in ("00", "01", "02"):
+        outcar = (tmp_path / image / "OUTCAR").read_text()
+        lines = [
+            line
+            for line in outcar.splitlines()
+            if "NEB: projections on to tangent" in line
+        ]
+        assert lines, image
+        for line in lines:
+            fields = line.split("(spring, REAL)")[1].split()
+            assert len(fields) == 2, (image, line)
+            float(fields[0])
+            float(fields[1])
+
+
+def test_unbalanced_quote_is_rejected_for_bool_typed_swallowers(tmp_path):
+    # R152 (P2): the R151 guard fired only when the swallowing tag parsed to
+    # a STRING; pymatgen types ~160 tags as bool/list, so 'LWAVE = ".FALSE.'
+    # (closing quote forgotten) parsed to the scalar False and silently
+    # deleted every following tag up to the next quote -- a 200-step ISIF=3
+    # relaxation ran as a single point with exit 0. The raw-level half now
+    # rejects any raw value with a leading unclosed quote regardless of how
+    # the parser types it (lesson xl: enumerate the other syntactic doors).
+    # (R153 refinement: a leading quote alone is NOT sufficient -- pymatgen
+    # swallows only when another quote exists later in the file, so the guard
+    # keys on the direct evidence: a following raw tag missing from the
+    # parse. The conftest pymatgen stub parses line by line and never
+    # swallows, so the guard is exercised with the parse shape the real
+    # library produces.)
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text(
+        'ISTART = 0\nLWAVE = ".FALSE.\nLCHARG = .FALSE.\nNSW = 200\n'
+        'IBRION = 2\nLREAL = "Auto"\n'
+    )
+    swallowed_parse = {"ISTART": 0, "LWAVE": False, "LREAL": "Auto"}
+    with pytest.raises(ValueError, match="unbalanced quote"):
+        incar_module._reject_swallowed_incar_tags(swallowed_parse, str(path))
+
+    # Balanced quoted values keep parsing (raw reader strips the quotes, so
+    # no leading quote survives to the guard).
+    path.write_text('SYSTEM = "a ; b"\nNSW = 5\n')
+    incar_module._load_incar(str(path))
+
+    # R153 (P2, over-rejection regression of the R152 guard): with NO later
+    # quote in the comment-stripped file, pymatgen's quoted branch cannot
+    # span lines -- the value parses literally and nothing is swallowed.
+    # 'SYSTEM = "run #3"' (balanced in the file; the comment strip removes
+    # the closing quote) and a forgotten quote on the LAST tag both ran fine
+    # at HEAD and must keep running.
+    path.write_text('SYSTEM = "run #3"\nIBRION = 2\nNSW = 5\nEDIFFG = -0.05\n')
+    incar_module._reject_swallowed_incar_tags(
+        {"SYSTEM": '"run', "IBRION": 2, "NSW": 5, "EDIFFG": -0.05}, str(path)
+    )
+    incar_module._load_incar(str(path))
+
+    path.write_text('IBRION = 2\nNSW = 5\nSYSTEM = "Cu bulk\n')
+    incar_module._reject_swallowed_incar_tags(
+        {"IBRION": 2, "NSW": 5, "SYSTEM": '"Cu bulk'}, str(path)
+    )
+    incar_module._load_incar(str(path))
+
+
+def test_force_constants_displacement_rejects_corrupted_tokens():
+    # R152 (P3): FORCE_CONSTANTS_DISPLACEMENT was read with the
+    # digit-extracting _parse_optional_float, so a Fortran D exponent
+    # ('1D-2') or a letter O for zero ('.O1') silently became a 1.0 Angstrom
+    # step where 0.01 was meant -- a 100x-wrong finite difference with
+    # exit 0, while the byte-analogous POTIM spelling in INCAR is a clean
+    # input error.
+    from vpmdk_core.runtime import single as single_module
+
+    for bad in ("1D-2", ".O1", "0.0.1", "abc"):
+        with pytest.raises(ValueError, match="not a plain number"):
+            single_module._force_constants_displacement_from_bcar(
+                {"FORCE_CONSTANTS_DISPLACEMENT": bad}
+            )
+
+    # Plain spellings keep working.
+    assert single_module._force_constants_displacement_from_bcar(
+        {"FORCE_CONSTANTS_DISPLACEMENT": "1e-2"}
+    ) == 0.01
+    assert single_module._force_constants_displacement_from_bcar(
+        {"FORCE_CONSTANTS_DISPLACEMENT": "0.02"}
+    ) == 0.02
+
+
+def test_absurd_cell_volume_is_rejected_at_input_time(tmp_path):
+    # R153 (P2): the width guard bounds each AXIS (1e6 A), but the
+    # neighbour-search cost is the BIN COUNT ~ volume/cutoff^3: a 20000 A
+    # cube with 2 atoms -- 50x under the width ceiling -- died in
+    # find_points_in_spheres asking for 152 GB (retryable exit 2 in server
+    # mode, exit 1 one-shot), and a 4000 A cube wedged the resident worker
+    # past 200 s at 28.5 GB RSS, taking status/stop down with it.
+    from ase import Atoms
+
+    from vpmdk_core.io import inputs as inputs_module
+
+    huge = Atoms(
+        "Si2",
+        positions=[[0.0, 0.0, 0.0], [5.0, 5.0, 5.0]],
+        cell=np.eye(3) * 20000.0,
+        pbc=True,
+    )
+    with pytest.raises(ValueError, match="cell volume"):
+        inputs_module._validate_finite_geometry(huge)
+
+    # An extreme-but-thin slab stays legal: the PRODUCT is what is bounded,
+    # not another axis cap.
+    slab = Atoms(
+        "Si2",
+        positions=[[0.0, 0.0, 0.0], [2.0, 2.0, 2.0]],
+        cell=np.diag([1.0e5, 10.0, 10.0]),
+        pbc=True,
+    )
+    inputs_module._validate_finite_geometry(slab)
+
+
+def test_potcar_siblings_are_inert_for_the_poscar_parse(tmp_path):
+    # History: R153 gated pymatgen's *POTCAR* sibling glob against FIFOs
+    # (blocking open), R154 narrowed it to FIFO-only, and R160 removed the
+    # glob entirely with check_for_potcar=False -- real pymatgen otherwise
+    # passed a sibling's symbols as default_names, silently relabelling a
+    # declared-Si2 deck to Cu2 (4.6 eV wrong, exit 0) whenever any parseable
+    # *POTCAR* file other than the exact POTCAR was present, where real VASP
+    # reads only the exact file POTCAR. With the parse decoupled, a FIFO or
+    # directory named POTCAR.bak is simply inert: no hang, no rejection, no
+    # species override.
+    from vpmdk_core.io import inputs as inputs_module
+
+    poscar = tmp_path / "POSCAR"
+    poscar.write_text(
+        "Si2\n1.0\n5.4 0 0\n0 5.4 0\n0 0 5.4\nSi\n2\nDirect\n"
+        "0.0 0.0 0.0\n0.25 0.25 0.25\n"
+    )
+    os.mkfifo(tmp_path / "POTCAR.bak")
+    (tmp_path / "POTCARs").mkdir()
+    (tmp_path / "POTCAR_Cu").write_text("not a POTCAR at all\n")
+
+    inputs_module.read_structure(str(poscar))
+
+
+def test_poscar_parse_does_not_consult_potcar_siblings(tmp_path, monkeypatch):
+    # R160 (P2) wiring pin: read_structure must pass check_for_potcar=False
+    # so pymatgen never reads *POTCAR* siblings as default_names (the stub
+    # accepts the kwarg via the TypeError fallback; real pymatgen honours
+    # it).
+    from vpmdk_core.io import inputs as inputs_module
+
+    captured: dict[str, object] = {}
+    real_poscar = inputs_module.Poscar
+
+    class RecordingPoscar:
+        @classmethod
+        def from_file(cls, path, **kwargs):
+            captured.update(kwargs)
+            return real_poscar.from_file(path)
+
+    monkeypatch.setattr(inputs_module, "Poscar", RecordingPoscar)
+    poscar = tmp_path / "POSCAR"
+    poscar.write_text(
+        "Si2\n1.0\n5.4 0 0\n0 5.4 0\n0 0 5.4\nSi\n2\nDirect\n"
+        "0.0 0.0 0.0\n0.25 0.25 0.25\n"
+    )
+    inputs_module.read_structure(str(poscar))
+    assert captured.get("check_for_potcar") is False
+
+
+def test_vasp4_trailing_symbol_poscar_declares_species():
+    # R154 (P2, over-rejection regression window): pymatgen's rule 3 reads a
+    # symbol at the END of each coordinate line of a VASP-4 POSCAR and uses
+    # the REAL species; judging species on line 6 alone rejected that format
+    # with exit 1 although HEAD computed it correctly.
+    from vpmdk_core.io import inputs as inputs_module
+    import tempfile
+
+    trailing = (
+        "Si2 vasp4 trailing symbols\n1.0\n"
+        "3.8669745922 0.0 0.0\n1.9334872961 3.3488982326 0.0\n"
+        "1.9334872961 1.1162994109 3.1573715331\n2\nDirect\n"
+        "0.749999979 0.749999983 0.749999997 Si\n"
+        "0.500000007 0.499999989 0.499999998 Si\n"
+    )
+    bare = trailing.replace(" Si\n", "\n")
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "POSCAR")
+        with open(p, "w") as handle:
+            handle.write(trailing)
+        assert inputs_module._poscar_declares_trailing_species(p) is True
+        with open(p, "w") as handle:
+            handle.write(bare)
+        # Genuinely undeterminable VASP-4 (no trailing symbols) still needs a
+        # POTCAR -- the fabricated-H/He guard must keep firing.
+        assert inputs_module._poscar_declares_trailing_species(p) is False
+
+
+def test_multiline_species_counts_block_is_bounded(tmp_path):
+    # R154 (P2): pymatgen (and VASP itself, for >20 species groups) writes
+    # the species/counts block over MULTIPLE lines; the ion-count cap looked
+    # only at cleaned lines 6 and 7, so counts on line 8+ escaped and
+    # pymatgen expanded per-atom lists unbounded inside the resident worker.
+    from vpmdk_core.io import inputs as inputs_module
+
+    header = (
+        "multi-line block\n1.0\n"
+        "5.4 0 0\n0 5.4 0\n0 0 5.4\n"
+    )
+    path = tmp_path / "POSCAR"
+    path.write_text(
+        header + "Si\nGe\n2000000000\n2000000000\nDirect\n0 0 0\n0.5 0.5 0.5\n"
+    )
+    with pytest.raises(ValueError, match="declares"):
+        inputs_module._reject_absurd_poscar_ion_counts(str(path))
+
+    # A small multi-line block stays legal, and integer COORDINATE lines
+    # after the mode line are never miscounted.
+    path.write_text(
+        header + "Si\nGe\n1\n1\nDirect\n0 0 0\n1 1 1\n"
+    )
+    inputs_module._reject_absurd_poscar_ion_counts(str(path))
+
+    # The classic single-line layouts keep their bound.
+    path.write_text(header + "Si\n2000000000\nDirect\n0 0 0\n")
+    with pytest.raises(ValueError, match="declares"):
+        inputs_module._reject_absurd_poscar_ion_counts(str(path))
+
+
+def test_short_selective_dynamics_masks_are_rejected():
+    # R154 (P3): a coordinate line under Selective dynamics with fewer than
+    # three T/F flags parses in pymatgen as a short mask, which
+    # AseAtomsAdaptor silently maps to NO constraint -- the atom the user
+    # froze relaxed freely with exit 0 and the CONTCAR lost the block.
+    from vpmdk_core.io import inputs as inputs_module
+
+    with pytest.raises(ValueError, match="exactly three"):
+        inputs_module._reject_malformed_selective_dynamics(
+            [[False, False], [True, True]]
+        )
+    inputs_module._reject_malformed_selective_dynamics(
+        [[False, False, False], [True, True, True]]
+    )
+    inputs_module._reject_malformed_selective_dynamics(None)
+    inputs_module._reject_malformed_selective_dynamics([])
+
+
+def test_poscar_edge_formats_survive_real_pymatgen(tmp_path):
+    # R154 wiring pins, exercised against the REAL pymatgen in a subprocess
+    # (the conftest stub neither reads trailing coordinate-line symbols nor
+    # populates selective_dynamics, so the read_structure wiring is invisible
+    # in-process): (1) a VASP-4 POSCAR with element symbols at the end of
+    # each coordinate line must be ACCEPTED without a POTCAR -- pymatgen
+    # reads the real species (rule 3 of Poscar.from_str), and judging line 6
+    # alone rejected a file HEAD computed correctly; (2) a selective-dynamics
+    # mask with fewer than three flags must be REJECTED -- AseAtomsAdaptor
+    # silently drops short masks, freeing the atoms the user froze.
+    import subprocess as subprocess_module
+    import sys as sys_module
+
+    script = r"""
+import os, sys
+import vpmdk_core
+
+d = sys.argv[1]
+trailing = (
+    "Si2 vasp4 trailing symbols\n1.0\n"
+    "3.8669745922 0.0 0.0\n1.9334872961 3.3488982326 0.0\n"
+    "1.9334872961 1.1162994109 3.1573715331\n2\nDirect\n"
+    "0.749999979 0.749999983 0.749999997 Si\n"
+    "0.500000007 0.499999989 0.499999998 Si\n"
+)
+p1 = os.path.join(d, "POSCAR")
+open(p1, "w").write(trailing)
+vpmdk_core.read_structure(p1)
+print("TRAILING OK")
+
+short = (
+    "Si2 short mask\n1.0\n"
+    "5.4 0 0\n0 5.4 0\n0 0 5.4\nSi\n2\nSelective dynamics\nDirect\n"
+    "0.01 0.0 0.0 F F\n0.5 0.5 0.5 T T\n"
+)
+p2 = os.path.join(d, "sub")
+os.makedirs(p2, exist_ok=True)
+p2 = os.path.join(p2, "POSCAR")
+open(p2, "w").write(short)
+try:
+    vpmdk_core.read_structure(p2)
+    print("SHORTMASK NOT REJECTED")
+except ValueError as exc:
+    assert "exactly three" in str(exc), exc
+    print("SHORTMASK OK")
+"""
+    src_dir = str(Path(__file__).resolve().parents[1] / "src")
+    env = {
+        **os.environ,
+        "PYTHONPATH": src_dir + os.pathsep + os.environ.get("PYTHONPATH", ""),
+    }
+    completed = subprocess_module.run(
+        [sys_module.executable, "-c", script, str(tmp_path)],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if "ModuleNotFoundError: No module named 'pymatgen'" in completed.stderr:
+        pytest.skip("real pymatgen is not installed")
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "TRAILING OK" in completed.stdout, completed.stdout + completed.stderr
+    assert "SHORTMASK OK" in completed.stdout, completed.stdout + completed.stderr
+
+
+def test_blank_following_tag_is_not_swallow_evidence(tmp_path):
+    # R155 (P1, over-rejection regression of the R153 quote guard): pymatgen
+    # drops every BLANK-valued tag for an independent reason (`if not val:
+    # continue`), so its absence from the parse is not swallow evidence --
+    # a legal file combining the protected 'SYSTEM = "run #3"' with a
+    # trailing 'NPAR =' was rejected with a factually false diagnosis while
+    # the parse was byte-identical with and without the blank line.
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text('SYSTEM = "run #3"\nNSW = 5\nIBRION = 2\nNPAR =\n')
+    incar_module._reject_swallowed_incar_tags(
+        {"SYSTEM": '"run', "NSW": 5, "IBRION": 2}, str(path)
+    )
+
+    # Detection power is kept: a REAL swallow still surfaces through the
+    # non-blank neighbours of any blank tag inside the swallowed region.
+    path.write_text(
+        'LWAVE = ".FALSE.\nNPAR =\nNSW = 200\nIBRION = 2\nLREAL = "Auto"\n'
+    )
+    with pytest.raises(ValueError, match="unbalanced quote"):
+        incar_module._reject_swallowed_incar_tags(
+            {"LWAVE": False, "LREAL": "Auto"}, str(path)
+        )
+
+
+def test_broken_input_symlinks_are_rejected_not_treated_as_absent(tmp_path):
+    # R155 (P3): os.path.exists FOLLOWS symlinks, so every optional-input
+    # gate read a dangling or self-referential INCAR/BCAR/POTCAR link as an
+    # ABSENT file -- a requested relaxation silently ran as a single point
+    # and a requested backend became the CHGNET default, exit 0, no
+    # diagnostic, while a directory or FIFO at the same path is exit 1.
+    from vpmdk_core.io import inputs as inputs_module
+    from vpmdk_core.settings import incar as incar_module
+
+    dangling = tmp_path / "INCAR"
+    dangling.symlink_to(tmp_path / "shared" / "INCAR")
+    with pytest.raises(ValueError, match="cannot be resolved"):
+        incar_module._load_incar(str(dangling))
+
+    self_loop = tmp_path / "BCAR"
+    os.symlink("BCAR", self_loop)
+    with pytest.raises(ValueError, match="cannot be resolved"):
+        inputs_module._reject_broken_input_link(str(self_loop), "BCAR")
+
+    # A genuinely absent path stays absent, and a symlink to a real file
+    # stays legal.
+    inputs_module._reject_broken_input_link(str(tmp_path / "MISSING"), "INCAR")
+    target = tmp_path / "real-incar"
+    target.write_text("NSW = 1\n")
+    good = tmp_path / "GOOD"
+    good.symlink_to(target)
+    inputs_module._reject_broken_input_link(str(good), "INCAR")
+
+
+def test_dangling_bcar_symlink_is_an_input_error(tmp_path, prepare_inputs):
+    # R155 (P3) wiring: the one-shot BCAR read must classify a broken BCAR
+    # link as input_error instead of silently running the CHGNET default.
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0", "IBRION": "-1"},
+    )
+    bcar = tmp_path / "BCAR"
+    bcar.unlink()
+    bcar.symlink_to(tmp_path / "nowhere" / "BCAR")
+    with pytest.raises(vpmdk.WorkdirInputError, match="cannot be resolved"):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+def test_nonbare_selective_dynamics_spellings_are_rejected(tmp_path):
+    # R156 (P2): pymatgen reads selective-dynamics flags with an exact
+    # `value == "T"` comparison, so every other Fortran-logical TRUE spelling
+    # VASP itself accepts (.TRUE., TRUE, t, .T.) silently became False --
+    # the atom the user marked FREE was FROZEN with exit 0 and the CONTCAR
+    # rewrote the line as F F F, the inverse of the input. The R154 length
+    # guard sees already-converted booleans, so the spelling is judged on
+    # the raw text.
+    from vpmdk_core.io import inputs as inputs_module
+
+    header = (
+        "Si2 sd spellings\n1.0\n5.4 0 0\n0 5.4 0\n0 0 5.4\nSi\n2\n"
+        "Selective dynamics\nDirect\n"
+    )
+    path = tmp_path / "POSCAR"
+    for spelling in (".TRUE.", "TRUE", "t", ".T."):
+        path.write_text(
+            header + f"0.01 0.0 0.0 {spelling} {spelling} {spelling}\n"
+            "0.5 0.5 0.5 T T T\n"
+        )
+        with pytest.raises(ValueError, match="bare T or F"):
+            inputs_module._reject_ambiguous_selective_dynamics_tokens(str(path))
+
+    # Bare T/F files (including VASP-4 trailing-symbol layouts) stay legal.
+    path.write_text(
+        header + "0.01 0.0 0.0 F F F\n0.5 0.5 0.5 T T T\n"
+    )
+    inputs_module._reject_ambiguous_selective_dynamics_tokens(str(path))
+    path.write_text(
+        "Si2 v4 sd\n1.0\n5.4 0 0\n0 5.4 0\n0 0 5.4\n2\n"
+        "Selective dynamics\nDirect\n"
+        "0.01 0.0 0.0 T T F Si\n0.5 0.5 0.5 T T T Si\n"
+    )
+    inputs_module._reject_ambiguous_selective_dynamics_tokens(str(path))
+
+
+def test_species_counts_length_mismatch_is_rejected(tmp_path):
+    # R156 (P2): pymatgen zips symbols against counts and stops at the
+    # shorter list, so 'Si Ge' over '2' silently computed a Si2 energy for a
+    # file that says SiGe (and rewrote CONTCAR with the wrong chemistry),
+    # while the mirror typo raised a bare IndexError.
+    from vpmdk_core.io import inputs as inputs_module
+
+    header = "mismatch\n1.0\n5.4 0 0\n0 5.4 0\n0 0 5.4\n"
+    path = tmp_path / "POSCAR"
+    path.write_text(header + "Si Ge\n2\nDirect\n0 0 0\n0.5 0.5 0.5\n")
+    with pytest.raises(ValueError, match="species"):
+        inputs_module._reject_mismatched_species_counts(str(path))
+
+    path.write_text(header + "Si\n1 1\nDirect\n0 0 0\n0.5 0.5 0.5\n")
+    with pytest.raises(ValueError, match="species"):
+        inputs_module._reject_mismatched_species_counts(str(path))
+
+    # Legal layouts: classic, VASP-4 (no symbol line), and a matched
+    # multi-line block.
+    path.write_text(header + "Si Ge\n1 1\nDirect\n0 0 0\n0.5 0.5 0.5\n")
+    inputs_module._reject_mismatched_species_counts(str(path))
+    path.write_text(header + "2\nDirect\n0 0 0\n0.5 0.5 0.5\n")
+    inputs_module._reject_mismatched_species_counts(str(path))
+    path.write_text(
+        header + "Si\nGe\n1\n1\nDirect\n0 0 0\n0.5 0.5 0.5\n"
+    )
+    inputs_module._reject_mismatched_species_counts(str(path))
+
+    # R157 (P2, over-rejection regression window of this guard): a Fortran
+    # '!' comment on the species line is NOT extra species -- pymatgen keeps
+    # the junk tokens but its zip-to-counts drops them harmlessly and HEAD
+    # ran the deck with the exactly correct composition. Only leading valid
+    # element symbols count.
+    path.write_text(header + "Si   ! silicon\n2\nDirect\n0 0 0\n0.5 0.5 0.5\n")
+    inputs_module._reject_mismatched_species_counts(str(path))
+    path.write_text(
+        header + "Si Ge   ! two species\n1 1\nDirect\n0 0 0\n0.5 0.5 0.5\n"
+    )
+    inputs_module._reject_mismatched_species_counts(str(path))
+
+
+def test_requested_nsw_is_echoed_by_neb_images_and_force_constants(
+    tmp_path, prepare_inputs, monkeypatch
+):
+    # R157 (P3): the NEB single-point branch and run_force_constants never
+    # threaded the requested NSW into the recorder, so the per-image (and
+    # IBRION=5/6/7/8) vasprun.xml echoed NSW=1 (the len(steps) fallback)
+    # while the parent aggregate of the SAME run and a flat workdir with the
+    # same INCAR both echo the INCAR value -- the missing half of the R142
+    # wiring.
+    import xml.etree.ElementTree as ET
+
+    def echoed_nsw(path):
+        root_el = ET.parse(path).getroot()
+        node = root_el.find("./incar/i[@name='NSW']")
+        return None if node is None else node.text.strip()
+
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "20", "IBRION": "-1", "IMAGES": "1"},
+    )
+    _write_numbered_neb_poscars(tmp_path)
+    vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+    assert echoed_nsw(tmp_path / "01" / "vasprun.xml") == "20"
+    assert echoed_nsw(tmp_path / "vasprun.xml") == "20"
+
+    fc_dir = tmp_path / "fc"
+    fc_dir.mkdir()
+    prepare_inputs(
+        fc_dir,
+        potential="CHGNET",
+        incar_overrides={"NSW": "20", "IBRION": "5", "POTIM": "0.015", "NFREE": "2"},
+    )
+    vpmdk.run_workdir(str(fc_dir), calculator=DummyCalculator())
+    assert echoed_nsw(fc_dir / "vasprun.xml") == "20"
+
+
+def test_nhc_nchains_reads_fortran_trailing_comma():
+    # R157 (P3): NHC_NCHAINS was the only INCAR scalar parsed with a bare
+    # int(float(value)), so the legal Fortran trailing comma ('5,' -- the
+    # terminator R138 established this parser must honour, and which every
+    # sibling reads through the shared extractor) dropped the tag and the
+    # run silently sampled the DEFAULT chain length while echoing the
+    # requested MDALGO.
+    settings = vpmdk._load_incar_settings(
+        {"IBRION": 0, "NSW": 3, "MDALGO": 4, "NHC_NCHAINS": "5,"}
+    )
+    assert settings.thermostat_params["NHC_NCHAINS"] == 5.0
+
+
+def test_negative_scale_with_cartesian_coordinates_is_rejected(tmp_path):
+    # R158 (P1): VASP reads a negative scale factor as the target cell
+    # VOLUME and applies the derived (-scale/vol)**(1/3) factor to lattice
+    # AND Cartesian positions; pymatgen applies the derived factor to the
+    # lattice but multiplies Cartesian positions by the RAW negative number,
+    # silently producing a different structure (fractional 0.75 became
+    # -30.67; energy wrong by 0.36 eV; the corrupted CONTCAR propagates to
+    # continuations) with exit 0. No scale<0 + Cartesian file parses
+    # correctly today, so rejection cannot break a working input.
+    from vpmdk_core.io import inputs as inputs_module
+
+    header = (
+        "Si2 negscale\n{scale}\n"
+        "3.8669745922 0.0 0.0\n1.9334872961 3.3488982326 0.0\n"
+        "1.9334872961 1.1162994109 3.1573715331\nSi\n2\n"
+    )
+    path = tmp_path / "POSCAR"
+    cart = "3.867 2.232 2.368\n2.578 1.488 1.579\n"
+
+    path.write_text(header.format(scale="-40.888") + "Cartesian\n" + cart)
+    with pytest.raises(ValueError, match="negative scale factor"):
+        inputs_module._reject_negative_scale_cartesian_poscar(str(path))
+
+    # The Selective dynamics variant hides the mode one line lower.
+    path.write_text(
+        header.format(scale="-40.888")
+        + "Selective dynamics\nCartesian\n"
+        + "3.867 2.232 2.368 T T T\n2.578 1.488 1.579 T T T\n"
+    )
+    with pytest.raises(ValueError, match="negative scale factor"):
+        inputs_module._reject_negative_scale_cartesian_poscar(str(path))
+
+    # The combinations the parser reads correctly keep working: negative
+    # scale + Direct, and positive scale + Cartesian.
+    path.write_text(
+        header.format(scale="-40.888") + "Direct\n0.75 0.75 0.75\n0.5 0.5 0.5\n"
+    )
+    inputs_module._reject_negative_scale_cartesian_poscar(str(path))
+    path.write_text(header.format(scale="1.0") + "Cartesian\n" + cart)
+    inputs_module._reject_negative_scale_cartesian_poscar(str(path))
+
+
+def test_same_line_incar_assignments_without_separator_are_rejected(tmp_path):
+    # R161 (P2): pymatgen's value pattern consumes 'NSW = 5 IBRION = 2'
+    # entirely as NSW's value, so IBRION silently never existed and the run
+    # changed mode (relaxation -> single point) with exit 0 -- the third
+    # door to the swallowed-tag outcome after blank values and unbalanced
+    # quotes. The ';' spelling parses both tags and stays legal, and SYSTEM
+    # is exempt (a free-text title may legitimately contain 'NSW=100').
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    for text, lost in (
+        ("NSW = 5 IBRION = 2\nEDIFFG = -1e-8\n", "IBRION"),
+        ("IBRION = 2 NSW = 5\nEDIFFG = -1e-8\n", "NSW"),
+    ):
+        path.write_text(text)
+        with pytest.raises(ValueError, match=lost):
+            incar_module._load_incar(str(path))
+
+    path.write_text("NSW = 5; IBRION = 2\nEDIFFG = -1e-8\n")
+    incar_module._load_incar(str(path))
+
+    path.write_text("SYSTEM = NSW=100 study\nIBRION = 2\n")
+    incar_module._load_incar(str(path))
+
+    # R165 (P2, over-rejection regression of this guard): the standard VASP
+    # trailing-comment style mentions other tags with '=' -- pymatgen parses
+    # these files exactly as written (nothing lost) and HEAD ran them, so
+    # the guard's condition is the CAUSAL one: the embedded tag must be
+    # genuinely absent from the parse.
+    path.write_text(
+        "NSW    = 3             (max ionic steps, ignored when IBRION=-1)\n"
+        "IBRION = 2             (Algorithm: 0-MD, 1-Quasi-New, 2-CG)\n"
+        "EDIFFG = -1E-02        (Ionic convergence, eV/AA)\n"
+    )
+    incar_module._load_incar(str(path))
+    path.write_text("NSW = 3   (NSW=0 would be a single point)\nIBRION = 2\n")
+    incar_module._load_incar(str(path))
+
+
+def test_unknown_bcar_tags_are_warned_about(tmp_path, capsys):
+    # R161 (P2): a misspelled BCAR tag (MODELL, DEVCIE, WRITE_CHGCARR) was
+    # silently ignored, so the run used the DEFAULT model/device and skipped
+    # the requested outputs with exit 0 and no diagnostic -- while the
+    # byte-analogous INCAR typo warns. Warn-don't-change: the mapping keeps
+    # the tag exactly as documented, only the silence goes.
+    from vpmdk_core.io import inputs as inputs_module
+
+    path = tmp_path / "BCAR"
+    path.write_text(
+        "MLP = CHGNET\nMODELL = /models/mine.pth\nDEVCIE = cuda\n"
+        "WRITE_CHGCARR = 1\n"
+    )
+    tags = inputs_module.parse_key_value_file(str(path))
+    out = capsys.readouterr().out
+    for typo in ("MODELL", "DEVCIE", "WRITE_CHGCARR"):
+        assert f"BCAR tag {typo} is not recognized" in out
+        assert typo in tags  # preserved, exactly as documented
+
+    # Every real vocabulary source stays silent: static output tags, the
+    # backend construction vocabulary, and the charge model-config family.
+    path.write_text(
+        "MLP = SEVENNET\nMODEL = /m.pt\nDEVICE = cpu\nWRITE_ENERGY_CSV = 1\n"
+        "SEVENNET_ENABLE_FLASH = 1\nCHARGE_NUM_INTERACTIONS = 3\n"
+        "CHARGE_DEEPCDP_WEIGHTING_R0 = 1.5\nFORCE_CONSTANTS_DISPLACEMENT = 0.01\n"
+        # R162 (P2): the eight individually-read DeePCDP option tags were
+        # missing from the vocabulary harvest, so a documented, fully-consumed
+        # SOAP configuration was falsely warned "not recognized" on every run.
+        "CHARGE_DEEPCDP_RCUT = 6.0\nCHARGE_DEEPCDP_NMAX = 8\n"
+        "CHARGE_DEEPCDP_LMAX = 6\nCHARGE_DEEPCDP_SIGMA = 0.3\n"
+        "CHARGE_DEEPCDP_PERIODIC = 1\nCHARGE_DEEPCDP_SPECIES = Si\n"
+        "CHARGE_DEEPCDP_ACTIVATION = relu\nCHARGE_DEEPCDP_METADATA = /m.json\n"
+    )
+    inputs_module.parse_key_value_file(str(path))
+    assert "is not recognized" not in capsys.readouterr().out
+
+    # R162 (P2): callers that hoist the parse (the server's request path)
+    # suppress the warnings and re-emit them at one-shot's position.
+    path.write_text("MLP = CHGNET\nMODELL = /x\n")
+    inputs_module.parse_key_value_file(str(path), warn_unknown_tags=False)
+    assert "is not recognized" not in capsys.readouterr().out
+
+
+def test_serve_drains_stderr_like_stdout(monkeypatch, capsys):
+    # R164 (P2): the R144 drain guard covered stdout only, so a dead STDERR
+    # consumer (the foreground logger is a StreamHandler on stderr, and the
+    # ML-stack import warnings land there too) still let CPython's
+    # finalization flush override serve_cli's exit status to 120 -- a
+    # successful daemon start read as a failed one, a clean stop as a crash.
+    # One function now takes the stream and serve_cli drains BOTH.
+    import vpmdk_core.server as server_module
+
+    read_fd, write_fd = os.pipe()
+    os.close(read_fd)
+    broken = os.fdopen(write_fd, "w")
+    monkeypatch.setattr(sys, "stderr", broken)
+    print("buffered warning line", file=sys.stderr)
+    server_module._drain_stream_guarded(sys.stderr)  # must not raise
+    print("late line", file=sys.stderr)
+    sys.stderr.flush()  # the finalization operation; must not raise either
+
+    # WIRING: serve_cli's finally must drain stderr too. Run it with a fresh
+    # broken stderr carrying buffered bytes; afterwards the exact operation
+    # CPython's finalization performs (a bare flush) must not raise, which is
+    # only true if the finally pointed the stream at /dev/null.
+    read_fd2, write_fd2 = os.pipe()
+    os.close(read_fd2)
+    broken2 = os.fdopen(write_fd2, "w")
+    monkeypatch.setattr(sys, "stderr", broken2)
+    print("buffered second line", file=sys.stderr)
+    monkeypatch.setattr(server_module, "_serve_cli_inner", lambda args: 7)
+    assert server_module.serve_cli(object()) == 7
+    sys.stderr.flush()  # must not raise
+
+
+def test_comma_separated_repeat_groups_are_bounded(tmp_path):
+    # R166 (P2): the repeat guard split the raw value on whitespace only, so
+    # a Fortran-legal comma-separated 'N*value,N*value,...' list was ONE
+    # token whose expansion read as exactly one cap-sized group -- pymatgen's
+    # proc_val findall then expanded every group, growing linearly with file
+    # size inside the resident worker (6 KB -> 5e8 entries). Commas now
+    # normalize to separators exactly as _parse_magmom_values does.
+    import time as time_module
+
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    groups = ",".join(["1000000*1.0"] * 500)
+    path.write_text(f"MAGMOM = {groups}\n")
+    started = time_module.monotonic()
+    with pytest.raises(ValueError, match="expands to"):
+        incar_module._reject_huge_repeat_counts(str(path))
+    assert time_module.monotonic() - started < 5.0
+
+    # Legal comma-separated repeats keep parsing.
+    path.write_text("MAGMOM = 2*1.0,3*-0.5\n")
+    incar_module._reject_huge_repeat_counts(str(path))
+    incar_module._load_incar(str(path))
+
+
+def test_repeat_caps_apply_only_to_expanded_tags(tmp_path):
+    # Cross-review (P2): the repeat caps judged EVERY tag, so a free-text
+    # title like 'SYSTEM = 1000001*study' -- which pymatgen keeps as-is and
+    # no layer ever expands -- was rejected although it ran fine at HEAD.
+    # The guard now asks pymatgen's own INCAR_PARAMS typing (plus MAGMOM for
+    # VPMDK's expander) whether the tag expands at all.
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text("SYSTEM = 1000001*study\nNSW = 5\n")
+    incar_module._reject_huge_repeat_counts(str(path))
+    incar_module._load_incar(str(path))
+
+    path.write_text("FOOTAG = 2000000*x\nNSW = 5\n")
+    incar_module._reject_huge_repeat_counts(str(path))
+
+    # Expanded tags keep every cap.
+    path.write_text("MAGMOM = 10000000*1.0\n")
+    with pytest.raises(ValueError, match="repeat token"):
+        incar_module._reject_huge_repeat_counts(str(path))
+    path.write_text("MAGMOM = " + ",".join(["1000000*1.0"] * 500) + "\n")
+    with pytest.raises(ValueError, match="expands to"):
+        incar_module._reject_huge_repeat_counts(str(path))
+
+
+def test_conditional_artifacts_are_preflighted_only_when_written(
+    tmp_path, prepare_inputs
+):
+    # Cross-review (P2): XDATCAR (MD-only) and CHGCAR/energy.csv
+    # (flag-gated) were preflighted unconditionally, so an ordinary static
+    # run aborted over an ignored CHGCAR directory that
+    # _print_unused_input_notices itself calls unused. The always-written
+    # four stay unconditional; conditional artifacts are checked by the
+    # sites that know they will write them.
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0", "IBRION": "-1"},
+    )
+    (tmp_path / "CHGCAR").mkdir()
+    os.mkfifo(tmp_path / "XDATCAR")
+    (tmp_path / "energy.csv").mkdir()
+
+    # A static run without the flags must ignore all three nodes.
+    vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+    # With WRITE_CHGCAR=1 the same directory fails UP FRONT as input error.
+    (tmp_path / "BCAR").write_text("MLP = CHGNET\nWRITE_CHGCAR = 1\n")
+    with pytest.raises(vpmdk.WorkdirInputError, match="CHGCAR"):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+def test_stressless_backend_with_cell_relaxation_is_an_input_error():
+    # R169 (P2): the stress gate only WARNED, but ISIF>=3 makes stress part
+    # of the DYNAMICS (run_relaxation passes relax_cell=isif>=3 and ASE's
+    # UnitCellFilter.get_forces calls atoms.get_stress), so a stress-less
+    # backend died on the first optimizer step -- exit 1 one-shot, exit 2
+    # (documented RETRYABLE) in server mode -- for a condition fixed by the
+    # BCAR tag x the INCAR alone, leaving an empty OSZICAR and no CONTCAR.
+    from vpmdk_core import cli as cli_module
+
+    stressless = {"MLP": "MATRIS", "MATRIS_TASK": "ef"}
+    for isif in (3, 4, 7):
+        settings = vpmdk._load_incar_settings(
+            {"IBRION": 2, "NSW": 3, "ISIF": isif}
+        )
+        with pytest.raises(vpmdk.WorkdirInputError, match="CELL relaxation"):
+            cli_module._check_backend_output_capabilities(stressless, settings)
+
+    # The branches where stress is only an OUTPUT keep running with the
+    # warning (all measured working with a real MATRIS/ef resident):
+    # ion-only relaxation, single point, MD, force constants and NEB.
+    for incar in (
+        {"IBRION": 2, "NSW": 3, "ISIF": 2},
+        {"IBRION": -1, "NSW": 0, "ISIF": 3},
+        {"IBRION": 0, "NSW": 3, "ISIF": 3},
+        {"IBRION": 5, "NSW": 3, "ISIF": 3},
+    ):
+        cli_module._check_backend_output_capabilities(
+            stressless, vpmdk._load_incar_settings(incar)
+        )
+    cli_module._check_backend_output_capabilities(
+        stressless,
+        vpmdk._load_incar_settings({"IBRION": 2, "NSW": 3, "ISIF": 3}),
+        neb_mode=True,
+    )
+
+    # A stress-capable configuration is unaffected.
+    cli_module._check_backend_output_capabilities(
+        {"MLP": "MATRIS", "MATRIS_TASK": "efs"},
+        vpmdk._load_incar_settings({"IBRION": 2, "NSW": 3, "ISIF": 3}),
+    )
+
+
+def test_repeat_guard_mirrors_the_pymatgen_tokenizer(tmp_path):
+    # R169 (P2): every hand-rolled tokenization (whitespace, then commas)
+    # was bypassable by one junk character -- '(2000000000*1.0)' and
+    # 'x1000000*1.0x1000000*1.0' passed every cap while the same value
+    # without the junk was rejected, and pymatgen's re.findall over the
+    # WHOLE value then expanded them to billions of entries in the resident
+    # worker. The guard now uses pymatgen's own token regex.
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    for value in (
+        "(2000000000*1.0)",
+        "x1000000*1.0x1000000*1.0",
+        "2000000000*1.0",
+        "[10000000*1.0]",
+        ",".join(["1000000*1.0"] * 500),
+    ):
+        path.write_text(f"MAGMOM = {value}\n")
+        with pytest.raises(ValueError):
+            incar_module._reject_huge_repeat_counts(str(path))
+
+    for value in ("4*1.0 2*-0.5", "2*3*1.0", "1.0 -1.0 1.0"):
+        path.write_text(f"MAGMOM = {value}\n")
+        incar_module._reject_huge_repeat_counts(str(path))
+    # Free-text tags are still out of scope entirely.
+    path.write_text("SYSTEM = (1000001*study)\n")
+    incar_module._reject_huge_repeat_counts(str(path))
+
+
+def test_newline_before_equals_reaches_every_raw_guard(tmp_path):
+    # R170 (P2): pymatgen's key regex is KEY\s*= -- the whitespace CROSSES a
+    # newline -- while the raw reader matched KEY[ \t]*=, so 'NSW\n= 1e5'
+    # parsed normally in pymatgen but was invisible to every raw-text guard
+    # (repeat caps, corrupted tokens, the embedded-assignment rule, the
+    # SPRING repair). The key side now mirrors the parser; the VALUE side
+    # stays line-scoped per the R133 blank-swallow rationale.
+    import subprocess as subprocess_module
+    import sys as sys_module
+
+    from vpmdk_core.settings import incar as incar_module
+
+    # Stub-safe in-process half: the repeat cap is raw-only, so the newline
+    # door is detectable without the real parser.
+    path = tmp_path / "INCAR"
+    path.write_text("MAGMOM\n= 5000000*1.0\nNSW = 5\n")
+    with pytest.raises(ValueError, match="repeat token|expands to"):
+        incar_module._reject_huge_repeat_counts(str(path))
+
+    # Plain files keep parsing in-process.
+    path.write_text("NSW = 5\nIBRION = 2\n")
+    incar_module._load_incar(str(path))
+
+    # Real-pymatgen half (the conftest stub parses line-wise and never sees
+    # the newline-crossing key, so the raw-vs-parsed guards are only
+    # exercisable against the real library -- lesson xlviii).
+    script = r"""
+import sys
+from vpmdk_core.settings import incar as m
+import tempfile, os
+d = sys.argv[1]
+p = os.path.join(d, "INCAR")
+for text, label in (
+    ("NSW\n= 1e5\nIBRION = 2\n", "scientific"),
+    ("TEBEG\n= 5OO\nNSW = 3\n", "corrupted"),
+    ("NSW\n= 5 IBRION = 2\n", "embedded"),
+    ("SYSTEM =\nIBRION = 2\n", "blank-swallow"),
+):
+    open(p, "w").write(text)
+    try:
+        m._load_incar(p)
+        print("NOT REJECTED:", label)
+    except ValueError:
+        print("REJECTED OK:", label)
+open(p, "w").write("SPRING\n= -5.5\nIMAGES = 1\n")
+inc = m._load_incar(p)
+print("SPRING:", inc.get("SPRING"))
+"""
+    src_dir = str(Path(__file__).resolve().parents[1] / "src")
+    env = {
+        **os.environ,
+        "PYTHONPATH": src_dir + os.pathsep + os.environ.get("PYTHONPATH", ""),
+    }
+    completed = subprocess_module.run(
+        [sys_module.executable, "-c", script, str(tmp_path)],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if "ModuleNotFoundError: No module named 'pymatgen'" in completed.stderr:
+        pytest.skip("real pymatgen is not installed")
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    for label in ("scientific", "corrupted", "embedded", "blank-swallow"):
+        assert f"REJECTED OK: {label}" in completed.stdout, completed.stdout
+    assert "SPRING: -5.5" in completed.stdout, completed.stdout
+
+
+def test_stress_gate_keys_on_the_actual_neb_branch(tmp_path, prepare_inputs, monkeypatch):
+    # R171 (P2): the R169 gate's NEB exclusion used the INCAR-only heuristic
+    # (_is_neb_like_incar), not "the NEB branch will run" -- a FLAT workdir
+    # whose INCAR merely carried SPRING/LCLIMB skipped the gate and died on
+    # the first optimizer step (exit 2 RETRYABLE in server mode) while the
+    # identical INCAR without the stray tag got the clean input error. The
+    # call site now requires the numbered image directories to exist.
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={
+            "NSW": "5",
+            "IBRION": "2",
+            "ISIF": "3",
+            "SPRING": "-5.0",
+        },
+    )
+    (tmp_path / "BCAR").write_text("MLP = MATRIS\nMATRIS_TASK = ef\n")
+
+    # Flat workdir + stray NEB tag: the relaxation branch WILL run, so the
+    # stress-less backend must be rejected up front.
+    with pytest.raises(vpmdk.WorkdirInputError, match="CELL relaxation"):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+    # A genuine NEB layout keeps the exclusion (image positions only; the
+    # cell never relaxes there).
+    _write_numbered_neb_poscars(tmp_path)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
+    (tmp_path / "INCAR").write_text(
+        "NSW = 2\nIBRION = 2\nISIF = 3\nSPRING = -5.0\nIMAGES = 1\n"
+        "EDIFFG = -0.05\n"
+    )
+    vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+def test_bam_builder_requires_local_model_and_forwards_device(tmp_path, monkeypatch):
+    # BAM-torch ships checkpoints (e.g. the published BAM-MP-core.pkl) as
+    # plain local files with no named-model downloader, so MODEL is a
+    # required local path like the NequIP/Allegro rule, and the builder
+    # passes DEVICE through only when non-blank (RACECalculator selects cpu
+    # itself when device is omitted).
+    seen: dict[str, object] = {}
+
+    def fake_bam(*, model, device=None):
+        seen["model"] = model
+        seen["device"] = device
+        return DummyCalculator()
+
+    monkeypatch.setattr(vpmdk, "BAMCalculator", fake_bam)
+
+    with pytest.raises(ValueError, match="MODEL"):
+        vpmdk._build_bam_calculator({"MLP": "BAM"})
+
+    checkpoint = tmp_path / "BAM-MP-core.pkl"
+    checkpoint.write_text("dummy")
+
+    vpmdk._build_bam_calculator(
+        {"MLP": "BAM", "MODEL": str(checkpoint), "DEVICE": "cpu"}
+    )
+    assert seen == {"model": str(checkpoint), "device": "cpu"}
+
+    seen.clear()
+    vpmdk._build_bam_calculator({"MLP": "BAM", "MODEL": str(checkpoint), "DEVICE": ""})
+    assert seen == {"model": str(checkpoint), "device": None}
+
+    monkeypatch.setattr(vpmdk, "BAMCalculator", None)
+    with pytest.raises(RuntimeError, match="bam-torch"):
+        vpmdk._build_bam_calculator({"MLP": "BAM", "MODEL": str(checkpoint)})
+
+
+def test_build_grace_calculator_discloses_ignored_device(tmp_path: Path, capsys):
+    # TPCalculator takes no device argument -- placement follows the installed
+    # TensorFlow build -- so an explicit DEVICE used to be swallowed silently
+    # and a user on a TF build without working CUDA support believed the run
+    # was on GPU. The builder now says so once at construction; an absent
+    # DEVICE stays quiet.
+    model_path = tmp_path / "grace-model"
+    model_path.write_text("dummy")
+
+    class DummyTP(DummyCalculator):
+        def __init__(self, model, **kwargs):  # type: ignore[override]
+            super().__init__()
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "TPCalculator", DummyTP)
+    monkeypatch.setattr(vpmdk, "GRACE_MODEL_NAMES", [])
+    try:
+        vpmdk._build_grace_calculator({"MODEL": str(model_path)})
+        assert "DEVICE" not in capsys.readouterr().out
+        vpmdk._build_grace_calculator(
+            {"MODEL": str(model_path), "DEVICE": "cuda"}
+        )
+        output = capsys.readouterr().out
+        assert "GRACE ignores the DEVICE tag" in output
+        assert "TensorFlow" in output
+    finally:
+        monkeypatch.undo()
+
+
+def test_species_gate_reads_a_z_keyed_uniq_element_table(tmp_path, prepare_inputs, monkeypatch):
+    # R177 (P2): bam-torch's RACECalculator declares coverage by ATOMIC
+    # NUMBER (`uniq_element`, a {Z: index} dict), never `element_types`, so
+    # the declared-coverage gate returned silently and an element the
+    # checkpoint was not trained on (the published BAM-MP-core table has
+    # holes at Po/At/Rn/Fr/Ra) died mid-forward-pass with a raw KeyError --
+    # exit 2 (RETRYABLE) in server mode. The gate now also accepts a Z-keyed
+    # declared table, mapped to symbols through ase.data.
+    from types import SimpleNamespace
+
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={"NSW": "0", "IBRION": "-1"},
+    )
+    poscar_text = (tmp_path / "POSCAR").read_text().replace("Si", "Po")
+    (tmp_path / "POSCAR").write_text(poscar_text)
+
+    declared = DummyCalculator()
+    # H..Bi table with the Po hole, the shape BAM-MP-core actually declares.
+    declared.uniq_element = {z: i for i, z in enumerate(range(1, 84))}
+
+    with pytest.raises(vpmdk.WorkdirInputError, match="element table"):
+        vpmdk.run_workdir(str(tmp_path), calculator=declared)
+
+    # A covered structure passes the same gate.
+    covered = DummyCalculator()
+    covered.uniq_element = {14: 0, 84: 1}
+    vpmdk.run_workdir(str(tmp_path), calculator=covered)
+
+    # A symbol-keyed element_types declaration still takes precedence over a
+    # nested Z-keyed table.
+    both = DummyCalculator()
+    both.model = SimpleNamespace(element_types=("Po",), uniq_element={1: 0})
+    vpmdk.run_workdir(str(tmp_path), calculator=both)

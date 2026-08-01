@@ -14,6 +14,7 @@ import importlib
 import importlib.util
 import inspect
 import json
+import math
 import os
 import re
 import shutil
@@ -37,8 +38,20 @@ LegacyM3GNet = None
 LegacyM3GNetPotential = None
 MatGLLoadModel = None
 
+
+def _select_matgl_calculator_class(matgl_ase_module: Any) -> Any:
+    """Return the ASE calculator class across MatGL API generations."""
+
+    return getattr(matgl_ase_module, "M3GNetCalculator", None) or getattr(
+        matgl_ase_module, "PESCalculator", None
+    )
+
+
 try:
-    from matgl.ext.ase import M3GNetCalculator  # type: ignore
+    _matgl_ase = importlib.import_module("matgl.ext.ase")
+    M3GNetCalculator = _select_matgl_calculator_class(_matgl_ase)  # type: ignore
+    if M3GNetCalculator is None:
+        raise ImportError("MatGL ASE calculator class is unavailable")
 
     try:
         import matgl
@@ -195,6 +208,24 @@ except ImportError:
     from ase.constraints import FixAtoms
     from ase.filters import StrainFilter, UnitCellFilter  # type: ignore
 
+# The minimum-image helper ASE's own NEB uses for its tangent
+# (ase.mep.neb.Spring._find_mic), needed so VPMDK's reported NEB tangent
+# describes the same band the optimizer relaxed.
+try:
+    from ase.geometry import find_mic
+except ImportError:  # pragma: no cover - very old ASE
+    find_mic = None  # type: ignore
+
+# Per-axis selective dynamics: pymatgen reads a POSCAR ``T T F`` row as
+# FixCartesian, and ASE's POSCAR writer only understands FixScaled -- both names
+# are needed to write the flags back out (see
+# _atoms_with_writable_selective_dynamics).
+try:
+    from ase.constraints import FixCartesian, FixScaled
+except ImportError:  # pragma: no cover - very old ASE
+    FixCartesian = None  # type: ignore
+    FixScaled = None  # type: ignore
+
 from ase.md import velocitydistribution
 from ase.md.verlet import VelocityVerlet
 
@@ -230,7 +261,21 @@ if _nequip_ase_spec is not None:
 else:
     NequIPCalculator = None  # type: ignore
 
+try:
+    # Kept below the MACE import: mace's own __init__ sets
+    # TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD, which older e3nn releases (< 0.5)
+    # need to import at all under torch >= 2.6 -- bam_torch imports e3nn.
+    from bam_torch.tase.base_calculator import RACECalculator as BAMCalculator
+except Exception:
+    BAMCalculator = None  # type: ignore
+
 DEFAULT_ORB_MODEL = "orb-v3-conservative-20-omat"
+# The classic "M3GNet-MP-2021.2.8-PES" name was removed from current matgl
+# (4.x) -- matgl.load_model() raises "Bad ... model name" for it -- so a default
+# (no-MODEL) MatGL/M3GNet run could not be built. Use the modern PBE M3GNet PES
+# checkpoint, which matgl.get_available_pretrained_models() lists and load_model()
+# resolves. Users needing a specific checkpoint still set MODEL explicitly.
+DEFAULT_MATGL_MODEL = "M3GNet-PES-MatPES-PBE-2025.2"
 DEFAULT_SEVENNET_MODEL = "7net-0"
 DEFAULT_EQNORM_MODEL = "eqnorm-mptrj"
 DEFAULT_MATRIS_MODEL = "matris_10m_oam"
@@ -352,14 +397,24 @@ _FAIRCHEM_V1_PREDICTOR_CLASS_NAMES = (
 )
 
 from .backend_common import (
+    BackendModelPolicy,
+    ModelReference,
+    ModelReferenceKind,
+    _BACKEND_MODEL_POLICIES,
+    _CONFIG_PATH_SUFFIXES,
+    _MODEL_PATH_SUFFIXES,
     _callable_declares_parameter,
+    _has_path_separator_shape,
     _callable_supports_parameter,
     _coerce_bool_tag,
     _coerce_int_tag,
     _download_file_to_path,
-    _looks_like_filesystem_path,
+    _grace_substitutes_unknown_model,
     _parse_optional_bool_tag,
+    _require_loaded_model,
+    _resolve_backend_model_reference,
     _resolve_device,
+    _resolve_model_reference,
 )
 from .api import (
     build_calculator,
@@ -371,10 +426,14 @@ from .api import (
     single_point,
 )
 from .backends.alphanet import (
+    _alphanet_named_model_cache_paths,
     _build_alphanet_calculator,
     _ensure_alphanet_named_model_files,
+    _infer_alphanet_config_path,
     _load_alphanet_config,
+    _resolve_alphanet_named_model_spec,
 )
+from .backends.bam import _build_bam_calculator
 from .backends.chgnet import _build_chgnet_calculator, _load_chgnet_model
 from .backends.eqnorm import (
     _build_eqnorm_calculator,
@@ -410,8 +469,14 @@ from .backends.fairchem import (
 from .backends.hienet import (
     _build_hienet_calculator,
     _ensure_hienet_named_model_checkpoint,
+    _resolve_hienet_named_model_spec,
 )
-from .backends.m3gnet import _build_m3gnet_calculator, _build_mace_calculator
+from .backends.m3gnet import (
+    _build_m3gnet_calculator,
+    _build_mace_calculator,
+    _load_matgl_potential,
+    _matgl_calculator_requires_potential,
+)
 from .backends.matris import (
     _build_matris_calculator,
     _ensure_matris_named_model_checkpoint,
@@ -419,6 +484,7 @@ from .backends.matris import (
     _load_matris_checkpoint_model,
 )
 from .backends.misc import (
+    _GRACE_DEVICE_IGNORED_WARNING,
     _build_deepmd_calculator,
     _build_equflash_calculator,
     _build_grace_calculator,
@@ -429,6 +495,7 @@ from .backends.misc import (
     _build_upet_calculator,
     _normalize_upet_neighborlist_device,
     _list_matlantis_calc_modes,
+    _resolve_grace_foundation_model,
     _resolve_matlantis_calc_mode,
 )
 from .backends.nequix import (
@@ -449,12 +516,16 @@ from .backends.sevennet_family import (
     _build_sevennet_calculator,
     _build_sevennet_family_calculator,
     _is_sevennet_flash_available,
+    _resolve_sevennet_accelerators,
 )
 from .charge_density import (
     _CHARGE_ENV_BASE_DIR_VAR,
     _CHGCAR_GRID_INCAR_TAGS,
+    _SUPPORTED_CHARGE_BACKENDS,
     _charge_density_options_from_bcar,
+    _normalize_charge_backend_name,
     charge_density,
+    determine_vasp_fft_grid,
     predict_charge_density,
 )
 from . import compat
@@ -467,7 +538,12 @@ from .io.inputs import (
     _normalize_vasp_comment,
     _normalize_species_labels,
     _parse_magmom_values,
+    _reject_broken_input_link,
+    _warn_unknown_bcar_tags,
+    _require_regular_input_file,
+    _warn_potcar_pomass_ignored,
     _resolve_mlp_tag,
+    _validate_finite_geometry,
     parse_key_value_file,
     read_structure,
 )
@@ -499,7 +575,8 @@ from .io.vasp_compat import (
     _append_outcar_compat_step,
     _append_outcar_footer,
     _append_outcar_metadata_header,
-    _append_pseudo_scf_xml_step,
+    _append_scstep_xml,
+    _require_writable_artifact_path,
     _append_structure_xml,
     _build_atominfo_xml,
     _coerce_neb_reference_positions,
@@ -513,6 +590,7 @@ from .io.vasp_compat import (
     _pseudo_scf_settings_from_incar,
     _read_non_comment_lines,
     _record_vasp_compat_step,
+    _atoms_with_writable_selective_dynamics,
     _resolve_pseudo_scf_settings,
     _safe_get_forces,
     _safe_get_stress_matrix,
@@ -548,16 +626,24 @@ from .observers import (
     VaspCompatObserver,
     coerce_observer,
 )
-from .runtime.common import _extract_numeric_attribute, _resolve_calculator, _working_directory
+from .runtime.common import (
+    _calculator_candidates,
+    _extract_numeric_attribute,
+    _thermostat_energy_terms,
+    _resolve_calculator,
+    _working_directory,
+)
 from .runtime.md import (
     _estimate_tdamp,
     _rescale_velocities,
     _select_md_dynamics,
     _set_nose_hoover_chain_temperature,
+    _warn_md_is_fixed_cell,
     run_md,
 )
 from .runtime.neb import (
     _collect_neb_image_results,
+    _construct_ase_neb,
     _discover_neb_image_directories,
     _parse_neb_ichain,
     _parse_neb_spring_constant,
@@ -610,7 +696,38 @@ from .settings.incar import (
     _should_write_pseudo_scf,
     _warn_for_unsupported_incar_tags,
 )
-from .cli import main
+from .cli import (
+    UnsupportedInputError,
+    WorkdirInputError,
+    _build_workdir_calculator,
+    _check_backend_output_capabilities,
+    _check_backend_species_coverage,
+    _check_model_declared_species_coverage,
+    _print_unused_input_notices,
+    main,
+    run_workdir,
+)
+from .server import (
+    BACKEND_CONFIGURATION_TAGS,
+    PROTOCOL_VERSION,
+    BackendConfigurationMismatch,
+    ServerAlreadyRunning,
+    VPMDKServer,
+    backend_identity,
+    default_socket_path,
+    resolve_socket_path,
+    validate_request_backend,
+)
+from .client import (
+    ClientTimeoutError,
+    ProtocolError,
+    RemoteBackendMismatch,
+    RemoteCalculationError,
+    RemoteInputError,
+    ServerConnectionError,
+    VPMDKClient,
+    VPMDKClientError,
+)
 
 
 def _format_energy_value(value: float) -> str:
@@ -618,6 +735,20 @@ def _format_energy_value(value: float) -> str:
 
     if value == 0:
         return "+.00000000E+00"
+
+    if not math.isfinite(value):
+        # f"{nan:.8e}" is 'nan' and f"{inf:.8e}" is 'inf', so the mantissa/exponent
+        # split below raised "not enough values to unpack (expected 2, got 1)" --
+        # an error that names neither the energy nor the divergence that produced it,
+        # from a formatter the caller never suspects. Fail with what actually
+        # happened instead. Deliberately still an exception rather than a 'NaN'
+        # token: emitting one would let a diverged run finish with exit 0 and a
+        # plausible-looking OSZICAR, which is the silent-success class this project
+        # has repeatedly had to remove.
+        raise ValueError(
+            f"The calculation diverged: energy is {value}, which cannot be reported "
+            "in VASP's OSZICAR/stdout format."
+        )
 
     mantissa_str, exponent_str = f"{value:.8e}".split("e")
     mantissa = float(mantissa_str) / 10.0

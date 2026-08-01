@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -144,7 +147,7 @@ def test_get_calculator_accepts_eqnorm_named_model(monkeypatch: pytest.MonkeyPat
     calculator = vpmdk.get_calculator(vpmdk.BackendConfig(mlp="EQNORM", model="eqnorm"))
 
     assert calculator == "eqnorm"
-    assert captured["model_name"] == "eqnorm"
+    assert captured["model_name"] == vpmdk.DEFAULT_EQNORM_MODEL
     assert captured["calc_variant"] == vpmdk.DEFAULT_EQNORM_MODEL
 
 
@@ -165,7 +168,7 @@ def test_get_calculator_accepts_hienet_named_model(monkeypatch: pytest.MonkeyPat
     calculator = vpmdk.get_calculator(vpmdk.BackendConfig(mlp="HIENET", model="hienet"))
 
     assert calculator == "hienet"
-    assert captured["model_name"] == "hienet"
+    assert captured["model_name"] == vpmdk.DEFAULT_HIENET_MODEL
     assert captured["calc_model"] == "/tmp/HIENet-V3.pth"
     assert captured["file_type"] == "checkpoint"
 
@@ -429,11 +432,26 @@ O_h_GW
 
     structure = vpmdk.read_structure(str(poscar_path), str(potcar_path))
 
-    assert getattr(structure, "species", []) == ["Y", "O"]
+    assert [str(species) for species in getattr(structure, "species", [])] == [
+        "Y",
+        "O",
+    ]
 
 
-def test_build_orb_calculator_uses_bcar_tags(monkeypatch: pytest.MonkeyPatch):
+def test_parse_optional_float_accepts_pymatgen_singleton_list():
+    assert vpmdk._parse_optional_float([15.0], key="LANGEVIN_GAMMA") == 15.0
+
+
+def test_parse_optional_float_accepts_units_in_pymatgen_singleton_list():
+    assert vpmdk._parse_optional_float(["2.0 fs"], key="POTIM") == 2.0
+
+
+def test_build_orb_calculator_uses_bcar_tags(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     captured: dict[str, object] = {}
+    weights_path = tmp_path / "weights.ckpt"
+    weights_path.write_text("placeholder")
 
     def fake_model(**kwargs):
         captured.update(kwargs)
@@ -450,7 +468,7 @@ def test_build_orb_calculator_uses_bcar_tags(monkeypatch: pytest.MonkeyPatch):
     calculator = vpmdk._build_orb_calculator(
         {
             "MLP": "ORB",
-            "MODEL": "weights.ckpt",
+            "MODEL": str(weights_path),
             "DEVICE": "cuda:1",
             "ORB_MODEL": "custom",
             "ORB_PRECISION": "float64",
@@ -460,7 +478,7 @@ def test_build_orb_calculator_uses_bcar_tags(monkeypatch: pytest.MonkeyPatch):
 
     assert isinstance(calculator, DummyCalculator)
     assert calculator.device == "cuda:1"
-    assert captured["weights_path"] == "weights.ckpt"
+    assert captured["weights_path"] == str(weights_path)
     assert captured["precision"] == "float64"
     assert captured["compile"] is False
 
@@ -501,7 +519,13 @@ def test_build_chgnet_calculator_forwards_graph_converter_algorithm(
         def __init__(self, model=None, use_device=None, **_):
             captured.update({"model": model, "device": use_device})
 
-    def fake_load(*, model_path: str | None, device: str | None, graph_converter_algorithm: str):
+    def fake_load(
+        *,
+        model_path: str | None,
+        device: str | None,
+        graph_converter_algorithm: str,
+        model_reference=None,
+    ):
         captured.update(
             {
                 "load_model_path": model_path,
@@ -705,3 +729,328 @@ def test_build_deepmd_calculator_infers_type_map(monkeypatch: pytest.MonkeyPatch
     assert isinstance(calculator, DummyDeePMD)
     assert captured["model"] == str(model_path)
     assert captured["kwargs"].get("type_map") == ["Si"]
+
+
+def test_potcar_species_relabelling_works_with_real_pymatgen(tmp_path):
+    # R129 (P1): `poscar.site_symbols = ...` is a READ-ONLY property in real
+    # pymatgen, so the whole POSCAR/POTCAR species reconciliation -- including the
+    # documented "Using POTCAR order" warning -- raised AttributeError and was
+    # reported as invalid input (exit 1) for exactly the files it exists to repair.
+    # conftest's Poscar STUB exposes site_symbols as a plain attribute, so the suite
+    # could not see it; this test therefore runs against the real library.
+    script = (
+        "import sys, tempfile\n"
+        "from pymatgen.io.vasp import Poscar\n"
+        "from vpmdk_core.io.inputs import _apply_species_from_potcar\n"
+        "d = tempfile.mkdtemp()\n"
+        "open(d + '/POSCAR', 'w').write("
+        "'Si2\\n1.0\\n 2.7 2.7 0.0\\n 0.0 2.7 2.7\\n 2.7 0.0 2.7\\nSi\\n2\\n"
+        "Direct\\n 0.0 0.0 0.0\\n 0.25 0.25 0.25\\n')\n"
+        "p = Poscar.from_file(d + '/POSCAR', check_for_potcar=False, "
+        "read_velocities=False)\n"
+        "structure = p.structure\n"
+        "out = _apply_species_from_potcar(p, structure, ['Ge'])\n"
+        "print('SPECIES', [str(site.specie) for site in out])\n"
+        "print('ORIGINAL', [str(site.specie) for site in structure])\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "VPMDK_TEST_REAL_PYMATGEN": "1"},
+    )
+    if "ModuleNotFoundError" in completed.stderr:
+        pytest.skip("real pymatgen is not installed")
+    assert "SPECIES ['Ge', 'Ge']" in completed.stdout, (
+        completed.stdout + completed.stderr
+    )
+    # The input structure must not be mutated in place.
+    assert "ORIGINAL ['Si', 'Si']" in completed.stdout
+
+
+def test_vasp4_poscar_without_potcar_is_rejected_not_computed_as_hydrogen(tmp_path):
+    # R130 (P1): with real pymatgen a VASP-4 POSCAR (no species line -- a legitimate
+    # VASP format) does NOT produce empty site_symbols: pymatgen fabricates
+    # ['H', ...] and only emits a BadPoscarWarning on stderr. VPMDK's own
+    # "no species names" branch was therefore unreachable, and a Si cell was
+    # silently computed as HYDROGEN, with CONTCAR rewritten to match. Real VASP
+    # takes the species from the POTCAR in this format, so without one the elements
+    # genuinely cannot be determined.
+    vasp4 = (
+        "Si2 vasp4\n1.0\n 2.7 2.7 0.0\n 0.0 2.7 2.7\n 2.7 0.0 2.7\n"
+        "2\nDirect\n 0.0 0.0 0.0\n 0.25 0.25 0.25\n"
+    )
+    script = (
+        "import sys\n"
+        "from vpmdk_core.io.inputs import read_structure, _poscar_declares_species\n"
+        "path = sys.argv[1]\n"
+        "print('DECLARES', _poscar_declares_species(path))\n"
+        "try:\n"
+        "    st = read_structure(path)\n"
+        "except ValueError as exc:\n"
+        "    print('REJECTED', exc)\n"
+        "else:\n"
+        "    print('ACCEPTED', [str(s.specie) for s in st])\n"
+    )
+
+    v4_path = tmp_path / "POSCAR_v4"
+    v4_path.write_text(vasp4)
+    v5_path = tmp_path / "POSCAR_v5"
+    v5_path.write_text(vasp4.replace("2\nDirect", "Si\n2\nDirect"))
+
+    def run(path):
+        return subprocess.run(
+            [sys.executable, "-c", script, str(path)],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "VPMDK_TEST_REAL_PYMATGEN": "1"},
+        )
+
+    v4 = run(v4_path)
+    if "ModuleNotFoundError" in v4.stderr:
+        pytest.skip("real pymatgen is not installed")
+    assert "DECLARES False" in v4.stdout, v4.stdout + v4.stderr
+    assert "REJECTED" in v4.stdout, v4.stdout + v4.stderr
+
+    v5 = run(v5_path)
+    assert "DECLARES True" in v5.stdout, v5.stdout + v5.stderr
+    assert "ACCEPTED ['Si', 'Si']" in v5.stdout, v5.stdout + v5.stderr
+
+    # Self-audit follow-up: a POTCAR that EXISTS but yields no usable symbols
+    # (unreadable, or rejected by pymatgen's validation) is not a species source
+    # either -- without this the fabricated ['H', ...] names survived exactly as
+    # they did with no POTCAR at all.
+    potcar = tmp_path / "POTCAR"
+    potcar.write_text("this is not a valid POTCAR\n")
+    script_with_potcar = script.replace(
+        "read_structure(path)", "read_structure(path, sys.argv[2])"
+    )
+
+    def run_with_potcar(path):
+        return subprocess.run(
+            [sys.executable, "-c", script_with_potcar, str(path), str(potcar)],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "VPMDK_TEST_REAL_PYMATGEN": "1"},
+        )
+
+    assert "REJECTED" in run_with_potcar(v4_path).stdout
+    assert "ACCEPTED ['Si', 'Si']" in run_with_potcar(v5_path).stdout
+
+
+def _minimal_potcar_entry(symbol: str) -> str:
+    """One POTCAR dataset real pymatgen accepts (header keywords + psp data)."""
+
+    header = (
+        f" PAW_PBE {symbol} 05Jan2001\n"
+        "  11.0000000000000\n"
+        " parameters from PSCTR are:\n"
+        f"   VRHFIN ={symbol}: d10 p1\n"
+        "   LEXCH  = PE\n"
+        "   EATOM  =     0.0000 eV,       0.0000 Ry\n"
+        "\n"
+        f"   TITEL  = PAW_PBE {symbol} 05Jan2001\n"
+        "   LULTRA =        F    use ultrasoft PP ?\n"
+        "   IUNSCR =        1    unscreen: 0-lin 1-nonlin 2-no\n"
+        "   RPACOR =    2.000    partial core radius\n"
+        "   POMASS =   63.546; ZVAL   =   11.000    mass and valenz\n"
+        "   RCORE  =    2.300    outmost cutoff radius\n"
+        "   RWIGS  =    2.500; RWIGS  =    1.323    wigner-seitz radius (au A)\n"
+        "   ENMAX  =  295.446; ENMIN  =  221.585 eV\n"
+        "   RCLOC  =    1.680    cutoff for local pot\n"
+        "   LCOR   =        T    correct aug charges\n"
+        "   LPAW   =        T    paw PP\n"
+        "   EAUG   =  649.837\n"
+        "   RMAX   =    2.750    core radius for proj-oper\n"
+        "   RAUG   =    1.300    factor for augmentation sphere\n"
+        "   RDEP   =    2.363    radius for radial grids\n"
+        "   QCUT   =   -4.216; QGAM   =    8.433    optimization parameters\n"
+        " END of PSCTR-controll parameters\n"
+        " local part\n"
+    )
+    data = "".join(
+        "  " + "  ".join(f"{(row * 5 + col) * 0.1234567:18.12E}" for col in range(5)) + "\n"
+        for row in range(6)
+    )
+    return header + data + " End of Dataset\n"
+
+
+def test_vasp4_poscar_with_mismatching_potcar_species_count_is_rejected(tmp_path):
+    # R131: R130 closed the "no POTCAR" and "unparseable POTCAR" variants of the
+    # fabricated-hydrogen hole, but not the COUNT MISMATCH one. For a VASP-4
+    # POSCAR (no species line) _apply_species_from_potcar returned the input
+    # structure unchanged whenever the POTCAR's species count differed from the
+    # number of ion groups -- and that unchanged structure is pymatgen's
+    # fabricated ['H', ...]. In a NEB image directory, where pymatgen's implicit
+    # same-directory POTCAR lookup cannot reach the band's POTCAR one level up,
+    # a whole Cu band was therefore computed as hydrogen, CONTCARs were rewritten
+    # with species line "H", and the run exited 0 with "Calculation completed.".
+    # A POSCAR that DOES name its species keeps the lenient behavior: there the
+    # unchanged structure is still labelled with real elements.
+    image = tmp_path / "00"
+    image.mkdir()
+    body = (
+        "1.0\n 3.615 0.0 0.0\n 0.0 3.615 0.0\n 0.0 0.0 3.615\n"
+        "{species}4\nDirect\n 0.0 0.0 0.0\n 0.0 0.5 0.5\n 0.5 0.0 0.5\n 0.5 0.5 0.0\n"
+    )
+    (image / "POSCAR").write_text("Cu4 vasp4\n" + body.format(species=""))
+    v5_image = tmp_path / "01"
+    v5_image.mkdir()
+    (v5_image / "POSCAR").write_text("Cu4 vasp5\n" + body.format(species="Cu\n"))
+
+    two = tmp_path / "POTCAR_CuAg"
+    two.write_text(_minimal_potcar_entry("Cu") + _minimal_potcar_entry("Ag"))
+    one = tmp_path / "POTCAR_Cu"
+    one.write_text(_minimal_potcar_entry("Cu"))
+
+    script = (
+        "import sys, warnings\n"
+        "warnings.simplefilter('ignore')\n"
+        "from vpmdk_core.io.inputs import read_structure\n"
+        "try:\n"
+        "    st = read_structure(sys.argv[1], sys.argv[2])\n"
+        "except ValueError as exc:\n"
+        "    print('REJECTED', exc)\n"
+        "else:\n"
+        "    print('ACCEPTED', [str(s.specie) for s in st])\n"
+    )
+
+    def run(poscar: Path, potcar: Path) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-c", script, str(poscar), str(potcar)],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "VPMDK_TEST_REAL_PYMATGEN": "1"},
+        )
+
+    mismatch = run(image / "POSCAR", two)
+    if "ModuleNotFoundError" in mismatch.stderr:
+        pytest.skip("real pymatgen is not installed")
+    assert "REJECTED" in mismatch.stdout, mismatch.stdout + mismatch.stderr
+    assert "'Cu', 'Ag'" in mismatch.stdout
+
+    # The matching POTCAR still resolves the species, which is the whole point of
+    # the VASP-4 branch.
+    matching = run(image / "POSCAR", one)
+    assert "ACCEPTED ['Cu', 'Cu', 'Cu', 'Cu']" in matching.stdout, (
+        matching.stdout + matching.stderr
+    )
+
+    # A VASP-5 POSCAR names its own species: an unusable POTCAR refinement must
+    # NOT turn into a rejection there.
+    declared = run(v5_image / "POSCAR", two)
+    assert "ACCEPTED ['Cu', 'Cu', 'Cu', 'Cu']" in declared.stdout, (
+        declared.stdout + declared.stderr
+    )
+
+
+@pytest.mark.parametrize(
+    "line6,declares",
+    [
+        (" 2   # number of Si atoms", False),  # VASP 4 with a comment
+        ("2", False),  # plain VASP 4
+        ("Si  # species line", True),  # VASP 5 with a comment
+        ("Si", True),  # plain VASP 5
+        ("  2  2\t# two groups ", False),
+        ("# the whole line is a comment", False),  # pymatgen reads [] counts
+    ],
+)
+def test_poscar_format_is_decided_on_the_line_the_parser_sees(
+    tmp_path, line6: str, declares: bool
+):
+    # R131 fixed the same class for INCAR (VPMDK's own tokenizer disagreed with
+    # pymatgen's); R132 found it in the POSCAR classifier. pymatgen pushes every
+    # POSCAR line through clean_lines(), which TRUNCATES AT '#', so
+    # `` 2   # number of Si atoms`` reads as ``2`` -> VASP 4 -> fabricated
+    # ['H', ...] names. Reading the RAW line here made int('#') fail, reported
+    # "VASP 5", and SKIPPED every VASP-4 guard: the Si cell was computed as H2
+    # (-2.35 eV instead of -10.63 eV), exited 0, and wrote a CONTCAR with
+    # species line ``H``.
+    from vpmdk_core.io.inputs import _poscar_declares_species
+
+    path = tmp_path / f"POSCAR_{abs(hash(line6)) % 9973}"
+    path.write_text(
+        "Si2\n1.0\n 2.715 2.715 0.0\n 0.0 2.715 2.715\n 2.715 0.0 2.715\n"
+        f"{line6}\nDirect\n 0.0 0.0 0.0\n 0.25 0.25 0.25\n"
+    )
+
+    assert _poscar_declares_species(str(path)) is declares
+
+
+def test_cleaned_poscar_lines_matches_pymatgens_reader(tmp_path):
+    from vpmdk_core.io.inputs import _cleaned_poscar_lines
+
+    text = (
+        "Si2 # a comment on the title\n"
+        "1.0\n"
+        " 2.715 2.715 0.0\n"
+        " 0.0 2.715 2.715\n"
+        " 2.715 0.0 2.715\n"
+        " 2 # counts\n"
+        "Direct\n"
+        " 0.0 0.0 0.0\n"
+        " 0.25 0.25 0.25\n"
+        "\n"
+        " 0.0 0.0 0.0\n"  # velocities: a separate chunk, dropped like pymatgen
+        " 0.0 0.0 0.0\n"
+    )
+    path = tmp_path / "POSCAR"
+    path.write_text(text)
+
+    lines = _cleaned_poscar_lines(path.read_text())
+
+    assert lines[0] == "Si2"
+    assert lines[5] == "2"
+    assert lines[6] == "Direct"
+    assert len(lines) == 9  # structure block only
+
+
+def test_vasp4_poscar_with_a_commented_counts_line_is_not_computed_as_hydrogen(tmp_path):
+    # End-to-end with the REAL library (the suite stubs pymatgen), which is the
+    # only place the fabricated ['H', ...] names appear at all.
+    body = (
+        "Si2\n1.0\n 2.715 2.715 0.0\n 0.0 2.715 2.715\n 2.715 0.0 2.715\n"
+        "{line6}\nDirect\n 0.0 0.0 0.0\n 0.25 0.25 0.25\n"
+    )
+    v4 = tmp_path / "POSCAR_v4_comment"
+    v4.write_text(body.format(line6=" 2   # number of Si atoms"))
+    v5 = tmp_path / "POSCAR_v5_comment"
+    v5.write_text(body.format(line6="Si  # species").replace("Direct", "2\nDirect"))
+
+    script = (
+        "import sys, warnings\n"
+        "warnings.simplefilter('ignore')\n"
+        "from vpmdk_core.io.inputs import read_structure, _poscar_declares_species\n"
+        "path = sys.argv[1]\n"
+        "print('DECLARES', _poscar_declares_species(path))\n"
+        "try:\n"
+        "    st = read_structure(path)\n"
+        "except ValueError as exc:\n"
+        "    print('REJECTED', exc)\n"
+        "else:\n"
+        "    print('ACCEPTED', [str(s.specie) for s in st])\n"
+    )
+
+    def run(path):
+        return subprocess.run(
+            [sys.executable, "-c", script, str(path)],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "VPMDK_TEST_REAL_PYMATGEN": "1"},
+        )
+
+    commented_v4 = run(v4)
+    if "ModuleNotFoundError" in commented_v4.stderr:
+        pytest.skip("real pymatgen is not installed")
+    assert "DECLARES False" in commented_v4.stdout, (
+        commented_v4.stdout + commented_v4.stderr
+    )
+    assert "REJECTED" in commented_v4.stdout, commented_v4.stdout + commented_v4.stderr
+
+    commented_v5 = run(v5)
+    assert "DECLARES True" in commented_v5.stdout, (
+        commented_v5.stdout + commented_v5.stderr
+    )
+    assert "ACCEPTED ['Si', 'Si']" in commented_v5.stdout, (
+        commented_v5.stdout + commented_v5.stderr
+    )

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from typing import Dict
 
@@ -16,6 +15,7 @@ def _load_chgnet_model(
     model_path: str | None,
     device: str | None,
     graph_converter_algorithm: str | None,
+    model_reference=None,
 ):
     """Load a CHGNet model with optional graph-converter override."""
 
@@ -23,28 +23,37 @@ def _load_chgnet_model(
     if root.CHGNetModel is None:
         raise RuntimeError("CHGNet model loader not available. Install chgnet.")
 
-    if model_path and os.path.exists(model_path):
+    reference = model_reference or root._resolve_backend_model_reference(
+        "CHGNET", model_path
+    )
+    if reference.kind is root.ModelReferenceKind.LOCAL_PATH:
+        model_path = str(reference.value)
         if graph_converter_algorithm is not None:
             try:
-                return root.CHGNetModel.from_file(
+                model = root.CHGNetModel.from_file(
                     model_path,
                     graph_converter_algorithm=graph_converter_algorithm,
                 )
             except TypeError:
                 model = root.CHGNetModel.from_file(model_path)
-                return root._override_model_graph_converter_algorithm(
+                model = root._override_model_graph_converter_algorithm(
                     model,
                     algorithm=graph_converter_algorithm,
                     backend_name="CHGNet",
                 )
-        return root.CHGNetModel.from_file(model_path)
+            return root._require_loaded_model(
+                model, backend_name="CHGNet", model=model_path
+            )
+        model = root.CHGNetModel.from_file(model_path)
+        return root._require_loaded_model(
+            model, backend_name="CHGNet", model=model_path
+        )
 
-    named_model = None
-    if model_path and not root._looks_like_filesystem_path(
-        model_path,
-        suffixes=(".pt", ".pth", ".ckpt", ".tar"),
-    ):
-        named_model = model_path
+    named_model = (
+        str(reference.value)
+        if reference.kind is root.ModelReferenceKind.NAMED_MODEL
+        else None
+    )
 
     load_attempts: list[tuple[tuple[object, ...], dict[str, object]]] = []
     if named_model is not None:
@@ -77,8 +86,11 @@ def _load_chgnet_model(
             break
         except TypeError:
             continue
-    if model is None:
-        raise RuntimeError("CHGNet model loader does not expose a compatible load() signature.")
+    model = root._require_loaded_model(
+        model,
+        backend_name="CHGNet",
+        model=named_model,
+    )
 
     if graph_converter_algorithm is not None:
         model = root._override_model_graph_converter_algorithm(
@@ -96,7 +108,9 @@ def _build_chgnet_calculator(bcar_tags: Dict[str, str]):
     if root.CHGNetCalculator is None:
         raise RuntimeError("CHGNetCalculator not available. Install chgnet.")
 
-    model_path = bcar_tags.get("MODEL")
+    model_reference = root._resolve_backend_model_reference(
+        "CHGNET", bcar_tags.get("MODEL")
+    )
     device = root._resolve_device(bcar_tags.get("DEVICE"))
     graph_converter_algorithm = root._resolve_graph_converter_algorithm(
         bcar_tags,
@@ -104,21 +118,31 @@ def _build_chgnet_calculator(bcar_tags: Dict[str, str]):
     )
     kwargs = {"use_device": device} if device is not None else {}
 
-    if graph_converter_algorithm is not None:
+    if (
+        graph_converter_algorithm is not None
+        or model_reference.kind is root.ModelReferenceKind.NAMED_MODEL
+    ):
         model = root._load_chgnet_model(
-            model_path=model_path,
+            model_path=model_reference.value,
             device=device,
             graph_converter_algorithm=graph_converter_algorithm,
+            model_reference=model_reference,
         )
         return root.CHGNetCalculator(model=model, **kwargs)
 
-    if model_path and os.path.exists(model_path):
+    if model_reference.kind is root.ModelReferenceKind.LOCAL_PATH:
+        model_path = str(model_reference.value)
         from_file = getattr(root.CHGNetCalculator, "from_file", None)
         if callable(from_file):
             try:
-                return from_file(model_path, **kwargs)
+                calculator = from_file(model_path, **kwargs)
             except TypeError:
-                return from_file(model_path)
+                calculator = from_file(model_path)
+            return root._require_loaded_model(
+                calculator,
+                backend_name="CHGNet calculator",
+                model=model_path,
+            )
         try:
             return root.CHGNetCalculator(model_path, **kwargs)
         except TypeError:

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import math
+
 import os
 import sys
 import time
@@ -93,10 +96,118 @@ def _rewrite_vasp_structure_comment(path: str, comment: str) -> None:
         handle.writelines(lines)
 
 
+def _atoms_with_writable_selective_dynamics(atoms):
+    """Return atoms whose per-axis constraints ASE's POSCAR writer can express.
+
+    ``ase.io.vasp._handle_ase_constraints`` builds the selective-dynamics flags
+    from FixScaled / FixAtoms / FixedPlane / FixedLine only. pymatgen's
+    AseAtomsAdaptor turns a POSCAR row like ``T T F`` into **FixCartesian**,
+    which matches none of them, so a partially constrained atom was written back
+    to CONTCAR as fully free (``T T T``) -- while a fully fixed atom (FixAtoms)
+    survived, making the corruption partial and easy to miss. The standard
+    ``cp CONTCAR POSCAR`` continuation then relaxed an axis the user had frozen,
+    with exit 0 and no warning; the constraint itself IS honored during the run,
+    so only the recorded flags were wrong.
+
+    The writer reads nothing from a constraint but its mask, and FixScaled's
+    branch copies that mask into the flags verbatim, so restating FixCartesian as
+    FixScaled ON A COPY reproduces exactly the flags the POSCAR carried. The copy
+    is thrown away with the write; the atoms that keep running are untouched.
+    """
+
+    root = _root()
+    fix_cartesian = getattr(root, "FixCartesian", None)
+    fix_scaled = getattr(root, "FixScaled", None)
+    if fix_cartesian is None or fix_scaled is None:
+        return atoms
+    constraints = list(getattr(atoms, "constraints", None) or [])
+    if not any(isinstance(item, fix_cartesian) for item in constraints):
+        return atoms
+
+    translated = []
+    for item in constraints:
+        if not isinstance(item, fix_cartesian):
+            translated.append(item)
+            continue
+        indices = getattr(item, "index", None)
+        if indices is None:
+            indices = getattr(item, "indices", getattr(item, "a", None))
+        mask = getattr(item, "mask", None)
+        if indices is None or mask is None:
+            translated.append(item)
+            continue
+        wanted = np.asarray(mask, dtype=bool)
+        try:
+            scaled = fix_scaled(indices, mask=wanted)
+            # Old ASE spelled this FixScaled(cell, a, mask); building it from the
+            # wrong signature would not raise, it would produce a constraint that
+            # silently flags the wrong axes. Only accept an object that came out
+            # with the mask and atoms we asked for.
+            rebuilt_mask = np.asarray(getattr(scaled, "mask", []), dtype=bool)
+            rebuilt_index = np.asarray(getattr(scaled, "index", []), dtype=int)
+            if rebuilt_mask.shape != wanted.shape or not np.array_equal(
+                rebuilt_mask, wanted
+            ):
+                raise ValueError("unexpected FixScaled mask")
+            if not np.array_equal(
+                rebuilt_index, np.asarray(indices, dtype=int).reshape(-1)
+            ):
+                raise ValueError("unexpected FixScaled index")
+        except Exception:
+            translated.append(item)
+        else:
+            translated.append(scaled)
+
+    try:
+        writable = atoms.copy()
+        writable.set_constraint(translated)
+    except Exception:
+        # Never lose the structure over a flag refinement.
+        return atoms
+    return writable
+
+
+def _require_writable_artifact_path(path: str) -> None:
+    """Reject a non-regular entry at an OUTPUT artifact path before open().
+
+    ``open(path, "w")`` on a readerless FIFO blocks until a reader appears,
+    which wedged the resident worker permanently (status busy forever, queued
+    jobs starved, ``stop --force`` unable to preempt the blocked open) -- the
+    write-side sibling of the input-file FIFO guard. A directory keeps its
+    established IsADirectoryError classification; any other non-regular entry
+    is a deterministic property of the submitted workdir, so it is an input
+    error (exit 1), and a dangling symlink stays legal (open() creates the
+    target, matching previous behavior).
+    """
+
+    import errno
+    import stat as stat_lib
+
+    if not os.path.lexists(path):
+        return
+    try:
+        mode = os.stat(path).st_mode
+    except OSError:
+        return  # dangling symlink: open("w") creates the target
+    if stat_lib.S_ISDIR(mode):
+        raise IsADirectoryError(errno.EISDIR, "Is a directory", os.path.abspath(path))
+    if not stat_lib.S_ISREG(mode):
+        raise _root().WorkdirInputError(
+            f"Output path {os.path.abspath(path)} is not a regular file; "
+            "refusing to open it for writing (a FIFO would block the writer "
+            "forever)."
+        )
+
+
 def _write_vasp_structure(path: str, atoms, *, direct: bool = True) -> None:
     """Write POSCAR/CONTCAR-style output preserving the VASP comment line."""
 
-    _root().write(path, atoms, direct=direct)
+    # The helper subsumes the earlier directory-only check: ase.io.write
+    # infers the format by INSPECTING the target (a directory here guessed
+    # 'bundletrajectory' and raised TypeError -> misclassified exit 2), and a
+    # FIFO would block ase's own open() forever.
+    _require_writable_artifact_path(path)
+    _root().write(path, _atoms_with_writable_selective_dynamics(atoms), direct=direct)
     comment = _vasp_comment_from_atoms(atoms)
     if comment is not None:
         _rewrite_vasp_structure_comment(path, comment)
@@ -117,6 +228,8 @@ class _VaspCompatRecorder:
     stress_mode: str = "none"
     neb_mode: bool = False
     pseudo_scf: _PseudoScfSettings = field(default_factory=_PseudoScfSettings)
+    pstress_kbar: float | None = None
+    nsw_requested: int | None = None
     oszicar_scf_header_written: bool = False
     neb_prev_positions: np.ndarray | None = None
     neb_next_positions: np.ndarray | None = None
@@ -173,7 +286,24 @@ def _safe_get_forces(
     strict: bool = False,
     apply_constraint: bool = True,
 ) -> np.ndarray:
-    """Return per-atom forces or zeros when unavailable."""
+    """Return per-atom forces, or fail loudly when the backend has none.
+
+    This used to fall back to ``np.zeros((N, 3))`` whenever the calculator could
+    not supply forces, which turned "there are no forces" into "every force is
+    exactly zero" -- the one value a VASP consumer reads as PERFECTLY CONVERGED.
+    An energy-only backend selection (the documented ``MATRIS_TASK=e``, whose
+    calculator stores ``results['forces'] = None`` so ``get_forces()`` returns
+    None rather than raising) therefore wrote an all-zero TOTAL-FORCE table,
+    ``FORCES: max atom, RMS 0.00000000 0.00000000`` and an all-zero forces varray
+    for a structure with ~0.9 eV/A residual forces, then exited 0 with
+    ``Calculation completed.``. Every consumer of these files -- VTST, custodian,
+    a plain ``grep 'FORCES: max atom'`` -- accepted it.
+
+    Nothing in this code base can use fabricated forces: every call site either
+    writes them into VASP-format output or computes physics from them. So the
+    fallback is gone and ``strict`` now only selects the wording; no test ever
+    entered the fallback branch (measured), so nothing depended on the zeros.
+    """
 
     try:
         try:
@@ -185,19 +315,22 @@ def _safe_get_forces(
                 raw_forces = atoms.get_forces()
         forces = np.asarray(raw_forces, dtype=float)
     except Exception as exc:
-        if strict:
-            raise RuntimeError(
-                "VASP-compatible force output requires an ASE calculator that "
-                "returns per-atom forces."
-            ) from exc
-        return np.zeros((len(atoms), 3), dtype=float)
+        raise RuntimeError(
+            "VASP-compatible force output requires an ASE calculator that "
+            "returns per-atom forces."
+        ) from exc
     if forces.shape != (len(atoms), 3):
         if strict:
             raise RuntimeError(
                 "VASP-compatible force output expected force shape "
                 f"({len(atoms)}, 3), got {forces.shape}."
             )
-        return np.zeros((len(atoms), 3), dtype=float)
+        raise RuntimeError(
+            "the backend returned no usable forces (expected shape "
+            f"({len(atoms)}, 3), got {forces.shape}). A backend configured for "
+            "energy only -- for example BCAR MATRIS_TASK=e -- cannot produce the "
+            "forces every VASP-format output reports."
+        )
     return forces
 
 
@@ -268,14 +401,56 @@ def _safe_get_stress_matrix(atoms, *, mode: str) -> np.ndarray | None:
     return _voigt_to_full_stress(stress_voigt)
 
 
+def _minimum_image_displacement(displacement: np.ndarray, cell, pbc) -> np.ndarray:
+    """Return the shortest periodic image of ``displacement``, like ASE's NEB.
+
+    ase.mep.neb builds its tangent through ``Spring._find_mic`` ->
+    ``ase.geometry.find_mic``. Skipping that here made VPMDK's reported tangent
+    describe a different band from the one the optimizer actually relaxed.
+    Falls back to the raw difference whenever the cell/pbc are unknown or ASE's
+    helper is unavailable, so callers that legitimately have no cell (bare
+    position arrays) keep their previous behavior.
+    """
+
+    if cell is None or pbc is None:
+        return displacement
+    try:
+        if not np.any(np.asarray(pbc, dtype=bool)):
+            return displacement
+        cell_array = np.asarray(cell, dtype=float)
+        if cell_array.shape != (3, 3) or not np.any(cell_array):
+            return displacement
+        find_mic = getattr(_root(), "find_mic", None)
+        if find_mic is None:
+            return displacement
+        wrapped, _ = find_mic(np.asarray(displacement, dtype=float), cell_array, pbc)
+    except Exception:
+        return displacement
+    return np.asarray(wrapped, dtype=float)
+
+
 def _estimate_neb_chain_approximation(
     *,
     positions: np.ndarray,
     forces: np.ndarray,
     prev_positions: np.ndarray | None,
     next_positions: np.ndarray | None,
+    cell=None,
+    pbc=None,
 ) -> _NebChainApproximation | None:
-    """Estimate NEB chain vectors from neighboring image displacements."""
+    """Estimate NEB chain vectors from neighboring image displacements.
+
+    ``cell``/``pbc`` select the MINIMUM-IMAGE difference between neighbouring
+    images. Without them the tangent came from a raw coordinate subtraction, so
+    for any band whose migrating atom crosses a periodic face -- the normal way
+    VASP writes fractional coordinates, and unavoidable here because
+    _read_neb_image_atoms wraps every image into [0, 1) -- the OUTCAR TANGENT,
+    CHAIN-FORCE and "tangential force (eV/A)" block pointed the wrong way
+    (measured: 116 degrees off, z sign inverted, |tangent| 5.04 A where the
+    physical image separation is 0.78 A), while ASE's own NEB engine in the very
+    same run used the minimum-image tangent. Every other number in the file was
+    correct, so nothing looked wrong.
+    """
 
     if positions.shape != forces.shape or positions.ndim != 2 or positions.shape[1] != 3:
         return None
@@ -284,11 +459,11 @@ def _estimate_neb_chain_approximation(
     nxt = next_positions if next_positions is not None and next_positions.shape == positions.shape else None
 
     if prev is not None and nxt is not None:
-        tangent_raw = nxt - prev
+        tangent_raw = _minimum_image_displacement(nxt - prev, cell, pbc)
     elif nxt is not None:
-        tangent_raw = nxt - positions
+        tangent_raw = _minimum_image_displacement(nxt - positions, cell, pbc)
     elif prev is not None:
-        tangent_raw = positions - prev
+        tangent_raw = _minimum_image_displacement(positions - prev, cell, pbc)
     else:
         tangent_raw = np.zeros_like(forces)
 
@@ -320,8 +495,34 @@ def _read_non_comment_lines(path: str) -> list[str]:
 
     if not os.path.exists(path):
         return []
+    try:
+        import stat as stat_lib
+
+        if not stat_lib.S_ISREG(os.stat(path).st_mode):
+            # A FIFO here cannot be caught by the except below: open() on a
+            # readerless FIFO BLOCKS forever instead of raising, which wedged
+            # the resident worker permanently at OUTCAR-header time (stop
+            # --force could not preempt the blocked open). KPOINTS was the one
+            # input file the regular-file sweep missed -- it is read at OUTPUT
+            # time, not input time. stat never blocks; degrade to "no lines"
+            # exactly like the unreadable cases below.
+            return []
+    except OSError:
+        pass
     lines: list[str] = []
-    with open(path, encoding="utf-8", errors="ignore") as handle:
+    try:
+        handle = open(path, encoding="utf-8", errors="ignore")
+    except OSError:
+        # os.path.exists() only proves the entry is there, not that it can be
+        # read: an unreadable file (mode 000) or a directory at this path makes
+        # open() raise. This helper supplies OPTIONAL OUTCAR-header metadata --
+        # KPOINTS is a file run_workdir explicitly announces as "detected but not
+        # used" -- so an unreadable one must not abort the run. Left unguarded it
+        # escaped as calculation_error (exit 2, documented RETRYABLE) for a
+        # permanent permission/type problem. Degrade to "no lines", exactly as
+        # read_structure already does for an unreadable POTCAR.
+        return []
+    with handle:
         for raw in handle:
             line = raw.rstrip("\n")
             for marker in ("#", "!"):
@@ -339,7 +540,16 @@ def _extract_potcar_titles(path: str) -> list[str]:
     if not os.path.exists(path):
         return []
     titles: list[str] = []
-    with open(path, encoding="utf-8", errors="ignore") as handle:
+    try:
+        handle = open(path, encoding="utf-8", errors="ignore")
+    except OSError:
+        # Same as _read_non_comment_lines: POTCAR titles are optional OUTCAR
+        # header metadata, and read_structure already swallows an unreadable
+        # POTCAR, so an unreadable/directory POTCAR must degrade the header
+        # rather than kill an otherwise valid calculation with a retryable
+        # calculation_error.
+        return []
+    with handle:
         for line in handle:
             if "TITEL" not in line or "=" not in line:
                 continue
@@ -416,15 +626,28 @@ def _pseudo_scf_settings_from_incar(incar, *, enabled: bool) -> _PseudoScfSettin
         raw = incar.get(key, default)
         try:
             return int(float(raw))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError: int(float("inf"))/a huge value raises it, not
+            # ValueError. This helper tolerates a malformed tag by returning the
+            # default, so catch that class too instead of letting it escape.
             return default
 
     def _parse_float_tag(key: str, default: float) -> float:
         raw = incar.get(key, default)
         try:
-            return float(raw)
-        except (TypeError, ValueError):
+            parsed = float(raw)
+        except (TypeError, ValueError, OverflowError):
             return default
+        if not math.isfinite(parsed):
+            # A non-finite EDIFF reached the OUTCAR header writer, where
+            # f"{inf:.8E}" is 'INF' and the mantissa/exponent split raises a bare
+            # ValueError DURING the run -- reported as calculation_error (exit 2,
+            # documented RETRYABLE) for a permanently invalid INCAR. This helper
+            # already tolerates unparseable values by falling back to the
+            # documented default; treat nan/inf the same way.
+            print(f"Warning: Unable to parse {key}; ignoring value {raw}")
+            return default
+        return parsed
 
     nelm = max(1, _parse_int_tag("NELM", 60))
     nelmin = min(max(1, _parse_int_tag("NELMIN", 2)), nelm)
@@ -512,6 +735,9 @@ def _initialize_vasp_compat_outputs(
     write_oszicar_pseudo_scf: bool = False,
     neb_prev_positions: np.ndarray | None = None,
     neb_next_positions: np.ndarray | None = None,
+    pstress_kbar: float | None = None,
+    nsw_requested: int | None = None,
+    preflight_artifacts: tuple = (),
 ) -> _VaspCompatRecorder:
     """Initialize compatibility outputs and return recorder state."""
 
@@ -539,7 +765,30 @@ def _initialize_vasp_compat_outputs(
         pseudo_scf=pseudo_scf,
         neb_prev_positions=prev_positions,
         neb_next_positions=next_positions,
+        pstress_kbar=pstress_kbar,
+        nsw_requested=nsw_requested,
     )
+
+    # One pre-computation choke point for the WRITE half of the FIFO surface
+    # (the input half is _require_regular_input_file): open(..., "w") on a
+    # readerless FIFO blocks forever, so a FIFO planted at any fixed artifact
+    # name wedged the worker exactly like the input-side case -- and checking
+    # here fails BEFORE the calculation is paid for. ONLY the artifacts every
+    # mode writes are checked unconditionally: XDATCAR is MD-only and
+    # CHGCAR/energy.csv are flag-gated, and checking those regardless aborted
+    # an ordinary static run over an ignored CHGCAR directory that
+    # _print_unused_input_notices itself calls unused (cross-review finding).
+    # The sites that KNOW they will write a conditional artifact preflight it
+    # themselves (the MD observer via preflight_artifacts, run_relaxation for
+    # energy.csv, run_workdir's WRITE_CHGCAR branch for CHGCAR).
+    for artifact_name in (
+        "OUTCAR",
+        "OSZICAR",
+        "vasprun.xml",
+        "CONTCAR",
+        *preflight_artifacts,
+    ):
+        _require_writable_artifact_path(artifact_name)
 
     with open("OUTCAR", "w", encoding="utf-8") as handle:
         handle.write(" vasp.6.x compatible output generated by VPMDK\n")
@@ -588,6 +837,7 @@ def _append_outcar_compat_step(
     thermostat_kinetic: float,
     neb_mode: bool = False,
     neb_chain: _NebChainApproximation | None = None,
+    pstress_kbar: float | None = None,
 ) -> None:
     """Append a VTST-friendly ionic-step block to ``OUTCAR``."""
 
@@ -628,21 +878,52 @@ def _append_outcar_compat_step(
             xy = float(stress_matrix[0, 1])
             yz = float(stress_matrix[1, 2])
             zx = float(stress_matrix[2, 0])
-            to_kbar = 1.0 / _root().KBAR_TO_EV_PER_A3
-            ext_pressure = (xx + yy + zz) / 3.0 * to_kbar
+            # This block reproduces VASP's convention, NOT ASE's. The header says
+            # "FORCE on cell =-STRESS", and VASP writes:
+            #   Total  -> -sigma * V   in eV
+            #   in kB  -> -sigma       in kBar
+            # i.e. the sign is OPPOSITE to ase's tension-positive get_stress(), so a
+            # COMPRESSED cell gets a POSITIVE external pressure. ASE's own OUTCAR
+            # parser encodes exactly that (`stress_arr = -np.array(stress)` then
+            # `* 1e-1 * ase.units.GPa`), so emitting +sigma here made every reader
+            # see the stress, the pressure and all six components sign-inverted --
+            # and drove "expand while the pressure is positive" lattice loops the
+            # wrong way. `stress_matrix` stays ASE-signed eV/A^3 everywhere inside
+            # VPMDK; the flip belongs to the VASP file format only.
+            to_kbar = -1.0 / _root().KBAR_TO_EV_PER_A3
+            volume = -float(atoms.get_volume())
+            # VASP defines PSTRESS as a Pulay stress: per the PSTRESS
+            # documentation, ALL stress output is corrected by subtracting it
+            # from the diagonal, the 'external pressure' line reports the
+            # CORRECTED pressure (~0 for a cell equilibrated at PSTRESS), and
+            # the 'Pullay stress' field echoes PSTRESS. Reporting the raw
+            # internal pressure here made a converged PSTRESS=500 run read
+            # 'external pressure = 500.00 kB Pullay stress = 0.00' -- the
+            # transpose of VASP's output -- so the VASP-native convergence
+            # signal '|external pressure| ~ 0' claimed the run never reached
+            # the target. The eV 'Total' line is the same tensor times the
+            # volume, so it carries the identical correction.
+            pullay_kbar = float(pstress_kbar) if pstress_kbar is not None else 0.0
+            diag_shift_ev = pullay_kbar * _root().KBAR_TO_EV_PER_A3 * (-volume)
+            ext_pressure = (xx + yy + zz) / 3.0 * to_kbar - pullay_kbar
             handle.write("  FORCE on cell =-STRESS in cart. coord.  units (eV):\n")
             handle.write("  Direction    XX          YY          ZZ          XY          YZ          ZX\n")
             handle.write("  -------------------------------------------------------------------------------------\n")
             handle.write(
-                f"  Total   {xx:11.5f} {yy:11.5f} {zz:11.5f}"
-                f" {xy:11.5f} {yz:11.5f} {zx:11.5f}\n"
+                f"  Total   {xx * volume - diag_shift_ev:11.5f}"
+                f" {yy * volume - diag_shift_ev:11.5f}"
+                f" {zz * volume - diag_shift_ev:11.5f}"
+                f" {xy * volume:11.5f} {yz * volume:11.5f} {zx * volume:11.5f}\n"
             )
             handle.write(
-                f"  in kB   {xx * to_kbar:11.2f} {yy * to_kbar:11.2f} {zz * to_kbar:11.2f}"
+                f"  in kB   {xx * to_kbar - pullay_kbar:11.2f}"
+                f" {yy * to_kbar - pullay_kbar:11.2f}"
+                f" {zz * to_kbar - pullay_kbar:11.2f}"
                 f" {xy * to_kbar:11.2f} {yz * to_kbar:11.2f} {zx * to_kbar:11.2f}\n"
             )
             handle.write(
-                f"  external pressure = {ext_pressure:11.2f} kB  Pullay stress =        0.00 kB\n\n"
+                f"  external pressure = {ext_pressure:11.2f} kB  Pullay stress ="
+                f" {pullay_kbar:11.2f} kB\n\n"
             )
         if neb_mode:
             if neb_chain is None:
@@ -662,15 +943,19 @@ def _append_outcar_compat_step(
                 if chain_plus_total.shape != (3,):
                     chain_plus_total = np.zeros(3, dtype=float)
 
-            perpendicular_forces = forces - chain_force_vectors
-            if perpendicular_forces.size:
-                chain_force_max = float(np.max(np.linalg.norm(perpendicular_forces, axis=1)))
-            else:
-                chain_force_max = 0.0
-
             handle.write(
+                # EXACTLY two numeric fields, as real VTST writes (spring
+                # projection, signed REAL tangential projection). VTST's
+                # nebbarrier.pl takes the LAST whitespace field of this line as
+                # the interior-image force and nebspline.pl uses it as -dE/ds;
+                # a third field (the non-negative max perpendicular force this
+                # line used to append) fed the spline a slope <= 0 at every
+                # interior image and fabricated saddle points and minima that
+                # do not exist in the computed energies (measured: a strictly
+                # monotonic 3-image band gained a spurious saddle 36% above
+                # its highest image).
                 " NEB: projections on to tangent (spring, REAL) "
-                f"{0.0:12.6f} {tangential_force:12.6f} {chain_force_max:12.6f}\n\n"
+                f"{0.0:12.6f} {tangential_force:12.6f}\n\n"
             )
         handle.write("  FREE ENERGIE OF THE ION-ELECTRON SYSTEM (eV)\n")
         handle.write("  ---------------------------------------------------\n")
@@ -753,6 +1038,47 @@ def _append_oszicar_compat_step(
             )
 
 
+_INTERNAL_ISIF_FREEZE_MARKER = "_vpmdk_internal_isif_freeze"
+
+
+@contextlib.contextmanager
+def _without_internal_isif_freeze(atoms):
+    """Drop only VPMDK's own ISIF ion freeze while forces are read.
+
+    ISIF 5/6/7 hold the ions with an internally installed FixAtoms so that just
+    the cell relaxes. That is an implementation device, not something the user
+    asked for, but the recorder reads forces with apply_constraint=True, so every
+    reported force became exactly 0.0 -- and any force check (VTST, custodian, a
+    plain `grep "FORCES: max atom"`) read the run as perfectly converged. Real
+    VASP reports the physical forces in these modes.
+
+    A user's OWN constraints (selective dynamics) are left in place: only the
+    marked internal one is removed, and only for the duration of the read.
+    """
+
+    constraints = getattr(atoms, "constraints", None)
+    if not constraints:
+        yield
+        return
+    try:
+        constraint_list = list(constraints)
+    except TypeError:
+        constraint_list = [constraints]
+    remaining = [
+        item
+        for item in constraint_list
+        if not getattr(item, _INTERNAL_ISIF_FREEZE_MARKER, False)
+    ]
+    if len(remaining) == len(constraint_list):
+        yield
+        return
+    atoms.set_constraint(remaining)
+    try:
+        yield
+    finally:
+        atoms.set_constraint(constraint_list)
+
+
 def _record_vasp_compat_step(
     recorder: _VaspCompatRecorder,
     atoms,
@@ -771,11 +1097,12 @@ def _record_vasp_compat_step(
 ) -> None:
     """Capture step data and append compatibility records."""
 
-    forces = _safe_get_forces(
-        atoms,
-        strict=strict_forces,
-        apply_constraint=apply_force_constraints,
-    )
+    with _without_internal_isif_freeze(atoms):
+        forces = _safe_get_forces(
+            atoms,
+            strict=strict_forces,
+            apply_constraint=apply_force_constraints,
+        )
     stress_matrix = _safe_get_stress_matrix(atoms, mode=recorder.stress_mode)
     if recorder.neb_mode and neb_chain is None:
         neb_chain = _estimate_neb_chain_approximation(
@@ -783,6 +1110,8 @@ def _record_vasp_compat_step(
             forces=forces,
             prev_positions=recorder.neb_prev_positions,
             next_positions=recorder.neb_next_positions,
+            cell=np.asarray(atoms.get_cell(), dtype=float),
+            pbc=np.asarray(atoms.get_pbc(), dtype=bool),
         )
     _append_outcar_compat_step(
         step_index,
@@ -797,6 +1126,7 @@ def _record_vasp_compat_step(
         thermostat_kinetic,
         recorder.neb_mode,
         neb_chain=neb_chain,
+        pstress_kbar=recorder.pstress_kbar,
     )
     _append_oszicar_compat_step(
         recorder,
@@ -955,8 +1285,24 @@ def _append_dynmat_xml(parent, recorder: _VaspCompatRecorder) -> None:
         ET.SubElement(varray, "v").text = " ".join(f"{value:18.10f}" for value in row)
 
 
-def _append_pseudo_scf_xml_step(parent, step: _VasprunStep) -> None:
-    """Append one minimal ``scstep`` block for VASP XML reader compatibility."""
+def _append_scstep_xml(parent, step: _VasprunStep) -> None:
+    """Append the ``scstep`` block every VASP XML reader expects.
+
+    Written for EVERY ionic step, not just when pseudo-SCF output is enabled.
+    ``scstep`` is not decoration: ase.io.vasp.read_vasp_xml does
+    ``step.findall("scstep/energy")[-1]`` with no guard, so a vasprun.xml without
+    it raised IndexError and could not be opened by ASE AT ALL -- and pymatgen
+    does not even fail, it warns once and returns ``inf eV`` from
+    ``Vasprun.final_energy``, which a formation-energy or phase-diagram pipeline
+    ingests silently. Since WRITE_PSEUDO_SCF defaults to 0, that was the DEFAULT
+    output of this tool. The repo's own tests never saw it because they re-parse
+    the file with ElementTree instead of round-tripping through either reader.
+
+    What stays behind the pseudo-SCF gate is the fabricated SCF *ladder*
+    (NELM/NELMIN/EDIFF metadata, the ``totalsc`` timing, the OUTCAR iteration
+    blocks); one scstep carrying the ionic step's converged energy is simply what
+    makes the file readable.
+    """
 
     scstep = ET.SubElement(parent, "scstep")
     ET.SubElement(scstep, "time", {"name": "dav"}).text = f"{step.sc_time:8.2f} {step.sc_time:8.2f}"
@@ -981,7 +1327,18 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
     ET.SubElement(incar, "i", {"name": "IBRION", "type": "int"}).text = str(recorder.ibrion)
     if recorder.isif is not None:
         ET.SubElement(incar, "i", {"name": "ISIF", "type": "int"}).text = str(recorder.isif)
-    ET.SubElement(incar, "i", {"name": "NSW", "type": "int"}).text = str(len(recorder.steps))
+    # The REQUESTED NSW, not the performed step count: pymatgen's
+    # Vasprun.converged_ionic rule is 'converged iff len(ionic_steps) <
+    # NSW', exactly what real VASP's echo satisfies -- echoing len(steps)
+    # made every converged relaxation read converged=False (constant,
+    # information-free), so custodian/atomate2-style gates re-ran healthy
+    # runs. Fallback to len(steps) only for direct library callers that
+    # never knew the INCAR value.
+    ET.SubElement(incar, "i", {"name": "NSW", "type": "int"}).text = str(
+        recorder.nsw_requested
+        if recorder.nsw_requested is not None
+        else len(recorder.steps)
+    )
     if recorder.pseudo_scf.enabled:
         ET.SubElement(incar, "i", {"name": "NELM", "type": "int"}).text = str(recorder.pseudo_scf.nelm)
         ET.SubElement(incar, "i", {"name": "NELMIN", "type": "int"}).text = str(recorder.pseudo_scf.nelmin)
@@ -995,6 +1352,15 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
         ET.SubElement(incar, "i", {"name": "NFREE", "type": "int"}).text = str(recorder.nfree)
     if recorder.mdalgo is not None:
         ET.SubElement(incar, "i", {"name": "MDALGO", "type": "int"}).text = str(recorder.mdalgo)
+    if recorder.pstress_kbar is not None:
+        # Real VASP echoes PSTRESS in BOTH <incar> and <parameters>, and ASE's
+        # read_vasp_xml depends on parameters['pstress'] to subtract the PV
+        # term it knows the calculation-level energies contain (MR 2685).
+        # This echo and the PV term in the energy fields below must always
+        # land TOGETHER: either half alone shifts every ASE reader by +-PV.
+        ET.SubElement(incar, "i", {"name": "PSTRESS", "type": "float"}).text = (
+            f"{recorder.pstress_kbar:.8f}"
+        )
 
     _append_structure_xml(
         root,
@@ -1030,11 +1396,21 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
     ET.SubElement(ionic, "i", {"name": "IBRION", "type": "int"}).text = str(recorder.ibrion)
     if recorder.isif is not None:
         ET.SubElement(ionic, "i", {"name": "ISIF", "type": "int"}).text = str(recorder.isif)
-    ET.SubElement(ionic, "i", {"name": "NSW", "type": "int"}).text = str(len(recorder.steps))
+    ET.SubElement(ionic, "i", {"name": "NSW", "type": "int"}).text = str(
+        recorder.nsw_requested
+        if recorder.nsw_requested is not None
+        else len(recorder.steps)
+    )
     if recorder.potim is not None:
         ET.SubElement(ionic, "i", {"name": "POTIM", "type": "float"}).text = f"{recorder.potim:.6f}"
     if recorder.nfree is not None:
         ET.SubElement(ionic, "i", {"name": "NFREE", "type": "int"}).text = str(recorder.nfree)
+    if recorder.pstress_kbar is not None:
+        # See the <incar> echo above: ASE reads parameters['pstress'] (names
+        # are lowercased by its parser) to undo the PV term.
+        ET.SubElement(ionic, "i", {"name": "PSTRESS", "type": "float"}).text = (
+            f"{recorder.pstress_kbar:.8f}"
+        )
 
     _build_atominfo_xml(root, recorder.symbols)
     _append_dynmat_xml(root, recorder)
@@ -1047,8 +1423,7 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
 
     for step in recorder.steps:
         calculation = ET.SubElement(root, "calculation")
-        if recorder.pseudo_scf.enabled:
-            _append_pseudo_scf_xml_step(calculation, step)
+        _append_scstep_xml(calculation, step)
         _append_structure_xml(
             calculation,
             cell=step.cell,
@@ -1059,14 +1434,52 @@ def _write_vasprun_xml(recorder: _VaspCompatRecorder, final_atoms) -> None:
         for row in step.forces:
             ET.SubElement(forces, "v").text = f"{row[0]:16.8f} {row[1]:16.8f} {row[2]:16.8f}"
         if step.stress is not None:
+            # VASP writes this varray in kBar with the sign opposite to ASE's
+            # tension-positive stress: ase.io.vasp.read_vasp_xml converts it with
+            # `stress *= -0.1 * GPa`. Emitting the raw ASE eV/A^3 matrix therefore
+            # handed every standard reader (ASE, pymatgen) a stress scaled by
+            # -1/1602.18 with no error at all. _read_last_vasprun_step undoes this
+            # when VPMDK reads its own NEB image output back.
             stress = ET.SubElement(calculation, "varray", {"name": "stress"})
-            for row in step.stress:
-                ET.SubElement(stress, "v").text = f"{row[0]:16.8f} {row[1]:16.8f} {row[2]:16.8f}"
+            stress_to_kbar = -1.0 / _root().KBAR_TO_EV_PER_A3
+            # Same PSTRESS correction as the OUTCAR block: VASP subtracts the
+            # applied Pulay stress from the diagonal of every stress output,
+            # and this varray is the same tensor OUTCAR prints in kB.
+            pullay_kbar = (
+                float(recorder.pstress_kbar)
+                if recorder.pstress_kbar is not None
+                else 0.0
+            )
+            for row_index, row in enumerate(step.stress):
+                diagonal = [0.0, 0.0, 0.0]
+                diagonal[row_index] = pullay_kbar
+                ET.SubElement(stress, "v").text = (
+                    f"{row[0] * stress_to_kbar - diagonal[0]:16.8f}"
+                    f" {row[1] * stress_to_kbar - diagonal[1]:16.8f}"
+                    f" {row[2] * stress_to_kbar - diagonal[2]:16.8f}"
+                )
 
         energy = ET.SubElement(calculation, "energy")
-        ET.SubElement(energy, "i", {"name": "e_fr_energy"}).text = f"{step.potential_energy:16.8f}"
-        ET.SubElement(energy, "i", {"name": "e_wo_entrp"}).text = f"{step.potential_energy:16.8f}"
-        ET.SubElement(energy, "i", {"name": "e_0_energy"}).text = f"{step.potential_energy:16.8f}"
+        # Real VASP writes the ENTHALPY E + PSTRESS*V into the calculation-
+        # level energy fields when PSTRESS is set, while scstep and OUTCAR
+        # keep the plain E (measured on ASE's real-VASP testdata
+        # vasprun_pstress.xml: calculation e_fr_energy differs from the last
+        # scstep by exactly PSTRESS*V). pymatgen's Vasprun applies no
+        # correction, so writing plain E here made every enthalpy/EOS
+        # consumer differ from a real VASP run by PSTRESS*V per structure;
+        # ASE's reader subtracts parameters['pstress']*V (MR 2685), which the
+        # echoes above make available -- both halves must stay together.
+        pv_term = 0.0
+        if recorder.pstress_kbar is not None:
+            pv_term = (
+                float(recorder.pstress_kbar)
+                * _root().KBAR_TO_EV_PER_A3
+                * abs(float(np.linalg.det(np.asarray(step.cell, dtype=float))))
+            )
+        enthalpy = step.potential_energy + pv_term
+        ET.SubElement(energy, "i", {"name": "e_fr_energy"}).text = f"{enthalpy:16.8f}"
+        ET.SubElement(energy, "i", {"name": "e_wo_entrp"}).text = f"{enthalpy:16.8f}"
+        ET.SubElement(energy, "i", {"name": "e_0_energy"}).text = f"{enthalpy:16.8f}"
         ET.SubElement(energy, "i", {"name": "kinetic"}).text = f"{step.kinetic_energy:16.8f}"
         ET.SubElement(energy, "i", {"name": "nosepot"}).text = f"{step.thermostat_potential:16.8f}"
         ET.SubElement(energy, "i", {"name": "nosekinetic"}).text = f"{step.thermostat_kinetic:16.8f}"

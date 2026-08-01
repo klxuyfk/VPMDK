@@ -18,6 +18,7 @@ _SIMPLE_CALCULATORS: Dict[str, tuple[str, str]] = {}
 
 
 _CALCULATOR_BUILDERS: Dict[str, str] = {
+    "BAM": "_build_bam_calculator",
     "CHGNET": "_build_chgnet_calculator",
     "MATGL": "_build_m3gnet_calculator",
     "M3GNET": "_build_m3gnet_calculator",
@@ -57,9 +58,13 @@ def _build_simple_model_calculator(
     if calculator_cls is None:
         raise RuntimeError(missing_message)
 
-    model_path = bcar_tags.get("MODEL")
-    if model_path and _root().os.path.exists(model_path):
-        return calculator_cls(model_path)
+    root = _root()
+    mlp = root._resolve_mlp_tag(bcar_tags)
+    model_reference = root._resolve_backend_model_reference(
+        mlp, bcar_tags.get("MODEL")
+    )
+    if model_reference.kind is not root.ModelReferenceKind.DEFAULT:
+        return calculator_cls(model_reference.value)
     return calculator_cls()
 
 

@@ -52,7 +52,10 @@ def _build_nequix_calculator(bcar_tags: Dict[str, str], *, structure=None):
     if root.NequixCalculator is None:
         raise RuntimeError("Nequix calculator not available. Install nequix and dependencies.")
 
-    model_value = bcar_tags.get("MODEL") or root.DEFAULT_NEQUIX_MODEL
+    model_reference = root._resolve_backend_model_reference(
+        "NEQUIX", bcar_tags.get("MODEL")
+    )
+    model_value = str(model_reference.value)
     backend = _normalize_nequix_backend(bcar_tags.get("NEQUIX_BACKEND"))
 
     use_kernel_tag = bcar_tags.get("NEQUIX_USE_KERNEL")
@@ -90,12 +93,15 @@ def _build_nequix_calculator(bcar_tags: Dict[str, str], *, structure=None):
         "capacity_multiplier": capacity_multiplier,
     }
 
-    if os.path.exists(model_value):
+    if model_reference.kind is root.ModelReferenceKind.LOCAL_PATH:
         kwargs["model_path"] = model_value
         kwargs["model_name"] = os.path.splitext(os.path.basename(model_value))[0]
-    elif root._looks_like_filesystem_path(model_value, suffixes=(".nqx", ".pt", ".pth", ".ckpt")):
-        raise FileNotFoundError(f"Nequix model not found: {model_value}")
     else:
+        # Validate/canonicalize the selected name against installed metadata for
+        # both explicit and default (omitted-MODEL) selections. The explicit
+        # path is already canonical so this is idempotent, while the default is
+        # validated here so a registry/version mismatch raises a clear error
+        # instead of a cryptic failure deep in the upstream loader.
         kwargs["model_name"] = _resolve_nequix_model_name(model_value)
 
     requested_device = bcar_tags.get("DEVICE")

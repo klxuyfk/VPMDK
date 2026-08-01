@@ -8,7 +8,7 @@ CI smoke:
 - CHGNet CPU smoke (no model path or CUDA required)
 
 Additional explicit backends:
-- MACE (set VPMDK_MACE_MODEL)
+- MACE (set VPMDK_MACE_MODEL, optional VPMDK_MACE_DEVICE)
 
 Optional backends (skipped unless env vars are set):
 - MatterSim: optional VPMDK_MATTERSIM_MODEL / VPMDK_MATTERSIM_DEVICE
@@ -22,8 +22,9 @@ Optional backends (skipped unless env vars are set):
 - AlphaNet: VPMDK_ALPHANET_MODEL, optional VPMDK_ALPHANET_CONFIG / VPMDK_ALPHANET_PRECISION
 - HIENet: VPMDK_HIENET_MODEL, optional VPMDK_HIENET_FILE_TYPE
 - Nequix: VPMDK_NEQUIX_MODEL, optional VPMDK_NEQUIX_BACKEND / VPMDK_NEQUIX_USE_KERNEL
-- GRACE: VPMDK_GRACE_MODEL
-- DeePMD: VPMDK_DEEPMD_MODEL, optional VPMDK_DEEPMD_HEAD
+- GRACE: VPMDK_GRACE_MODEL, optional VPMDK_GRACE_DEVICE
+- DeePMD: VPMDK_DEEPMD_MODEL, optional VPMDK_DEEPMD_HEAD; resident smoke also
+  requires VPMDK_DEEPMD_TYPE_MAP
 - NequIP: VPMDK_NEQUIP_MODEL
 - Allegro: VPMDK_ALLEGRO_MODEL
 - ORB: VPMDK_ORB_MODEL
@@ -35,11 +36,15 @@ Optional backends (skipped unless env vars are set):
 import importlib.util
 import os
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
 import vpmdk
+from vpmdk_core.client import ServerConnectionError, VPMDKClient
+from vpmdk_core.server import VPMDKServer, _load_backend_for_server
 
 
 INCAR_MD = """IBRION = 0
@@ -139,6 +144,88 @@ def test_md_chgnet_cpu_smoke(tmp_path: Path, data_dir: Path) -> None:
 
 
 @pytest.mark.integration
+@pytest.mark.backend_smoke
+def test_server_chgnet_reuses_model_and_matches_one_shot(
+    tmp_path: Path,
+    data_dir: Path,
+    monkeypatch,
+) -> None:
+    """Exercise the resident path with a real backend and compare outputs."""
+
+    _require_chgnet()
+    bcar = "MLP=CHGNET\nDEVICE=cpu\n"
+    incar = "IBRION = -1\nNSW = 0\nISIF = 2\n"
+    one_shot = tmp_path / "one-shot"
+    server_dirs = [tmp_path / f"server-{index}" for index in range(3)]
+    _write_inputs(one_shot, data_dir, bcar, incar_text=incar)
+    for directory in server_dirs:
+        _write_inputs(directory, data_dir, bcar, incar_text=incar)
+
+    built_calculators: list[object] = []
+    original_build = vpmdk._build_calculator_from_tags
+
+    def build_and_record(*args, **kwargs):
+        calculator = original_build(*args, **kwargs)
+        built_calculators.append(calculator)
+        return calculator
+
+    monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", build_and_record)
+    structure = vpmdk.read_structure(str(server_dirs[0] / "POSCAR"), None)
+    calculator = vpmdk._build_calculator_from_tags(
+        {"MLP": "CHGNET", "DEVICE": "cpu"},
+        structure=structure,
+    )
+    assert len(built_calculators) == 1
+    assert built_calculators[0] is calculator
+
+    socket_path = tmp_path / "server.sock"
+    server = VPMDKServer(
+        str(socket_path),
+        calculator,
+        {"MLP": "CHGNET", "DEVICE": "cpu"},
+        backend_base_dir=str(tmp_path),
+    )
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    client = VPMDKClient(str(socket_path))
+    deadline = time.monotonic() + 10.0
+    while True:
+        try:
+            client.status()
+            break
+        except ServerConnectionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.02)
+
+    try:
+        for directory in server_dirs:
+            client.run(str(directory))
+        assert client.status()["jobs_completed"] == 3
+        assert len(built_calculators) == 1
+        assert built_calculators[0] is calculator
+    finally:
+        client.stop(timeout=10.0)
+        server_thread.join(timeout=10.0)
+
+    _run_vpmdk(one_shot)
+    assert len(built_calculators) == 2
+    assert built_calculators[0] is calculator
+    assert built_calculators[1] is not calculator
+
+    marker = b" General timing and accounting informations for this job:\n"
+    one_shot_outcar = (one_shot / "OUTCAR").read_bytes().split(marker, 1)[0]
+    for directory in server_dirs:
+        assert (directory / "OSZICAR").read_bytes() == (one_shot / "OSZICAR").read_bytes()
+        assert (directory / "CONTCAR").read_bytes() == (one_shot / "CONTCAR").read_bytes()
+        assert (directory / "vasprun.xml").read_bytes() == (
+            one_shot / "vasprun.xml"
+        ).read_bytes()
+        assert (directory / "OUTCAR").read_bytes().split(marker, 1)[0] == one_shot_outcar
+
+
+
+@pytest.mark.integration
 def test_md_sevennet_optional(tmp_path: Path, data_dir: Path) -> None:
     if not _any_module_available("sevenn", "sevennet"):
         pytest.skip("SevenNet is not installed.")
@@ -231,13 +318,15 @@ def test_chgnet_graph_converter_algorithms_available(
 
 @pytest.mark.integration
 def test_md_mace_required(tmp_path: Path, data_dir: Path) -> None:
-    _require_cuda()
+    device = os.environ.get("VPMDK_MACE_DEVICE", "cuda")
+    if device.startswith("cuda"):
+        _require_cuda()
     model_path = os.environ.get("VPMDK_MACE_MODEL")
     if not model_path:
         pytest.skip("Set VPMDK_MACE_MODEL to run MACE integration.")
     if not Path(model_path).exists():
         pytest.fail(f"MACE model not found: {model_path}")
-    bcar = f"MLP=MACE\nMODEL={model_path}\nDEVICE=cuda\n"
+    bcar = f"MLP=MACE\nMODEL={model_path}\nDEVICE={device}\n"
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)
     _assert_outputs(tmp_path)
@@ -443,13 +532,20 @@ def test_md_nequix_optional(tmp_path: Path, data_dir: Path) -> None:
 def test_md_grace_optional(tmp_path: Path, data_dir: Path) -> None:
     if not _module_available("tensorpotential"):
         pytest.skip("grace-tensorpotential is not installed.")
-    _require_cuda()
-    model_path = os.environ.get("VPMDK_GRACE_MODEL")
-    if not model_path:
+    device = os.environ.get("VPMDK_GRACE_DEVICE", "cuda")
+    if device.startswith("cuda"):
+        _require_cuda()
+    model_value = os.environ.get("VPMDK_GRACE_MODEL")
+    if not model_value:
         pytest.skip("Set VPMDK_GRACE_MODEL to run GRACE integration.")
-    if not Path(model_path).exists():
-        pytest.fail(f"GRACE model not found: {model_path}")
-    bcar = f"MLP=GRACE\nMODEL={model_path}\nDEVICE=cuda\n"
+    looks_like_path = (
+        os.path.isabs(model_value)
+        or model_value.startswith(f".{os.path.sep}")
+        or os.path.sep in model_value
+    )
+    if looks_like_path and not Path(model_value).exists():
+        pytest.fail(f"GRACE model not found: {model_value}")
+    bcar = f"MLP=GRACE\nMODEL={model_value}\nDEVICE={device}\n"
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)
     _assert_outputs(tmp_path)
@@ -473,6 +569,73 @@ def test_md_deepmd_optional(tmp_path: Path, data_dir: Path) -> None:
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)
     _assert_outputs(tmp_path)
+
+
+@pytest.mark.integration
+def test_server_deepmd_explicit_type_map_optional(tmp_path: Path, data_dir: Path) -> None:
+    if not _module_available("deepmd"):
+        pytest.skip("deepmd-kit is not installed.")
+    model_path = os.environ.get("VPMDK_DEEPMD_MODEL")
+    if not model_path:
+        pytest.skip("Set VPMDK_DEEPMD_MODEL to run DeePMD server integration.")
+    if not Path(model_path).exists():
+        pytest.fail(f"DeePMD model not found: {model_path}")
+    type_map = os.environ.get("VPMDK_DEEPMD_TYPE_MAP")
+    if not type_map:
+        pytest.skip(
+            "Set VPMDK_DEEPMD_TYPE_MAP in model type-index order to run "
+            "DeePMD server integration."
+        )
+
+    startup = tmp_path / "startup"
+    request = tmp_path / "request"
+    head = os.environ.get("VPMDK_DEEPMD_HEAD", "")
+    bcar_lines = [
+        "MLP=DEEPMD",
+        f"MODEL={model_path}",
+        "DEVICE=cpu",
+        f"DEEPMD_TYPE_MAP={type_map}",
+    ]
+    if head:
+        bcar_lines.append(f"DEEPMD_HEAD={head}")
+    _write_inputs(
+        startup,
+        data_dir,
+        "\n".join(bcar_lines) + "\n",
+        incar_text=INCAR_MD_SMOKE,
+    )
+    _write_inputs(request, data_dir, "", incar_text=INCAR_MD_SMOKE)
+
+    calculator, tags, base_dir = _load_backend_for_server(str(startup), None)
+    socket_path = tmp_path / "deepmd.sock"
+    server = VPMDKServer(
+        str(socket_path),
+        calculator,
+        tags,
+        backend_base_dir=base_dir,
+    )
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    client = VPMDKClient(str(socket_path))
+    deadline = time.monotonic() + 30.0
+    while True:
+        try:
+            client.status()
+            break
+        except ServerConnectionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.02)
+
+    try:
+        client.run(str(request), timeout=120.0)
+        assert client.status()["jobs_completed"] == 1
+    finally:
+        client.stop(timeout=30.0)
+        server_thread.join(timeout=30.0)
+
+    assert not server_thread.is_alive()
+    _assert_outputs(request)
 
 
 @pytest.mark.integration
