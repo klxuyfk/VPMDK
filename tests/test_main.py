@@ -5013,11 +5013,41 @@ def test_incar_swallowed_tag_survives_real_pymatgen(tmp_path):
             env={**os.environ, "VPMDK_TEST_REAL_PYMATGEN": "1"},
         )
 
+    # The guard is COMPARISON-based, so it follows the installed parser.
+    # pymatgen >= 2026 lets a blank value swallow the next assignment (the
+    # silent mode change this test exists for) and the guard must reject;
+    # older releases (2025.10.7 on Python 3.10 CI) keep SYSTEM='' and parse
+    # the following tags intact, so nothing is swallowed and accepting the
+    # written values IS the correct outcome there. Probe the library
+    # explicitly (an outcome-based probe cannot discriminate in the
+    # bool-swallower case, where a broken guard still prints the same
+    # ibrion/nsw and only TEBEG is silently lost).
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from pymatgen.io.vasp import Incar\n"
+            "d = dict(Incar.from_str('SYSTEM =\\nIBRION = 2\\n'))\n"
+            "print('SWALLOWS:', 'IBRION' not in d)\n",
+        ],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "VPMDK_TEST_REAL_PYMATGEN": "1"},
+    )
+    if "ModuleNotFoundError" in probe.stderr:
+        pytest.skip("real pymatgen is not installed")
+    parser_swallows = "SWALLOWS: True" in probe.stdout
+
     swallowed = run("SYSTEM =\nIBRION = 2\nNSW = 50\nEDIFFG = -0.02\n", "INCAR_blank")
     if "ModuleNotFoundError" in swallowed.stderr:
         pytest.skip("real pymatgen is not installed")
-    assert "REJECTED" in swallowed.stdout, swallowed.stdout + swallowed.stderr
-    assert "SYSTEM" in swallowed.stdout and "IBRION" in swallowed.stdout
+    if parser_swallows:
+        assert "REJECTED" in swallowed.stdout, swallowed.stdout + swallowed.stderr
+        assert "SYSTEM" in swallowed.stdout and "IBRION" in swallowed.stdout
+    else:
+        assert "ACCEPTED ibrion=2 nsw=50" in swallowed.stdout, (
+            swallowed.stdout + swallowed.stderr
+        )
 
     ok = run("SYSTEM = test\nIBRION = 2\nNSW = 50\nEDIFFG = -0.02\n", "INCAR_ok")
     assert "ACCEPTED ibrion=2 nsw=50" in ok.stdout, ok.stdout + ok.stderr
@@ -5032,8 +5062,13 @@ def test_incar_swallowed_tag_survives_real_pymatgen(tmp_path):
     # string-only rule missed it and the MD ran at the 300 K default with
     # TEBEG = 900 still echoed in OUTCAR.
     typed = run("LWAVE =\nTEBEG = 900\nIBRION = 0\nNSW = 3\n", "INCAR_bool")
-    assert "REJECTED" in typed.stdout, typed.stdout + typed.stderr
-    assert "TEBEG" in typed.stdout and "LWAVE" in typed.stdout
+    if parser_swallows:
+        assert "REJECTED" in typed.stdout, typed.stdout + typed.stderr
+        assert "TEBEG" in typed.stdout and "LWAVE" in typed.stdout
+    else:
+        assert "ACCEPTED ibrion=0 nsw=3" in typed.stdout, (
+            typed.stdout + typed.stderr
+        )
 
 
 def test_resident_neb_images_get_a_per_image_result_cache():
@@ -6088,9 +6123,19 @@ def test_newline_before_equals_reaches_every_raw_guard(tmp_path):
     # exercisable against the real library -- lesson xlviii).
     script = r"""
 import sys
+from pymatgen.io.vasp import Incar
 from vpmdk_core.settings import incar as m
 import tempfile, os
 d = sys.argv[1]
+# The guards are COMPARISON-based, so they follow the installed parser:
+# pymatgen >= 2026 compiles the key side as KEY\s*= (the whitespace crosses
+# a newline, so 'NSW\n= 1e5' PARSES and the raw guards must see it), while
+# older releases (e.g. 2025.10.7 on Python 3.10 CI) never match the
+# newline-split key and silently DROP the tag instead -- a different door,
+# with different correct outcomes. Probe the library instead of pinning one
+# version's behavior.
+key_crosses = "NSW" in dict(Incar.from_str("NSW\n= 7\n"))
+print("KEYCROSS:", key_crosses)
 p = os.path.join(d, "INCAR")
 for text, label in (
     ("NSW\n= 1e5\nIBRION = 2\n", "scientific"),
@@ -6122,9 +6167,23 @@ print("SPRING:", inc.get("SPRING"))
     if "ModuleNotFoundError: No module named 'pymatgen'" in completed.stderr:
         pytest.skip("real pymatgen is not installed")
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    for label in ("scientific", "corrupted", "embedded", "blank-swallow"):
-        assert f"REJECTED OK: {label}" in completed.stdout, completed.stdout
-    assert "SPRING: -5.5" in completed.stdout, completed.stdout
+    if "KEYCROSS: True" in completed.stdout:
+        # The installed parser crosses the newline: every raw guard must see
+        # what the parser sees, and SPRING parses to its value.
+        for label in ("scientific", "corrupted", "embedded", "blank-swallow"):
+            assert f"REJECTED OK: {label}" in completed.stdout, completed.stdout
+        assert "SPRING: -5.5" in completed.stdout, completed.stdout
+    else:
+        # Older pymatgen never matches the newline-split key: the parser
+        # itself drops the tag, so the newline door does not exist and the
+        # comparison-based guards must NOT false-reject; the raw-only guards
+        # (corrupted token, embedded assignment) still fire on the raw text.
+        assert "KEYCROSS: False" in completed.stdout, completed.stdout
+        assert "NOT REJECTED: scientific" in completed.stdout, completed.stdout
+        assert "NOT REJECTED: blank-swallow" in completed.stdout, completed.stdout
+        assert "REJECTED OK: corrupted" in completed.stdout, completed.stdout
+        assert "REJECTED OK: embedded" in completed.stdout, completed.stdout
+        assert "SPRING: None" in completed.stdout, completed.stdout
 
 
 def test_stress_gate_keys_on_the_actual_neb_branch(tmp_path, prepare_inputs, monkeypatch):
@@ -6261,3 +6320,85 @@ def test_species_gate_reads_a_z_keyed_uniq_element_table(tmp_path, prepare_input
     both = DummyCalculator()
     both.model = SimpleNamespace(element_types=("Po",), uniq_element={1: 0})
     vpmdk.run_workdir(str(tmp_path), calculator=both)
+
+
+def test_neb_optimization_rejects_diverged_far_out_image_coordinates(
+    tmp_path, prepare_inputs, monkeypatch
+):
+    # R190 (P2): the optimization branch deliberately preserves unwrapped
+    # image coordinates (committed "fix: preserve unwrapped neb images"), so
+    # a diverged CONTCAR reused as an image reached the backend's periodic
+    # neighbour search with its full excursion -- a 2-atom cell displaced
+    # 10000 cells measured a 19 GB allocation, MemoryError, exit 2
+    # RETRYABLE, while the flat path and the wrap=True NEB branches
+    # neutralised the byte-identical file. The unwrapped read now bounds the
+    # coordinate span (per-axis floors, cell-aware limit) and rejects the
+    # diverged shape as an input error; boundary-adjacent bands stay
+    # unwrapped and accepted (pinned separately by
+    # test_main_neb_runner_preserves_unwrapped_image_coordinates_for_ase_neb).
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={
+            "NSW": "2",
+            "IBRION": "2",
+            "IMAGES": "1",
+            "SPRING": "-5.0",
+            "EDIFFG": "-0.05",
+        },
+    )
+    _write_numbered_neb_poscars(tmp_path)
+    middle = tmp_path / "01" / "POSCAR"
+    text = middle.read_text().splitlines()
+    for index, line in enumerate(text):
+        if line.strip().lower().startswith("direct"):
+            fields = text[index + 1].split()
+            # Two displaced axes, like a genuinely diverged geometry: a
+            # single-axis excursion costs the neighbour search only linearly
+            # (the same reasoning as the MD guard's per-axis floors) and is
+            # deliberately not rejected.
+            fields[0] = str(float(fields[0]) + 1000000.0)
+            fields[1] = str(float(fields[1]) + 1000000.0)
+            text[index + 1] = "  " + "  ".join(fields[:3])
+            break
+    middle.write_text("\n".join(text) + "\n")
+
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
+    with pytest.raises(vpmdk.WorkdirInputError, match="far outside the cell"):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
+
+
+def test_neb_guard_bounds_a_single_axis_divergence(tmp_path, prepare_inputs, monkeypatch):
+    # Cross-review (R192 window, P1): the span-volume rule floors each axis
+    # at 1 A, so a SINGLE-axis excursion -- span (S, ~0, ~0) -- evaluates to
+    # S and stays under the 1e9 A^3 cap however large S grows, while the
+    # neighbour search's per-axis image replication keeps growing linearly
+    # (a 3.9e7 A single-axis span is a measured MemoryError under an 8 GiB
+    # cap). Each axis is now bounded on its own.
+    prepare_inputs(
+        tmp_path,
+        potential="CHGNET",
+        incar_overrides={
+            "NSW": "2",
+            "IBRION": "2",
+            "IMAGES": "1",
+            "SPRING": "-5.0",
+            "EDIFFG": "-0.05",
+        },
+    )
+    _write_numbered_neb_poscars(tmp_path)
+    middle = tmp_path / "01" / "POSCAR"
+    text = middle.read_text().splitlines()
+    for index, line in enumerate(text):
+        if line.strip().lower().startswith("direct"):
+            fields = text[index + 1].split()
+            # ONE displaced fractional axis: ~3.9e7 A of cartesian span on a
+            # single axis, product ~3.9e7 A^3 -- far under the volume cap.
+            fields[0] = str(float(fields[0]) + 10000000.0)
+            text[index + 1] = "  " + "  ".join(fields[:3])
+            break
+    middle.write_text("\n".join(text) + "\n")
+
+    monkeypatch.setattr(vpmdk, "BFGS", DummyNEBOptimizer)
+    with pytest.raises(vpmdk.WorkdirInputError, match="per axis"):
+        vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())

@@ -229,13 +229,26 @@ _EMBEDDED_DETECTABLE_INCAR_TAGS = frozenset(
 _INCAR_LINE_CONTINUATION_RE = re.compile(r"\\\s*\n")
 
 
-def _raw_incar_assignment_list(path: str) -> list[tuple[str, str]]:
+def _raw_incar_assignment_list(
+    path: str, *, continuation_values: bool = False
+) -> list[tuple[str, str]]:
     """Return ``(KEY, raw text)`` assignments in file order, one line at a time.
 
     Comments stripped per line and backslash continuations joined, like
     ``Incar.from_str``; several ``KEY = VALUE`` pairs may share a line. Values
     stay as the RAW TEXT the user wrote, which is the only thing that can be
     compared against what the parser made of them.
+
+    ``continuation_values=True`` is for the RAW-ONLY guards: pymatgen's
+    ``\\s*=\\s*`` crosses the newline on the VALUE side too, so for a
+    blank-valued assignment the parser consumes the NEXT line as the value --
+    ``MAGMOM =\\n10000000000*1.0`` detonated proc_val's list expansion before
+    any guard built on this reader could see the token, and the same spelling
+    bypassed the corrupted-token and int-repair guards. With the flag, a
+    blank unquoted value is substituted by the following non-blank line, the
+    text pymatgen will actually feed to proc_val. The swallow guard MUST keep
+    the default line-scoped read: a blank staying visibly blank is what makes
+    the parser disagreement detectable at all (the R133 rationale above).
     """
 
     with open(path, encoding="utf-8-sig", errors="surrogateescape") as handle:
@@ -248,14 +261,56 @@ def _raw_incar_assignment_list(path: str) -> list[tuple[str, str]]:
     for match in _INCAR_ASSIGNMENT_RE.finditer(text):
         quoted = match.group("qval")
         value = quoted if quoted is not None else (match.group("val") or "")
-        assignments.append((match.group("key").strip().upper(), value.strip()))
+        value = value.strip()
+        if continuation_values and quoted is None:
+            if not value:
+                # Blank unquoted value: pymatgen's \s*=\s* consumes the
+                # following line as the value.
+                remainder_full = text[match.end():]
+                remainder = remainder_full.lstrip("\n \t")
+                lead = len(remainder_full) - len(remainder)
+                value = remainder.split("\n", 1)[0].strip()
+                value_abs_start = match.end() + lead
+                if not value.startswith('"'):
+                    # pymatgen's unquoted value pattern is [^#!;\n]*: it
+                    # stops at ';' and the rest of the line is parsed as
+                    # its own assignment(s). Taking the whole line made
+                    # the raw-only guards judge text the parser never
+                    # consumes -- 'TEBEG =' then '300; NSW = 5' parses
+                    # fine in pymatgen but was falsely rejected on the
+                    # token '300;'. (Comments are already stripped per
+                    # line above; quotes win over ';' in the quoted
+                    # branch, mirrored below.)
+                    value = value.split(";", 1)[0].strip()
+            else:
+                value_abs_start = match.start("val")
+            if value.startswith('"'):
+                # pymatgen's QUOTED branch is re.DOTALL ("(?P<qval>.*?)"), so
+                # a quote here spans to the next '"' anywhere in the file
+                # and the QUOTES ARE NOT PART OF THE VALUE -- proc_val then
+                # expands the content for a list-typed tag. Mirror it so the
+                # guards judge the same text: unconditionally, not only for
+                # an unterminated quote -- a continuation value CLOSED on
+                # its own line ('POTIM =' then '"2.0"') otherwise kept its
+                # quote characters and trailing text, and the corrupted-token
+                # guard falsely rejected an INCAR pymatgen parses fine. With
+                # no closing quote anywhere, keep the raw text (the
+                # unbalanced-quote guards own that case post-parse).
+                closing = text.find('"', value_abs_start + 1)
+                if closing != -1:
+                    value = text[value_abs_start + 1 : closing].strip()
+        assignments.append((match.group("key").strip().upper(), value))
     return assignments
 
 
-def _raw_incar_assignments(path: str) -> Dict[str, str]:
+def _raw_incar_assignments(
+    path: str, *, continuation_values: bool = False
+) -> Dict[str, str]:
     """Return raw INCAR text values keyed as pymatgen keys them (last wins)."""
 
-    return dict(_raw_incar_assignment_list(path))
+    return dict(
+        _raw_incar_assignment_list(path, continuation_values=continuation_values)
+    )
 
 
 def _reject_swallowed_incar_tags(incar, path: str) -> None:
@@ -441,7 +496,7 @@ def _reject_truncated_integer_tags(incar, path: str) -> None:
     """
 
     try:
-        raw_tags = _raw_incar_assignments(path)
+        raw_tags = _raw_incar_assignments(path, continuation_values=True)
     except OSError:
         return
 
@@ -577,7 +632,7 @@ def _repair_mistyped_real_tags(incar, path: str) -> None:
     if not hasattr(incar, "get"):
         return
     try:
-        raw_tags = _raw_incar_assignments(path)
+        raw_tags = _raw_incar_assignments(path, continuation_values=True)
     except OSError:
         return
     for key in _REAL_TAGS_PYMATGEN_INT_TYPES:
@@ -721,7 +776,10 @@ def _reject_huge_repeat_counts(path: str) -> None:
     """
 
     try:
-        assignments = _raw_incar_assignment_list(path)
+        # continuation_values: pymatgen's value side crosses the newline, so
+        # 'MAGMOM =' followed by the token on its own line is exactly what
+        # proc_val will expand -- the raw scan must see it too.
+        assignments = _raw_incar_assignment_list(path, continuation_values=True)
     except OSError:
         return
     for key, raw_value in assignments:

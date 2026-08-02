@@ -2,6 +2,63 @@
 
 ## Unreleased
 
+- fix: a quoted continuation value that closes on its own line is
+  unwrapped like pymatgen unwraps it — the quoted mirror applied only to
+  an unterminated quote, so `POTIM =` followed by `"2.0"` kept its quote
+  characters (and any text after the closing quote) and the raw guards
+  falsely rejected an INCAR pymatgen parses and runs correctly (a
+  regression window of the quoted-mirror fix, never released).
+- fix: the blank-value continuation read stops at `;` like pymatgen's own
+  value pattern — taking the whole next line made the raw-only guards
+  judge text the parser never consumes, falsely rejecting the legal
+  multi-tag spelling `TEBEG =` / `300; NSW = 5` that parses and runs
+  correctly (a regression window of the continuation fix, never released).
+- fix: the raw-text INCAR guards also see a QUOTED value spanning newlines
+  — pymatgen's quoted branch is `re.DOTALL`, so `MAGMOM = "1` followed by
+  `10000000000*1.0"` on the next line reached proc_val's unbounded list
+  expansion (measured linear real RSS, ~150 GB extrapolated at 1e10)
+  before the pre-parse repeat cap could see the token, while the
+  byte-equivalent unquoted spelling was cleanly rejected. With no closing
+  quote anywhere the raw text is kept as-is (the unbalanced-quote guards
+  own that case post-parse).
+- fix: the raw-text INCAR guards (repeat-count cap, corrupted-token
+  rejection, real-tag repair) also see a value written on the line AFTER
+  the `=` — pymatgen's `\s*=\s*` crosses the newline on the value side,
+  so `MAGMOM =` followed by `10000000000*1.0` on its own line detonated
+  proc_val's ~80 GB list expansion inside `Incar.from_file`, before any
+  guard could see the token, and the same spelling bypassed the
+  corrupted-token and repair guards. The swallow guard deliberately keeps
+  the line-scoped read (a blank staying visibly blank is what makes the
+  parser disagreement detectable).
+- fix: the MD divergence guard's message names the per-axis bound — when
+  the per-axis rule fired, the volume-only wording reported a span-volume
+  far below the printed maximum (a self-contradictory diagnostic), unlike
+  its NEB twin.
+- fix: the unwrapped-coordinate span guards (NEB image read and the MD
+  divergence guard) also bound each axis individually — the volume rule
+  floors each axis at 1 Å before taking the product, so a single-axis
+  excursion evaluated to its own length and stayed under the 1e9 Å³ cap
+  however large it grew, while the neighbour search's per-axis image
+  replication kept growing linearly (a 3.9e7 Å single-axis span is a
+  measured MemoryError). The per-axis cap is 1e7 Å, calibrated between the
+  largest completing case (3.9e6 Å, 2.3 s) and the smallest failing one;
+  a cell whose own width exceeds the cap keeps its width as the limit.
+- fix: a NEB image whose coordinates lie far outside the cell (the shape a
+  diverged CONTCAR reused as an image has) is rejected with a clean input
+  error — the optimization branch deliberately preserves unwrapped image
+  coordinates, so the full excursion reached the backend's periodic
+  neighbour search (a measured 19 GB allocation for a 2-atom cell,
+  MemoryError, a retryable exit 2 in server mode). The unwrapped read now
+  bounds the coordinate span with per-axis floors and a cell-aware limit;
+  boundary-adjacent bands remain unwrapped and accepted.
+- tests: three tests no longer assume optional/new dependencies of the
+  development environment — the BAM device-collapse test mirrors the
+  resolver's own torch-missing fallback instead of importing torch
+  unconditionally, and the two INCAR newline/blank-swallow tests probe the
+  installed pymatgen's actual parse behavior (pymatgen >= 2026 crosses a
+  newline-split key and lets a blank value swallow the next assignment;
+  2025-era releases drop the tag instead) and assert the guard outcome
+  correct for that behavior, keeping full detection power on both.
 - fix: a FIFO (named pipe) at `MODEL` is rejected with a clean input error
   instead of hanging — MODEL was the one user-supplied input path with no
   non-regular-file check, so the loader's `open()` blocked forever: a

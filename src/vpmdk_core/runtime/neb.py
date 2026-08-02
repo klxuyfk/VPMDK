@@ -375,6 +375,54 @@ def _read_neb_image_atoms(
         root._validate_finite_geometry(atoms)
         if wrap:
             atoms.wrap()
+        else:
+            # The optimization branch deliberately preserves unwrapped
+            # coordinates (committed: "fix: preserve unwrapped neb images" --
+            # a band crossing a periodic boundary must not be refolded), so
+            # a diverged CONTCAR reused as an image reaches the backend's
+            # periodic neighbour search with its full excursion: a 2-atom
+            # cell displaced 10000 cells measured a 19 GB allocation,
+            # MemoryError, exit 2 RETRYABLE. Bound the unwrapped span the
+            # same way the MD run-time guard does -- per-axis floors, and
+            # the larger of the global cap and the cell's own bounding box,
+            # so boundary-adjacent bands (the committed use case) and
+            # legal long-axis cells stay untouched.
+            from ..io.inputs import (
+                _MAX_PERIODIC_CELL_VOLUME,
+                _MAX_UNWRAPPED_AXIS_SPAN,
+            )
+
+            positions = np.asarray(atoms.get_positions(), dtype=float)
+            if positions.size:
+                span = np.maximum(
+                    positions.max(axis=0) - positions.min(axis=0), 1.0
+                )
+                span_volume = float(span[0] * span[1] * span[2])
+                cell_widths = np.abs(np.asarray(atoms.get_cell())).sum(axis=0)
+                limit = max(
+                    _MAX_PERIODIC_CELL_VOLUME,
+                    float(np.prod(np.maximum(cell_widths, 1.0))),
+                )
+                # A SINGLE-axis excursion escapes the product (the other
+                # floored factors stay 1) while the neighbour search's
+                # per-axis image replication keeps growing linearly -- a
+                # 3.9e7 A single-axis span is a measured MemoryError. Each
+                # axis is therefore also bounded on its own; a cell whose
+                # own width exceeds the cap keeps its width as the limit.
+                axis_limits = np.maximum(
+                    np.maximum(cell_widths, 1.0), _MAX_UNWRAPPED_AXIS_SPAN
+                )
+                if span_volume > limit or bool(np.any(span > axis_limits)):
+                    raise root.WorkdirInputError(
+                        f"NEB image in {image_dir} has atomic positions "
+                        f"spanning a {span[0]:g} x {span[1]:g} x {span[2]:g} "
+                        f"A bounding box (supported maximum {limit:g} A^3 "
+                        f"and {_MAX_UNWRAPPED_AXIS_SPAN:g} A per axis) -- "
+                        "the coordinates lie far outside the cell, the "
+                        "shape a diverged CONTCAR reused as an image has, "
+                        "and the neighbour search would exhaust memory. "
+                        "Wrap or fix the image POSCAR coordinates."
+                    )
         if incar is not None:
             root._apply_initial_magnetization(atoms, incar)
     except root.WorkdirInputError:

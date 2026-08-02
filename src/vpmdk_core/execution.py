@@ -239,7 +239,10 @@ class _MDDivergenceGuardCalculator:
     def _vpmdk_check_positions(self, atoms) -> None:
         if atoms is None:
             return
-        from .io.inputs import _MAX_PERIODIC_CELL_VOLUME
+        from .io.inputs import (
+            _MAX_PERIODIC_CELL_VOLUME,
+            _MAX_UNWRAPPED_AXIS_SPAN,
+        )
 
         positions = np.asarray(atoms.get_positions(), dtype=float)
         if positions.size == 0:
@@ -267,15 +270,29 @@ class _MDDivergenceGuardCalculator:
         cell_widths = np.abs(np.asarray(atoms.get_cell())).sum(axis=0)
         cell_volume_bound = float(np.prod(np.maximum(cell_widths, 1.0)))
         limit = max(_MAX_PERIODIC_CELL_VOLUME, cell_volume_bound)
-        if span_volume > limit:
+        # A SINGLE-axis divergence escapes the product (the other floored
+        # factors stay 1) while the neighbour search's per-axis image
+        # replication keeps growing linearly -- a 3.9e7 A single-axis span
+        # is a measured MemoryError. Bound each axis on its own too; a cell
+        # whose own width exceeds the cap keeps its width as the limit
+        # (mirrors the NEB image-read guard).
+        axis_limits = np.maximum(
+            np.maximum(cell_widths, 1.0), _MAX_UNWRAPPED_AXIS_SPAN
+        )
+        if span_volume > limit or bool(np.any(span > axis_limits)):
+            # Name BOTH bounds, like the NEB twin: when the per-axis rule is
+            # what fires, a volume-only message reported a span-volume far
+            # BELOW the printed maximum -- a self-contradictory diagnostic
+            # with no actionable number.
             raise RuntimeError(
                 "MD trajectory diverged: the unwrapped atomic positions span "
-                f"a {span_volume:g} A^3 bounding box (per-axis spans floored "
-                f"at 1 A; supported maximum {limit:g} A^3), so the next force "
-                "evaluation would exhaust memory in the backend's neighbour "
-                "search. This usually means POTIM (or a thermostat parameter "
-                "such as LANGEVIN_GAMMA) is too large for this system; reduce "
-                "it and rerun."
+                f"a {span[0]:g} x {span[1]:g} x {span[2]:g} A bounding box "
+                f"(supported maximum {limit:g} A^3 with per-axis spans "
+                f"floored at 1 A, and {_MAX_UNWRAPPED_AXIS_SPAN:g} A per "
+                "axis), so the next force evaluation would exhaust memory in "
+                "the backend's neighbour search. This usually means POTIM "
+                "(or a thermostat parameter such as LANGEVIN_GAMMA) is too "
+                "large for this system; reduce it and rerun."
             )
 
     def get_forces(self, atoms=None):

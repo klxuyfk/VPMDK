@@ -1054,3 +1054,193 @@ def test_vasp4_poscar_with_a_commented_counts_line_is_not_computed_as_hydrogen(t
     assert "ACCEPTED ['Si', 'Si']" in commented_v5.stdout, (
         commented_v5.stdout + commented_v5.stderr
     )
+
+
+def test_repeat_guard_sees_a_value_on_the_next_line(tmp_path):
+    # R193 (P2): pymatgen's \s*=\s* crosses the newline on the VALUE side,
+    # so `MAGMOM =` with the repeat token on its own line is exactly what
+    # proc_val expands -- and it detonated (~80 GB for 1e10) INSIDE
+    # Incar.from_file, before any guard built on the line-scoped raw reader
+    # could see the token. The raw-only guards now read a blank value's
+    # continuation line, the text pymatgen actually consumes; the swallow
+    # guard deliberately keeps the line-scoped read (a blank staying
+    # visibly blank is what makes the parser disagreement detectable).
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text("MAGMOM =\n10000000000*1.0\nNSW = 5\n")
+    with pytest.raises(ValueError, match="repeat token|expands to"):
+        incar_module._reject_huge_repeat_counts(str(path))
+
+    # Extra whitespace and blank lines before the continuation still count.
+    path.write_text("MAGMOM =   \n\n   10000000000*1.0\n")
+    with pytest.raises(ValueError, match="repeat token|expands to"):
+        incar_module._reject_huge_repeat_counts(str(path))
+
+    # The continuation reader attributes the next line only when the value
+    # is blank, and the default (line-scoped) reader is unchanged.
+    path.write_text("TEBEG =\n5OO\nNSW = 3\n")
+    with_continuation = dict(
+        incar_module._raw_incar_assignment_list(
+            str(path), continuation_values=True
+        )
+    )
+    assert with_continuation["TEBEG"] == "5OO"
+    line_scoped = dict(incar_module._raw_incar_assignment_list(str(path)))
+    assert line_scoped["TEBEG"] == ""
+
+    # A harmless blank-then-normal file stays accepted by the repeat guard.
+    path.write_text("MAGMOM =\n4*1.0 2*-0.5\nNSW = 5\n")
+    incar_module._reject_huge_repeat_counts(str(path))
+
+
+def test_repeat_guard_sees_a_quoted_value_spanning_newlines(tmp_path):
+    # R194 (P2): the THIRD dimension of the same regex mismatch (after the
+    # key side, R170, and the blank unquoted value side, R193) -- pymatgen's
+    # QUOTED branch is re.DOTALL and crosses newlines, while the raw
+    # reader's quoted branch is line-scoped, so `MAGMOM = "1\n1e10*1.0"`
+    # reached proc_val's unbounded list expansion (~80 GB for 1e10, real RSS
+    # measured linear in the count) before the pre-parse cap could see the
+    # token, while the byte-equivalent unquoted spelling was cleanly
+    # rejected.
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text('MAGMOM = "1\n10000000000*1.0"\nNSW = 0\n')
+    with pytest.raises(ValueError, match="repeat token|expands to"):
+        incar_module._reject_huge_repeat_counts(str(path))
+
+    # Composed with the R193 blank-value continuation: the quote opens on
+    # the line AFTER the '='.
+    path.write_text('MAGMOM =\n"1\n10000000000*1.0"\nNSW = 0\n')
+    with pytest.raises(ValueError, match="repeat token|expands to"):
+        incar_module._reject_huge_repeat_counts(str(path))
+
+    # A small multi-line quoted list stays accepted, and the default
+    # line-scoped reader is unchanged.
+    path.write_text('MAGMOM = "1\n300*2.5"\nNSW = 0\n')
+    incar_module._reject_huge_repeat_counts(str(path))
+    line_scoped = dict(incar_module._raw_incar_assignment_list(str(path)))
+    assert line_scoped["MAGMOM"] == '"1'
+
+    # No closing quote anywhere: the raw text is kept as-is (the
+    # unbalanced-quote guards own that case post-parse) and nothing raises
+    # here.
+    path.write_text('MAGMOM = "1\n300*2.5\nNSW = 0\n')
+    incar_module._reject_huge_repeat_counts(str(path))
+
+
+def test_blank_value_continuation_stops_at_a_semicolon(tmp_path):
+    # R195 (P2, regression window of the R193 continuation): pymatgen's
+    # unquoted value pattern [^#!;\n]* stops at ';' and parses the rest of
+    # the line as its own assignments, but the continuation reader took the
+    # WHOLE next line -- so the legal multi-tag spelling
+    # 'TEBEG =\n300; NSW = 5' parsed fine in pymatgen yet was falsely
+    # rejected on the token '300;'.
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text("TEBEG =\n300; NSW = 5\nIBRION = 0\nPOTIM = 1.0\n")
+    with_continuation = dict(
+        incar_module._raw_incar_assignment_list(
+            str(path), continuation_values=True
+        )
+    )
+    assert with_continuation["TEBEG"] == "300"
+    assert with_continuation["NSW"] == "5"
+    # Full-stack acceptance needs the REAL parser (the conftest stub reads
+    # line-wise, cannot parse the ';' multi-tag line, and its parse makes
+    # the swallow guard fire -- lesson xlviii), so it runs in a subprocess.
+    script = (
+        "import sys\n"
+        "from vpmdk_core.settings import incar as m\n"
+        "inc = m._load_incar(sys.argv[1])\n"
+        "print('TEBEG:', inc.get('TEBEG'), 'NSW:', inc.get('NSW'))\n"
+    )
+    src_dir = str(Path(__file__).resolve().parents[1] / "src")
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(path)],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "VPMDK_TEST_REAL_PYMATGEN": "1",
+            "PYTHONPATH": src_dir + os.pathsep + os.environ.get("PYTHONPATH", ""),
+        },
+    )
+    if "ModuleNotFoundError" in completed.stderr:
+        pytest.skip("real pymatgen is not installed")
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    # Value-crossing pymatgen (>= 2026) reads TEBEG=300 from the next line;
+    # older releases keep TEBEG blank and drop nothing else. BOTH must be
+    # accepted -- the defect under test is the FALSE REJECTION, which is
+    # version-independent.
+    assert "NSW: 5" in completed.stdout, completed.stdout
+    assert (
+        "TEBEG: 300" in completed.stdout or "TEBEG: " in completed.stdout
+    ), completed.stdout
+
+    # A huge repeat before the ';' is still seen and rejected.
+    path.write_text("MAGMOM =\n10000000000*1.0; NSW = 5\n")
+    with pytest.raises(ValueError, match="repeat token|expands to"):
+        incar_module._reject_huge_repeat_counts(str(path))
+
+
+def test_quoted_continuation_value_closed_on_its_own_line_is_unwrapped(tmp_path):
+    # R197 (P2, regression window of the R194 quoted mirror): the quote
+    # rewrite applied only to an UNTERMINATED quote, so a continuation value
+    # CLOSED on its own line ('POTIM =' then '"2.0"') kept its quote
+    # characters (and any text after the closing quote) and the raw-only
+    # guards falsely rejected an INCAR pymatgen parses fine (quotes are NOT
+    # part of pymatgen's qval).
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text('POTIM =\n"2.0"\nNSW = 2\n')
+    raw = dict(
+        incar_module._raw_incar_assignment_list(
+            str(path), continuation_values=True
+        )
+    )
+    assert raw["POTIM"] == "2.0"
+    assert raw["NSW"] == "2"
+
+    # Trailing text after the closing quote is excluded, like pymatgen.
+    path.write_text('TEBEG =\n"300"; NSW = 5\n')
+    raw = dict(
+        incar_module._raw_incar_assignment_list(
+            str(path), continuation_values=True
+        )
+    )
+    assert raw["TEBEG"] == "300"
+
+    # The repeat cap keeps its teeth on a TERMINATED quoted continuation.
+    path.write_text('MAGMOM =\n"10000000000*1.0"\nNSW = 0\n')
+    with pytest.raises(ValueError, match="repeat token|expands to"):
+        incar_module._reject_huge_repeat_counts(str(path))
+
+    # Full-stack acceptance on the real parser (stub-unsafe in-process).
+    path.write_text("IBRION = 0\nMDALGO = 0\nPOTIM =\n\"2.0\"\nNSW = 2\n")
+    script = (
+        "import sys\n"
+        "from vpmdk_core.settings import incar as m\n"
+        "inc = m._load_incar(sys.argv[1])\n"
+        "print('POTIM:', inc.get('POTIM'), 'NSW:', inc.get('NSW'))\n"
+    )
+    src_dir = str(Path(__file__).resolve().parents[1] / "src")
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(path)],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "VPMDK_TEST_REAL_PYMATGEN": "1",
+            "PYTHONPATH": src_dir + os.pathsep + os.environ.get("PYTHONPATH", ""),
+        },
+    )
+    if "ModuleNotFoundError" in completed.stderr:
+        pytest.skip("real pymatgen is not installed")
+    # Value-crossing pymatgen reads POTIM=2.0; older releases keep it blank.
+    # BOTH must be accepted: the defect under test is the false rejection.
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "NSW: 2" in completed.stdout, completed.stdout

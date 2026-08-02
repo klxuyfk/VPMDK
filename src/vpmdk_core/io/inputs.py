@@ -474,6 +474,17 @@ _MAX_PERIODIC_CELL_WIDTH = 1.0e6
 # accepted case keeps the bin count ~1e7 at a typical 5 A cutoff.
 _MAX_PERIODIC_CELL_VOLUME = 1.0e9
 
+# Per-axis companion to the volume cap for UNWRAPPED coordinate spans: the
+# neighbour search replicates periodic images along each axis independently,
+# so a SINGLE-axis excursion escapes any product-of-spans rule (the other
+# floored factors stay 1) while its replication cost keeps growing linearly.
+# Measured on a 3.87 A cell under an 8 GiB cap: a 3.9e6 A single-axis span
+# completes in 2.3 s, 3.9e7 A is a MemoryError -- 1e7 A sits between the
+# largest completing case and the smallest failing one, and the cost at the
+# limit stays bounded (~2 GB). Axes wider than this in the CELL itself keep
+# their own width as the limit.
+_MAX_UNWRAPPED_AXIS_SPAN = 1.0e7
+
 # Two ions closer than this (in Angstrom, minimum-image) are the same site: a
 # duplicated POSCAR coordinate line, or fractional 0.0 and 1.0 coinciding
 # under PBC. No physical pair sits below ~0.5 A (H2 is 0.74 A), and every

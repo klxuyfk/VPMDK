@@ -1375,3 +1375,43 @@ def test_md_divergence_guard_respects_the_cell_bounding_box():
         cell=[[2.0e9, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]], pbc=True,
     )
     guard._vpmdk_check_positions(inside_long_cell)
+
+
+def test_md_divergence_guard_bounds_a_single_axis_divergence(tmp_path, monkeypatch):
+    # Cross-review (R192 window, P1), MD mirror of the NEB single-axis hole:
+    # a collinear divergence with span (S, ~0, ~0) evaluates the floored
+    # product to S and passed the 1e9 A^3 volume rule for any S below 1e9,
+    # while the neighbour search's per-axis replication cost keeps growing
+    # (3.9e7 A measured MemoryError). The guard now bounds each axis too.
+    from ase import Atoms
+
+    monkeypatch.chdir(tmp_path)
+    atoms = Atoms(
+        "Si2", positions=[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+        cell=[10.0, 10.0, 10.0], pbc=True,
+    )
+    calculator = DummyCalculator()
+
+    def fake_maxwell(target, temperature_K=None, **kwargs):
+        velocities = np.zeros((len(target), 3))
+        # ~2e8 A in one 1e6 fs step on ONE axis: far above the 1e7 A axis
+        # cap, far below the 1e9 A^3 floored product.
+        velocities[0] = [2.0e3, 0.0, 0.0]
+        target.set_velocities(velocities)
+
+    monkeypatch.setattr(
+        vpmdk.velocitydistribution, "MaxwellBoltzmannDistribution", fake_maxwell
+    )
+
+    # R193 (P3): when the per-axis rule fires, the message must name the
+    # per-axis bound -- the volume-only wording reported a span-volume far
+    # BELOW the printed maximum (self-contradictory, no actionable number).
+    with pytest.raises(RuntimeError, match="per.?axis"):
+        vpmdk.run_md(
+            atoms,
+            calculator,
+            steps=3,
+            temperature=300,
+            timestep=1.0e6,
+            mdalgo=0,
+        )

@@ -8292,9 +8292,15 @@ def test_resolve_backend_device_mirrors_bam_upstream_collapse():
     # identity therefore rejected byte-identical request/resident pairs with
     # exit 5 and equated pairs that differ in effect. The resolver now
     # mirrors the builder exactly for BAM.
-    import torch
+    # Mirror the resolver's own fallback instead of requiring torch: the
+    # unit-test CI env installs no optional backends, and the production
+    # branch maps a missing/broken torch to cpu.
+    try:
+        import torch
 
-    accelerated = "cuda" if torch.cuda.is_available() else "cpu"
+        accelerated = "cuda" if torch.cuda.is_available() else "cpu"
+    except ImportError:
+        accelerated = "cpu"
 
     assert server_module._resolve_backend_device("BAM", "cpu") == "cpu"
     assert server_module._resolve_backend_device("BAM", "") == "cpu"
