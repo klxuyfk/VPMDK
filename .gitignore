@@ -10,3 +10,16 @@ dist/
 
 AGENT.md
 AGENTS.md
+
+# Calculation outputs produced by running the bundled examples in place.
+examples/**/CONTCAR
+examples/**/OSZICAR
+examples/**/OUTCAR
+examples/**/XDATCAR
+examples/**/CHGCAR
+examples/**/vasprun.xml
+examples/**/energy.csv
+examples/**/*.lammpstrj
+examples/**/*.sock
+examples/**/*.sock.log
+examples/**/*.sock.pid

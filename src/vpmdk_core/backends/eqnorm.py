@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from contextlib import contextmanager
 from typing import Any, Dict
@@ -226,7 +225,10 @@ def _build_eqnorm_calculator(bcar_tags: Dict[str, str]):
     if root.EqnormCalculator is None:
         raise RuntimeError("Eqnorm calculator not available. Install eqnorm and dependencies.")
 
-    model_value = bcar_tags.get("MODEL") or root.DEFAULT_EQNORM_MODEL
+    model_reference = root._resolve_backend_model_reference(
+        "EQNORM", bcar_tags.get("MODEL")
+    )
+    model_value = str(model_reference.value)
     device = root._resolve_device(bcar_tags.get("DEVICE")) or "cpu"
     compile_flag = False
     compile_value = bcar_tags.get("EQNORM_COMPILE")
@@ -235,7 +237,7 @@ def _build_eqnorm_calculator(bcar_tags: Dict[str, str]):
 
     root._ensure_eqnorm_torch_safe_globals()
 
-    if os.path.exists(model_value):
+    if model_reference.kind is root.ModelReferenceKind.LOCAL_PATH:
         variant = _resolve_eqnorm_variant(model_value, bcar_tags)
         with root._temporarily_stage_eqnorm_local_checkpoint(model_value, variant):
             return root.EqnormCalculator(
@@ -244,9 +246,6 @@ def _build_eqnorm_calculator(bcar_tags: Dict[str, str]):
                 device=device,
                 compile=compile_flag,
             )
-    if root._looks_like_filesystem_path(model_value, suffixes=(".pt", ".pth", ".ckpt")):
-        raise FileNotFoundError(f"Eqnorm model not found: {model_value}")
-
     spec, _ = root._ensure_eqnorm_named_model_checkpoint(model_value)
     variant = _resolve_eqnorm_variant(
         model_value,

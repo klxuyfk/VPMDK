@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import sys
 from collections import OrderedDict
 from typing import Any, Dict
 
 import numpy as np
+from ase.calculators.lammps import convert as _lammps_convert
 from ase.io.lammpsdata import Prism
 from ase.io.vasp import write_vasp_xdatcar
+
+
+def _root():
+    return sys.modules["vpmdk_core"]
 
 
 def _append_xdatcar_configuration(path: str, atoms, frame_number: int) -> None:
@@ -159,19 +165,33 @@ def _write_xdatcar_step(path: str, atoms, step_index: int) -> None:
 def _write_lammps_trajectory_step(path: str, atoms, step_index: int) -> None:
     """Write or append a LAMMPS trajectory frame for the given MD step."""
 
+    # The one output artifact the fixed-name FIFO sweep could not cover (the
+    # path is configurable), so per the guard-the-function-that-touches-the-
+    # file rule the check lives HERE: a readerless FIFO blocks open(...,'w'/'a')
+    # forever and wedged the worker mid-MD, after real steps were paid for.
+    _root()._require_writable_artifact_path(path)
     append = step_index != 0
     file_mode = "a" if append else "w"
 
     prism = Prism(atoms.get_cell().array, atoms.get_pbc())
     lx, ly, lz, xy, xz, yz = prism.get_lammps_prism()
+    # LAMMPS defines the dump's BOX BOUNDS for a triclinic box as
+    #   xlo_bound = xlo + MIN(0, xy, xz, xy+xz),  xhi_bound = xhi + MAX(...)
+    #   ylo_bound = ylo + MIN(0, yz),             yhi_bound = yhi + MAX(0, yz)
+    # so the bounding box is always at least as large as the cell. Subtracting the
+    # tilt instead SHRANK it by |xy|+|xz| (and |yz|), and since a reader recovers the
+    # edge as (xhi_bound - xlo_bound) - |xy| - |xz| -- ase.io.lammpsrun.construct_cell
+    # does exactly that -- every consumer rebuilt a lattice short by 2(|xy|+|xz|),
+    # with a correspondingly wrong volume. Orthogonal cells have zero tilt and were
+    # unaffected, which is why this survived.
     x_tilt_min = min(0.0, xy, xz, xy + xz)
     x_tilt_max = max(0.0, xy, xz, xy + xz)
-    xlo = 0.0 - x_tilt_min
-    xhi = lx - x_tilt_max
+    xlo = 0.0 + x_tilt_min
+    xhi = lx + x_tilt_max
     y_tilt_min = min(0.0, yz)
     y_tilt_max = max(0.0, yz)
-    ylo = 0.0 - y_tilt_min
-    yhi = ly - y_tilt_max
+    ylo = 0.0 + y_tilt_min
+    yhi = ly + y_tilt_max
     zlo = 0.0
     zhi = lz
     pbc_flags = ["pp" if periodic else "ff" for periodic in atoms.get_pbc()]
@@ -192,7 +212,20 @@ def _write_lammps_trajectory_step(path: str, atoms, step_index: int) -> None:
     velocities = atoms.get_velocities()
     velocity_data = None
     if velocities is not None:
-        velocity_data = prism.vector_to_lammps(velocities, wrap=False)
+        # The dump's vx/vy/vz columns are read by every consumer in LAMMPS
+        # `metal` units (Angstrom/ps -- ase.io.lammpsrun defaults
+        # units='metal' and converts), while atoms.get_velocities() is
+        # Angstrom/ASE-time: written raw, every velocity was
+        # 1000*ase.units.fs = 98.227x too small (kinetic quantities 9648x),
+        # in a file whose positions and box in the SAME frame are exact --
+        # ASE's own write_lammps_data applies this exact conversion after
+        # the same prism rotation.
+        velocity_data = _lammps_convert(
+            prism.vector_to_lammps(velocities, wrap=False),
+            "velocity",
+            "ASE",
+            "metal",
+        )
 
     with open(path, file_mode, encoding="utf-8") as handle:
         handle.write("ITEM: TIMESTEP\n")
@@ -207,6 +240,14 @@ def _write_lammps_trajectory_step(path: str, atoms, step_index: int) -> None:
         columns = ["id", "type", "xs", "ys", "zs", "ix", "iy", "iz"]
         if velocity_data is not None:
             columns.extend(["vx", "vy", "vz"])
+        # The type->species mapping exists only in this writer; without it in
+        # the file, ase.io.lammpsrun (given no out-of-band specorder) falls
+        # back to feeding the type index to Atoms(symbols=...) as an ATOMIC
+        # NUMBER, so an Si dump read back as H with every mass-weighted
+        # quantity off by m(Si)/m(H). The reader prioritizes an `element`
+        # column (LAMMPS `dump_modify element` style) over `type`; appended
+        # last so the legacy column prefix is unchanged.
+        columns.append("element")
         handle.write("ITEM: ATOMS " + " ".join(columns) + "\n")
 
         for index, (scaled, images, symbol) in enumerate(
@@ -216,4 +257,5 @@ def _write_lammps_trajectory_step(path: str, atoms, step_index: int) -> None:
             values = [index, type_id, *scaled.tolist(), *images.tolist()]
             if velocity_data is not None:
                 values.extend(velocity_data[index - 1].tolist())
+            values.append(symbol)
             handle.write(" ".join(str(value) for value in values) + "\n")

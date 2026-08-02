@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 import numpy as np
+import ase.units
 import xml.etree.ElementTree as ET
 
 import vpmdk
@@ -111,6 +112,80 @@ def test_estimate_neb_chain_approximation_uses_neighbor_displacements():
     assert np.allclose(approx.chain_plus_total, np.array([12.0, 0.0, 0.0], dtype=float), atol=1e-12)
 
 
+def test_estimate_neb_chain_approximation_uses_minimum_image_tangent():
+    # A migrating atom crossing a periodic face: POSCAR fractional coordinates
+    # wrap into [0, 1), so the raw next-prev difference spans nearly the whole
+    # cell while the physical image separation is a fraction of an angstrom.
+    # ASE's NEB engine takes the minimum-image tangent (Spring._find_mic ->
+    # ase.geometry.find_mic); the OUTCAR TANGENT block must describe the same
+    # band the optimizer relaxed.
+    a = 5.43
+    cell = np.eye(3) * a
+    frac_prev = np.array([[0.20, 0.0, 0.95], [0.5, 0.5, 0.5]])
+    frac_cur = np.array([[0.26, 0.0, 0.99], [0.5, 0.5, 0.5]])
+    frac_next = np.array([[0.32, 0.0, 0.03], [0.5, 0.5, 0.5]])
+    prev, cur, nxt = (f @ cell for f in (frac_prev, frac_cur, frac_next))
+    forces = np.array([[0.1, 0.0, 0.5], [0.0, 0.0, 0.0]], dtype=float)
+
+    approx = vpmdk._estimate_neb_chain_approximation(
+        positions=cur,
+        forces=forces,
+        prev_positions=prev,
+        next_positions=nxt,
+        cell=cell,
+        pbc=np.array([True, True, True]),
+    )
+
+    assert approx is not None
+    # Minimum-image displacement is (0.6516, 0, 0.4344) A -> unit tangent
+    # (0.8321, 0, 0.5547). The raw subtraction gave (0.1293, 0, -0.9916):
+    # 116 degrees off with the z sign inverted.
+    assert np.allclose(
+        approx.tangent_vectors[0], [0.832050, 0.0, 0.554700], atol=1e-6
+    )
+    assert approx.tangent_vectors[0][2] > 0.0
+
+
+def test_estimate_neb_chain_approximation_without_cell_keeps_raw_difference():
+    # Callers with bare position arrays (no cell/pbc) must keep the raw
+    # difference: there is nothing to wrap against.
+    prev = np.array([[0.0, 0.0, 5.1585], [2.715, 2.715, 2.715]])
+    cur = np.array([[0.3258, 0.0, 5.3757], [2.715, 2.715, 2.715]])
+    nxt = np.array([[0.6516, 0.0, 0.1629], [2.715, 2.715, 2.715]])
+    forces = np.zeros_like(cur)
+    forces[0] = [0.1, 0.0, 0.5]
+
+    approx = vpmdk._estimate_neb_chain_approximation(
+        positions=cur, forces=forces, prev_positions=prev, next_positions=nxt
+    )
+
+    assert approx is not None
+    raw = (nxt - prev).ravel()
+    expected = raw / np.linalg.norm(raw)
+    assert np.allclose(approx.tangent_vectors.ravel(), expected, atol=1e-12)
+
+
+def test_estimate_neb_chain_approximation_zero_cell_keeps_raw_difference():
+    # A zero cell (ASE's default for molecules) must not be treated as
+    # periodic even if pbc flags are accidentally truthy.
+    prev = np.array([[0.0, 0.0, 0.0]])
+    cur = np.array([[1.0, 0.0, 0.0]])
+    nxt = np.array([[2.0, 0.0, 0.0]])
+    forces = np.array([[1.0, 0.0, 0.0]])
+
+    approx = vpmdk._estimate_neb_chain_approximation(
+        positions=cur,
+        forces=forces,
+        prev_positions=prev,
+        next_positions=nxt,
+        cell=np.zeros((3, 3)),
+        pbc=np.array([True, True, True]),
+    )
+
+    assert approx is not None
+    assert np.allclose(approx.tangent_vectors, [[1.0, 0.0, 0.0]], atol=1e-12)
+
+
 def test_relaxation_neb_chain_block_uses_neighbor_approximation(tmp_path: Path, load_atoms):
     atoms = load_atoms()
 
@@ -212,7 +287,13 @@ def test_relaxation_oszicar_pseudo_scf_is_off_by_default(tmp_path: Path, load_at
     assert electronic.find("./i[@name='EDIFF']") is None
     assert electronic.find("./i[@name='NBANDS']") is None
     assert root.find("./incar/i[@name='NELMIN']") is None
-    assert root.find(".//scstep/energy") is None
+    # scstep is NOT part of the pseudo-SCF feature: ase.io.vasp.read_vasp_xml
+    # does `step.findall("scstep/energy")[-1]` unguarded, so a vasprun.xml
+    # without it cannot be opened by ASE at all and pymatgen returns `inf eV`
+    # from final_energy after a single warning. This assertion used to require
+    # exactly that unreadable file for the DEFAULT configuration; what stays
+    # gated is the fabricated SCF ladder (NELMIN/EDIFF, the totalsc timing).
+    assert root.find(".//scstep/energy") is not None
     assert root.find("./calculation/time[@name='totalsc']") is None
 
 
@@ -418,7 +499,12 @@ def test_relaxation_vasprun_includes_kpoints_and_omits_pseudo_scf_timing_by_defa
     first_calc = root.find("calculation")
     assert first_calc is not None
     assert first_calc.find("./time[@name='totalsc']") is None
-    assert first_calc.find("scstep") is None
+    # The pseudo-SCF TIMING stays off by default; the scstep energy block itself
+    # is what every VASP XML reader requires (see the default-configuration test
+    # above), so it is written for every ionic step.
+    scstep_energy = first_calc.find("./scstep/energy")
+    assert scstep_energy is not None
+    assert scstep_energy.find("./i[@name='e_0_energy']") is not None
 
 
 def test_relaxation_isif3_moves_ions_and_cell(tmp_path: Path, load_atoms, arrays_close):
@@ -540,8 +626,15 @@ def test_relaxation_isif4_uses_constant_volume_filter(tmp_path: Path, load_atoms
         monkeypatch.undo()
 
     assert captured_kwargs.get("constant_volume") is True
-    expected_pressure = 7.5 * vpmdk.KBAR_TO_EV_PER_A3
-    assert pytest.approx(captured_kwargs.get("scalar_pressure", 0.0), rel=1e-12) == expected_pressure
+    # R130: PSTRESS must NOT be forwarded at constant volume. An external
+    # hydrostatic pressure does no work when the volume is fixed, so it has to be
+    # inert -- but ASE adds -V*P*I to the virial and removes only the TRACE after
+    # solving against the deformation gradient, so once F != I a traceless
+    # remainder drives the cell. Measured with EMT/Cu at NSW=100: ISIF=5 lost 18.5%
+    # of its volume at PSTRESS=500 and 41.7% at 2000, ISIF=4 lost 42.2% at 2000,
+    # with the energy diverging -- in modes both VPMDK and VASP document as
+    # constant volume. This assertion previously codified the forwarding.
+    assert "scalar_pressure" not in captured_kwargs
     assert captured_kwargs.get("hydrostatic_strain") in (None, False)
     assert seen_constraints and seen_constraints[0] == initial_constraints
     assert atoms.constraints == initial_constraints
@@ -795,3 +888,707 @@ def test_relaxation_stops_when_energy_change_below_tolerance(
 
     assert instance is not None
     assert instance.nsteps == 3
+
+
+def test_stress_output_uses_vasps_sign_and_units(tmp_path: Path, load_atoms):
+    # R126 (P1): VPMDK wrote ASE's tension-positive eV/A^3 stress into fields that
+    # VASP defines the other way round:
+    #   OUTCAR "in kB"           -> -sigma in kBar
+    #   OUTCAR "Total" (eV)      -> -sigma * V
+    #   vasprun.xml stress varray-> -sigma in kBar
+    # ASE's own parsers encode that convention (`stress_arr = -np.array(stress)`
+    # ... `* 1e-1 * ase.units.GPa` for OUTCAR, `stress *= -0.1 * GPa` for the XML),
+    # so every standard reader silently got the stress sign-inverted -- and, for the
+    # XML, also scaled by 1/1602.18. A COMPRESSED cell must report a POSITIVE
+    # external pressure, otherwise the usual "expand while the pressure is positive"
+    # lattice-constant loop moves the cell the wrong way.
+    atoms = load_atoms()
+    sigma_xx = -0.05  # eV/A^3, ASE sign: negative = compression
+    voigt = np.array([sigma_xx, sigma_xx, sigma_xx, 0.0, 0.0, 0.0], dtype=float)
+
+    class StressDummyCalculator(DummyCalculator):
+        def calculate(self, atoms=None, properties=("energy",), system_changes=()):
+            super().calculate(atoms=atoms, properties=properties, system_changes=system_changes)
+            self.results["stress"] = voigt
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_single_point(atoms, StressDummyCalculator(), isif=3)
+    finally:
+        monkeypatch.undo()
+
+    expected_kbar = -sigma_xx / vpmdk.KBAR_TO_EV_PER_A3
+    expected_total = -sigma_xx * atoms.get_volume()
+    assert expected_kbar > 0.0  # compression -> positive in VASP's convention
+
+    outcar = (tmp_path / "OUTCAR").read_text()
+    kbar_line = next(line for line in outcar.splitlines() if line.startswith("  in kB"))
+    assert [float(value) for value in kbar_line.split()[2:5]] == pytest.approx(
+        [expected_kbar] * 3, rel=1e-4
+    )
+    pressure_line = next(
+        line for line in outcar.splitlines() if "external pressure" in line
+    )
+    assert float(pressure_line.split("=")[1].split()[0]) == pytest.approx(
+        expected_kbar, rel=1e-4
+    )
+    total_line = next(line for line in outcar.splitlines() if line.startswith("  Total"))
+    assert [float(value) for value in total_line.split()[1:4]] == pytest.approx(
+        [expected_total] * 3, rel=1e-4
+    )
+
+    tree = ET.parse(tmp_path / "vasprun.xml")
+    rows = tree.find(".//varray[@name='stress']")
+    assert rows is not None
+    written = np.array([[float(v) for v in row.text.split()] for row in rows])
+    assert written[0, 0] == pytest.approx(expected_kbar, rel=1e-4)
+    # ASE's documented conversion must recover the calculator's own stress.
+    assert (written * -0.1 * ase.units.GPa)[0, 0] == pytest.approx(sigma_xx, rel=1e-6)
+    # VPMDK reads its own NEB image output back, so the inverse must close.
+    _, _, parsed = vpmdk._read_last_vasprun_step(str(tmp_path / "vasprun.xml"))
+    assert parsed[0, 0] == pytest.approx(sigma_xx, rel=1e-6)
+
+
+def test_energy_convergence_does_not_leak_ases_default_force_limit(load_atoms):
+    # R126/R127 (P1): ASE's Optimizer.irun is `irun(self, fmax=0.05, steps=...)` and
+    # its first statement is `self.fmax = fmax`, so the `dyn.fmax = config.fmax`
+    # assignment before the call was dead. EDIFFG > 0 deliberately sets a NEGATIVE
+    # force limit so ONLY the energy criterion can stop the run, but every yielded
+    # force_converged flag was evaluated against 0.05 eV/A instead -- measured
+    # end-to-end, a run with EDIFFG=1e-12 stopped at |dE| = 3e-4 eV with NSW far from
+    # exhausted, writing an under-relaxed CONTCAR and exiting 0.
+    from ase.calculators.emt import EMT
+
+    seen: dict[str, float] = {}
+
+    class ProbeBFGS(vpmdk.BFGS):
+        def irun(self, *args, **kwargs):
+            generator = super().irun(*args, **kwargs)
+            seen["fmax"] = self.fmax
+            return generator
+
+    from ase.build import bulk
+
+    # EMT has no Si parameters; Cu is the standard cheap, deterministic choice.
+    atoms = bulk("Cu", "fcc", a=3.6, cubic=True)
+    atoms.positions[0] += (0.3, 0.1, 0.0)
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(vpmdk, "BFGS", ProbeBFGS)
+    try:
+        result = vpmdk.relax(
+            atoms,
+            calculator=EMT(),
+            steps=60,
+            fmax=-1e-12,
+            energy_tolerance=1e-12,
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert seen["fmax"] == -1e-12, "ASE's 0.05 default overwrote the requested fmax"
+    # A negative fmax can never force-converge, so only the energy criterion fires.
+    delta = abs(result.steps[-1].potential_energy - result.steps[-2].potential_energy)
+    assert delta <= 1e-12
+    assert float(np.abs(result.forces).max()) < 1e-4
+
+
+def test_isif6_applies_pstress_that_strainfilter_cannot_take(load_atoms):
+    # R127: ase.filters.StrainFilter has no scalar_pressure argument, so a PSTRESS
+    # given with ISIF=6 -- a mode where cell degrees of freedom are active, i.e. one
+    # where the docs say PSTRESS applies -- was silently dropped and the cell relaxed
+    # to zero stress. A high-pressure ISIF=6 sweep produced the same structure at
+    # every PSTRESS. Measured with CHGNET: ISIF=6 PSTRESS=0 and PSTRESS=500 both gave
+    # V=40.7168 A^3 before; now 500 kBar gives 29.1423 A^3, matching the ISIF=3
+    # control, with the ions still frozen at their input fractional coordinates.
+    builder, freeze_required = vpmdk._make_relaxation_builder(6, None, 0.0)
+    assert builder is vpmdk.StrainFilter
+    assert freeze_required is False
+
+    # An explicit PSTRESS=0 must keep the documented StrainFilter mapping so runs
+    # that were already correct stay bit-for-bit unchanged.
+    builder_zero, _ = vpmdk._make_relaxation_builder(6, 0.0, 0.0)
+    assert builder_zero is vpmdk.StrainFilter
+
+    pressure = 500.0 * vpmdk.KBAR_TO_EV_PER_A3
+    builder_pressure, freeze_pressure = vpmdk._make_relaxation_builder(
+        6, pressure, pressure
+    )
+    assert freeze_pressure is True, "ISIF=6 must not move ions"
+    relax_object = builder_pressure(load_atoms())
+    assert isinstance(relax_object, vpmdk.UnitCellFilter)
+    assert relax_object.scalar_pressure == pytest.approx(pressure)
+
+
+@pytest.mark.parametrize("isif,pstress", [(6, None), (6, 500.0), (5, 500.0), (7, 500.0)])
+def test_cell_only_relaxations_report_physical_forces(
+    tmp_path: Path, isif: int, pstress: float | None
+):
+    # R129: ISIF 5/6/7 hold the ions with an internally installed FixAtoms so that
+    # only the cell relaxes, and the VASP-compat recorder read forces with
+    # apply_constraint=True -- so OUTCAR's TOTAL-FORCE table, "FORCES: max atom,
+    # RMS", the total drift and the vasprun.xml forces varray were all exactly 0.0.
+    # Any force check (VTST, custodian, `grep "FORCES: max atom"`) read the run as
+    # perfectly converged. Real VASP reports the physical forces in these modes.
+    #
+    # R127's ISIF=6+PSTRESS fix made this visible as a DISCONTINUITY: the same
+    # ISIF=6 input reported real forces at PSTRESS=0 (StrainFilter, no freeze) and
+    # hard zeros at PSTRESS=500 (UnitCellFilter + freeze).
+    from ase.build import bulk
+    from ase.calculators.emt import EMT
+
+    atoms = bulk("Cu", "fcc", a=3.6, cubic=True)
+    atoms.positions[0] += (0.05, 0.02, 0.0)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    try:
+        vpmdk.run_relaxation(
+            atoms,
+            EMT(),
+            steps=3,
+            fmax=0.01,
+            isif=isif,
+            stress_isif=isif,
+            pstress=pstress,
+            ibrion=2,
+        )
+    finally:
+        monkeypatch.undo()
+
+    outcar = (tmp_path / "OUTCAR").read_text()
+    force_lines = [line for line in outcar.splitlines() if "FORCES: max atom" in line]
+    assert force_lines
+    reported = float(force_lines[-1].split()[-2])
+    assert reported > 1e-3, "cell-only relaxation reported zeroed forces"
+
+    tree = ET.parse(tmp_path / "vasprun.xml")
+    rows = tree.findall(".//varray[@name='forces']/v")
+    assert rows
+    values = np.array([[float(v) for v in row.text.split()] for row in rows])
+    assert np.abs(values).max() > 1e-3
+
+
+def test_internal_isif_freeze_is_dropped_but_user_constraints_are_kept(tmp_path: Path):
+    # The recorder must remove ONLY VPMDK's own freeze: a user's selective dynamics
+    # is a real constraint and must keep zeroing the forces it fixes.
+    from ase.build import bulk
+    from ase.calculators.emt import EMT
+    from ase.constraints import FixAtoms
+
+    from vpmdk_core.io import vasp_compat
+    from vpmdk_core.runtime import relax as relax_module
+
+    atoms = bulk("Cu", "fcc", a=3.6, cubic=True)
+    atoms.positions[0] += (0.05, 0.02, 0.0)
+    atoms.calc = EMT()
+    user_constraint = FixAtoms(indices=[1])
+    atoms.set_constraint(user_constraint)
+
+    with relax_module._temporarily_freeze_atoms(atoms, True):
+        with vasp_compat._without_internal_isif_freeze(atoms):
+            forces = atoms.get_forces(apply_constraint=True)
+        # The internal freeze is restored for the optimiser itself.
+        assert len(atoms.constraints) == 2
+
+    assert np.abs(forces[0]).max() > 1e-3, "internal freeze still zeroed the report"
+    assert np.allclose(forces[1], 0.0), "user selective dynamics was dropped"
+    assert list(atoms.constraints) == [user_constraint]
+
+
+@pytest.mark.parametrize("isif", [4, 5])
+def test_constant_volume_modes_ignore_pstress(tmp_path: Path, isif: int, capsys):
+    # R130: PSTRESS was forwarded as scalar_pressure into the constant_volume=True
+    # UnitCellFilter. At fixed volume a hydrostatic pressure can do no work, so it
+    # must be inert -- but ASE adds -V*P*I to the virial and removes only the trace
+    # AFTER solving against the deformation gradient, leaving a traceless driving
+    # force once F != I. Measured (EMT/Cu, NSW=100, rattle 0.10/seed 1):
+    #   ISIF=5: dV = -0.52% at PSTRESS=0, -18.48% at 500, -41.69% at 2000
+    #   ISIF=4: dV = -0.001% at 0, -42.15% at 2000
+    # with the energy diverging instead of relaxing, in modes documented as
+    # constant volume. Dropping it silently would be its own defect, so it warns.
+    from ase.build import bulk
+    from ase.calculators.emt import EMT
+
+    volumes = []
+    for pstress in (0.0, 2000.0):
+        atoms = bulk("Cu", "fcc", a=3.61, cubic=True)
+        atoms.rattle(0.10, seed=1)
+        initial_volume = atoms.get_volume()
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.chdir(tmp_path)
+        try:
+            vpmdk.run_relaxation(
+                atoms,
+                EMT(),
+                steps=40,
+                fmax=0.02,
+                isif=isif,
+                stress_isif=isif,
+                pstress=pstress,
+                ibrion=2,
+            )
+        finally:
+            monkeypatch.undo()
+        volumes.append(atoms.get_volume() / initial_volume)
+
+    # The pressure must not change the trajectory at all.
+    assert volumes[1] == pytest.approx(volumes[0], rel=1e-9)
+    assert abs(volumes[0] - 1.0) < 0.02, "constant volume was not preserved"
+    assert "PSTRESS is ignored" in capsys.readouterr().out
+
+
+def test_pstress_output_reports_corrected_pressure_and_pullay_stress(
+    tmp_path: Path, load_atoms
+):
+    # R137 (P3): VASP defines PSTRESS as a Pulay stress -- all stress output
+    # is corrected by subtracting it from the diagonal, 'external pressure'
+    # reports the CORRECTED value (~0 for a cell equilibrated at PSTRESS) and
+    # the 'Pullay stress' field echoes PSTRESS. VPMDK printed the RAW internal
+    # pressure with a hard-coded 'Pullay stress = 0.00', the exact transpose:
+    # a converged PSTRESS=500 run read 'external pressure = 500.00 kB', so the
+    # VASP-native convergence signal '|external pressure| ~ 0' claimed the run
+    # never reached the target.
+    atoms = load_atoms()
+    pstress_kbar = 500.0
+    sigma_xx = -pstress_kbar * vpmdk.KBAR_TO_EV_PER_A3  # exactly balances
+    voigt = np.array([sigma_xx, sigma_xx, sigma_xx, 0.0, 0.0, 0.0], dtype=float)
+
+    class StressDummyCalculator(DummyCalculator):
+        def calculate(self, atoms=None, properties=("energy",), system_changes=()):
+            super().calculate(atoms=atoms, properties=properties, system_changes=system_changes)
+            self.results["stress"] = voigt
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+
+        def attach(self, callback, *args, **kwargs):
+            self._callback = callback
+
+        def run(self, *args, **kwargs):
+            self._callback()
+            return True
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyBFGS)
+    monkeypatch.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_relaxation(
+            atoms,
+            StressDummyCalculator(),
+            steps=1,
+            fmax=0.01,
+            isif=3,
+            pstress=pstress_kbar,
+        )
+    finally:
+        monkeypatch.undo()
+
+    outcar = (tmp_path / "OUTCAR").read_text()
+    pressure_line = next(
+        line for line in outcar.splitlines() if "external pressure" in line
+    )
+    # Internal stress balances the applied PSTRESS: corrected pressure ~ 0,
+    # Pullay field echoes the applied 500.
+    assert float(pressure_line.split()[3]) == pytest.approx(0.0, abs=0.01)
+    assert float(pressure_line.split()[-2]) == pytest.approx(500.0, abs=0.01)
+    kbar_line = next(line for line in outcar.splitlines() if line.startswith("  in kB"))
+    assert [float(value) for value in kbar_line.split()[2:5]] == pytest.approx(
+        [0.0] * 3, abs=0.01
+    )
+
+    # The vasprun stress varray is the same corrected tensor.
+    import xml.etree.ElementTree as ET
+
+    tree = ET.parse(tmp_path / "vasprun.xml")
+    stress_rows = tree.findall(".//varray[@name='stress']/v")
+    assert stress_rows
+    diagonal = [float(row.text.split()[index]) for index, row in enumerate(stress_rows[-3:])]
+    assert diagonal == pytest.approx([0.0] * 3, abs=0.01)
+
+
+def test_vasprun_echoes_the_requested_nsw_not_the_step_count(
+    tmp_path: Path, load_atoms
+):
+    # R142 (P2): NSW was echoed as len(recorder.steps), but pymatgen's
+    # Vasprun.converged_ionic rule is 'converged iff len(ionic_steps) < NSW'
+    # -- with the echo equal to the count, every relaxation that converged
+    # early read converged=False (constant, information-free), so
+    # custodian/atomate2-style gates re-ran healthy runs. Real VASP echoes
+    # the REQUESTED value.
+    import xml.etree.ElementTree as ET
+
+    atoms = load_atoms()
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+
+        def attach(self, callback, *args, **kwargs):
+            self._callback = callback
+
+        def run(self, *args, **kwargs):
+            for _ in range(3):  # converges after 3 recorded steps
+                self._callback()
+            return True
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyBFGS)
+    monkeypatch.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_relaxation(atoms, DummyCalculator(), steps=8, fmax=0.01, isif=2)
+    finally:
+        monkeypatch.undo()
+
+    tree = ET.parse(tmp_path / "vasprun.xml")
+    echoed = [
+        node.text
+        for node in tree.iter("i")
+        if node.get("name") == "NSW"
+    ]
+    assert echoed == ["8", "8"], echoed
+    # The recorded step count is untouched (pinned legacy behavior).
+    assert len(tree.findall(".//calculation")) == 3
+
+
+def test_pstress_vasprun_energy_carries_pv_term_and_declares_pstress(
+    tmp_path: Path, load_atoms
+):
+    # R139 (P2): real VASP writes the ENTHALPY E + PSTRESS*V into vasprun's
+    # calculation-level e_fr/e_wo/e_0 fields (scstep and OUTCAR stay plain E;
+    # measured on ASE's real-VASP testdata vasprun_pstress.xml) and echoes
+    # PSTRESS in <incar> and <parameters>. VPMDK wrote plain E and no PSTRESS
+    # anywhere, so pymatgen consumers read energies off by PSTRESS*V per
+    # structure and ASE's reader only agreed by accident (it subtracts a
+    # pstress it could not find from an energy that never contained it). The
+    # two halves must land together: either alone shifts ASE readers by +-PV.
+    import xml.etree.ElementTree as ET
+
+    import ase.io
+
+    atoms = load_atoms()
+    pstress_kbar = 500.0
+    energy_ev = -1.25
+    sigma = -pstress_kbar * vpmdk.KBAR_TO_EV_PER_A3
+    voigt = np.array([sigma] * 3 + [0.0] * 3, dtype=float)
+
+    class StressDummyCalculator(DummyCalculator):
+        def calculate(self, atoms=None, properties=("energy",), system_changes=()):
+            super().calculate(atoms=atoms, properties=properties, system_changes=system_changes)
+            self.results["energy"] = energy_ev
+            self.results["stress"] = voigt
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+
+        def attach(self, callback, *args, **kwargs):
+            self._callback = callback
+
+        def run(self, *args, **kwargs):
+            self._callback()
+            return True
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyBFGS)
+    monkeypatch.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_relaxation(
+            atoms,
+            StressDummyCalculator(),
+            steps=1,
+            fmax=0.01,
+            isif=3,
+            pstress=pstress_kbar,
+        )
+    finally:
+        monkeypatch.undo()
+
+    pv_term = pstress_kbar * vpmdk.KBAR_TO_EV_PER_A3 * atoms.get_volume()
+    tree = ET.parse(tmp_path / "vasprun.xml")
+    calc_e = float(tree.find(".//calculation/energy/i[@name='e_fr_energy']").text)
+    scstep_e = float(
+        tree.find(".//calculation/scstep/energy/i[@name='e_fr_energy']").text
+    )
+    assert scstep_e == pytest.approx(energy_ev, abs=1e-8)
+    assert calc_e == pytest.approx(energy_ev + pv_term, abs=1e-6)
+    # PSTRESS is declared in BOTH blocks (ASE reads parameters, lowercased).
+    assert tree.find(".//incar/i[@name='PSTRESS']") is not None
+    assert tree.find(".//parameters//i[@name='PSTRESS']") is not None
+    # And the documented ASE consumer round-trips back to the plain energy.
+    restored = ase.io.read(str(tmp_path / "vasprun.xml"))
+    assert restored.get_potential_energy() == pytest.approx(energy_ev, abs=1e-5)
+    # OSZICAR keeps the plain E, like real VASP.
+    oszicar = (tmp_path / "OSZICAR").read_text()
+    assert "E0=  -.12500000E+01" in oszicar
+
+
+def test_neb_vasprun_readback_undoes_pstress_transformations(tmp_path: Path):
+    # R139 (P2): the NEB parent aggregate reads each image's vasprun.xml back
+    # through _read_last_vasprun_step and re-records the values through the
+    # parent writers, which apply the PSTRESS transformations AGAIN -- so a
+    # PSTRESS NEB band reported E+2PV in the parent vasprun, E+PV in the
+    # parent OSZICAR/OUTCAR, and a doubly-shifted parent pressure, while the
+    # per-image files were correct (measured on the stock VTST example at
+    # PSTRESS=100). The reader must return the PLAIN energy and RAW ASE
+    # stress, using the PSTRESS the image file itself declares.
+    import vpmdk_core.runtime.neb as neb_module
+
+    pstress_kbar = 100.0
+    volume = 5.0 ** 3
+    energy_ev = -10.0
+    pv = pstress_kbar * vpmdk.KBAR_TO_EV_PER_A3 * volume
+    raw_sigma = -0.02  # ASE-signed eV/A^3
+    file_kbar = -raw_sigma / vpmdk.KBAR_TO_EV_PER_A3 - pstress_kbar
+
+    path = tmp_path / "vasprun.xml"
+    path.write_text(
+        "<modeling>"
+        '<incar><i name="PSTRESS" type="float">100.00000000</i></incar>'
+        "<calculation>"
+        '<structure><crystal><varray name="basis">'
+        "<v>5.0 0.0 0.0</v><v>0.0 5.0 0.0</v><v>0.0 0.0 5.0</v>"
+        "</varray></crystal></structure>"
+        f'<energy><i name="e_fr_energy">{energy_ev + pv:.8f}</i></energy>'
+        '<varray name="forces"><v>0.1 0.0 0.0</v></varray>'
+        '<varray name="stress">'
+        f"<v>{file_kbar:.8f} 0.0 0.0</v>"
+        f"<v>0.0 {file_kbar:.8f} 0.0</v>"
+        f"<v>0.0 0.0 {file_kbar:.8f}</v>"
+        "</varray>"
+        "</calculation></modeling>"
+    )
+
+    energy, forces, stress = neb_module._read_last_vasprun_step(str(path))
+    assert energy == pytest.approx(energy_ev, abs=1e-6)
+    assert np.allclose(stress, np.eye(3) * raw_sigma, atol=1e-10)
+
+    # Without PSTRESS the reader keeps its previous behavior.
+    plain = tmp_path / "plain.xml"
+    plain.write_text(
+        "<modeling><calculation>"
+        '<structure><crystal><varray name="basis">'
+        "<v>5.0 0.0 0.0</v><v>0.0 5.0 0.0</v><v>0.0 0.0 5.0</v>"
+        "</varray></crystal></structure>"
+        f'<energy><i name="e_fr_energy">{energy_ev:.8f}</i></energy>'
+        '<varray name="stress">'
+        f"<v>{-raw_sigma / vpmdk.KBAR_TO_EV_PER_A3:.8f} 0.0 0.0</v>"
+        f"<v>0.0 {-raw_sigma / vpmdk.KBAR_TO_EV_PER_A3:.8f} 0.0</v>"
+        f"<v>0.0 0.0 {-raw_sigma / vpmdk.KBAR_TO_EV_PER_A3:.8f}</v>"
+        "</varray>"
+        "</calculation></modeling>"
+    )
+    energy2, _, stress2 = neb_module._read_last_vasprun_step(str(plain))
+    assert energy2 == pytest.approx(energy_ev, abs=1e-8)
+    assert np.allclose(stress2, np.eye(3) * raw_sigma, atol=1e-10)
+
+
+def test_pstress_correction_applies_to_single_point_and_md_too(
+    tmp_path: Path, load_atoms
+):
+    # R138 (P2): the R137 PSTRESS output correction was wired only into the
+    # relaxation path, so the SAME INCAR flipped pressure convention when
+    # IBRION/NSW changed: identical geometry read -2.59 kB in a static run
+    # and -502.59 kB in a relax run at PSTRESS=500, and MD/vasprun stress
+    # consumers got the uncorrected diagonal. VASP applies the subtraction in
+    # every mode that prints stress.
+    pstress_kbar = 500.0
+    sigma_xx = -pstress_kbar * vpmdk.KBAR_TO_EV_PER_A3
+    voigt = np.array([sigma_xx, sigma_xx, sigma_xx, 0.0, 0.0, 0.0], dtype=float)
+
+    class StressDummyCalculator(DummyCalculator):
+        def calculate(self, atoms=None, properties=("energy",), system_changes=()):
+            super().calculate(atoms=atoms, properties=properties, system_changes=system_changes)
+            self.results["stress"] = voigt
+
+    def pressure_line(workdir: Path) -> list[str]:
+        outcar = (workdir / "OUTCAR").read_text()
+        return next(
+            line for line in outcar.splitlines() if "external pressure" in line
+        ).split()
+
+    # Single point.
+    single_dir = tmp_path / "single"
+    single_dir.mkdir()
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(single_dir)
+    monkeypatch.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_single_point(
+            load_atoms(), StressDummyCalculator(), isif=3, pstress=pstress_kbar
+        )
+    finally:
+        monkeypatch.undo()
+    line = pressure_line(single_dir)
+    assert float(line[3]) == pytest.approx(0.0, abs=0.01)
+    assert float(line[-2]) == pytest.approx(500.0, abs=0.01)
+
+    # MD (one velocity-Verlet step).
+    md_dir = tmp_path / "md"
+    md_dir.mkdir()
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(md_dir)
+    monkeypatch.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_md(
+            load_atoms(),
+            StressDummyCalculator(),
+            1,
+            300.0,
+            1.0,
+            mdalgo=0,
+            isif=3,
+            pstress=pstress_kbar,
+        )
+    finally:
+        monkeypatch.undo()
+    line = pressure_line(md_dir)
+    assert float(line[3]) == pytest.approx(0.0, abs=0.01)
+    assert float(line[-2]) == pytest.approx(500.0, abs=0.01)
+
+
+def test_write_vasp_structure_rejects_directory_target_as_isadirectoryerror(tmp_path: Path, load_atoms):
+    # R136 (P3): ase.io.write infers the format by INSPECTING the target, so a
+    # directory named CONTCAR made it guess 'bundletrajectory' and raise
+    # TypeError -- which the server classified as a retryable calculation
+    # failure (exit 2) after paying for the whole run, while the same
+    # obstruction on OUTCAR (a plain open()) raised IsADirectoryError and
+    # correctly classified as input error under the R135 rule. The writer now
+    # raises the same OSError type so both artifacts agree.
+    target = tmp_path / "CONTCAR"
+    target.mkdir()
+
+    with pytest.raises(IsADirectoryError):
+        vpmdk._write_vasp_structure(str(target), load_atoms())
+
+    # The directory is left untouched.
+    assert target.is_dir()
+
+
+def test_default_vasprun_round_trips_through_ase_and_reports_the_run_energy(
+    tmp_path: Path, load_atoms
+):
+    # R131: with WRITE_PSEUDO_SCF unset -- the documented DEFAULT -- vasprun.xml
+    # carried no <scstep> block, and ase.io.vasp.read_vasp_xml does
+    # `step.findall("scstep/energy")[-1]` with no guard: the primary
+    # machine-readable output of a VASP emulator could not be opened by ASE at
+    # all (IndexError), while pymatgen's Vasprun.final_energy warned once and
+    # returned `inf eV` into whatever pipeline consumed it.
+    #
+    # The suite could not see this because every other vasprun assertion
+    # re-parses the file with ElementTree -- i.e. mirrors the writer instead of
+    # round-tripping through the reader on the other side. This one reads it back
+    # with ASE on purpose.
+    ase_io = pytest.importorskip("ase.io")
+    atoms = load_atoms()
+
+    class DummyBFGS:
+        def __init__(self, obj, logfile=None):
+            self.obj = obj
+
+        def attach(self, *args, **kwargs):
+            pass
+
+        def run(self, *args, **kwargs):
+            target = getattr(self.obj, "atoms", self.obj)
+            target.positions += 0.01
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "BFGS", DummyBFGS)
+    monkeypatch.setattr(vpmdk, "write", lambda *a, **k: None)
+    try:
+        vpmdk.run_relaxation(atoms, DummyCalculator(), steps=1, fmax=0.01, isif=2)
+    finally:
+        monkeypatch.undo()
+
+    images = ase_io.read(str(tmp_path / "vasprun.xml"), index=":")
+
+    assert images
+    assert images[-1].get_potential_energy() == pytest.approx(0.5)
+    assert len(images[-1]) == len(atoms)
+
+
+def test_contcar_keeps_per_axis_selective_dynamics(tmp_path: Path):
+    # R133: pymatgen reads a POSCAR ``T T F`` row as FixCartesian, and ASE's
+    # POSCAR writer builds selective-dynamics flags only from FixScaled /
+    # FixAtoms / FixedPlane / FixedLine -- so a partially constrained atom was
+    # written back as fully free (``T T T``) while a fully fixed one (FixAtoms)
+    # survived. The constraint IS honored during the run, so only the recorded
+    # flags were wrong: `cp CONTCAR POSCAR` then relaxed an axis the user had
+    # frozen (measured: a frozen z of 0.0300 moved to 0.9998 on the next run),
+    # with exit 0 and no warning.
+    from ase import Atoms
+    from ase.constraints import FixAtoms, FixCartesian
+
+    atoms = Atoms(
+        "Cu4",
+        scaled_positions=[
+            (0.02, 0.01, 0.03),
+            (0.0, 0.5, 0.5),
+            (0.5, 0.0, 0.5),
+            (0.5, 0.5, 0.0),
+        ],
+        cell=[3.6, 3.6, 3.6],
+        pbc=True,
+    )
+    atoms.set_constraint(
+        [
+            FixCartesian(0, mask=(False, False, True)),  # T T F
+            FixAtoms(indices=[3]),  # F F F
+        ]
+    )
+
+    path = tmp_path / "CONTCAR"
+    vpmdk._write_vasp_structure(str(path), atoms)
+
+    text = path.read_text()
+    assert "Selective dynamics" in text
+    rows = [line.split() for line in text.splitlines()[9:13]]
+    flags = [row[3:6] for row in rows]
+    assert flags == [
+        ["T", "T", "F"],
+        ["T", "T", "T"],
+        ["T", "T", "T"],
+        ["F", "F", "F"],
+    ], text
+
+    # And the file reads back with the same constraints, which is what makes the
+    # `cp CONTCAR POSCAR` continuation keep the frozen axis frozen.
+    import ase.io
+
+    restored = ase.io.read(str(path))
+    restored_flags = ase.io.vasp._handle_ase_constraints(restored)
+    assert restored_flags.tolist() == [
+        [False, False, True],
+        [False, False, False],
+        [False, False, False],
+        [True, True, True],
+    ]
+
+
+def test_write_vasp_structure_leaves_other_constraints_and_atoms_alone(tmp_path: Path):
+    from ase import Atoms
+    from ase.constraints import FixAtoms, FixCartesian
+
+    atoms = Atoms("Cu2", scaled_positions=[(0.0, 0.0, 0.0), (0.5, 0.5, 0.5)],
+                  cell=[3.6, 3.6, 3.6], pbc=True)
+    original = [FixCartesian(0, mask=(True, False, False)), FixAtoms(indices=[1])]
+    atoms.set_constraint(original)
+
+    vpmdk._write_vasp_structure(str(tmp_path / "CONTCAR"), atoms)
+
+    # The translation happens on a throwaway copy: the running atoms keep the
+    # constraint objects that were computing the physics.
+    assert [type(c).__name__ for c in atoms.constraints] == ["FixCartesian", "FixAtoms"]
+    assert atoms.constraints[0] is original[0]
+
+    # Atoms without any FixCartesian are handed to the writer untouched.
+    plain = Atoms("Cu1", scaled_positions=[(0.0, 0.0, 0.0)], cell=[3.6, 3.6, 3.6], pbc=True)
+    plain.set_constraint(FixAtoms(indices=[0]))
+    assert vpmdk._atoms_with_writable_selective_dynamics(plain) is plain

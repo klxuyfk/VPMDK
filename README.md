@@ -130,6 +130,35 @@ vpmdk
 
 If you prefer launching from outside that directory, use `vpmdk --dir ./calc_dir`.
 
+### Optional: Resident Server for Batch Workloads
+
+One-shot `vpmdk` remains the normal entry point. When many short calculation
+directories use exactly the same model, the optional POSIX server mode can keep
+that calculator in CPU/GPU memory and avoid repeated model loading:
+
+```bash
+vpmdk serve --dir ./model_config --daemon --idle-timeout 3600
+vpmdk status
+vpmdk run --dir ./calc-001
+vpmdk stop
+```
+
+`model_config/BCAR` selects the resident calculator. An explicit backend setting
+in a submitted directory's `BCAR` must match it; output options such as
+`WRITE_ENERGY_CSV` remain per-calculation. Requests from concurrent clients are
+processed serially in FIFO order; use separate sockets and servers for parallel
+workers or different models.
+
+The `run`, `status`, and `stop` commands use a standard-library-only client
+entrypoint. They do not import PyTorch, ASE, pymatgen, or backend packages in
+the submitting process, so short resident calculations retain the benefit of
+avoiding repeated model-runtime startup.
+
+See [Server Mode](docs/user-guide/server-mode.md) for lifecycle, protocol,
+GPU/scheduler patterns, configuration matching, timeout, troubleshooting, and
+security details. A complete shell workflow is in
+[`examples/server_batch`](examples/server_batch/README.md).
+
 ### Python API
 
 ```python
@@ -163,6 +192,7 @@ default.
 - docs index: [docs/README.md](docs/README.md)
 - quick start: [docs/getting-started/quickstart.md](docs/getting-started/quickstart.md)
 - CLI workflows: [docs/user-guide/cli-workflows.md](docs/user-guide/cli-workflows.md)
+- resident server mode: [docs/user-guide/server-mode.md](docs/user-guide/server-mode.md)
 - Python API guide: [docs/user-guide/python-api.md](docs/user-guide/python-api.md)
 - charge density and `CHGCAR`: [docs/user-guide/charge-density.md](docs/user-guide/charge-density.md)
 - API reference: [docs/reference/api-reference.md](docs/reference/api-reference.md)
@@ -185,6 +215,7 @@ Included examples:
 - `examples/api_chgnet`
 - `examples/chgcar_charge3net`
 - `examples/bader_chgcar_charge3net`
+- `examples/server_batch`
 - `examples/uspex_9_4_4_si`
 
 ## Compatibility Notes

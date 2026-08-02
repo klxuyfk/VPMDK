@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import os
 import sys
 from pathlib import Path
 from typing import Dict
@@ -129,7 +128,11 @@ def _build_sevennet_family_calculator(
 
     file_type = _normalize_sevennet_file_type(bcar_tags.get("SEVENNET_FILE_TYPE"))
     modal = bcar_tags.get("SEVENNET_MODAL")
-    model_value = bcar_tags.get("MODEL") or root.DEFAULT_SEVENNET_MODEL
+    model_reference = root._resolve_backend_model_reference(
+        "FLASHTP" if force_flash else "SEVENNET",
+        bcar_tags.get("MODEL"),
+    )
+    model_value = str(model_reference.value)
     device = root._resolve_device(bcar_tags.get("DEVICE")) or "cpu"
     enable_cueq, enable_flash, enable_oeq = _resolve_sevennet_accelerators(
         bcar_tags,
@@ -144,15 +147,7 @@ def _build_sevennet_family_calculator(
             f"{backend_name} accelerator flags require SEVENNET_FILE_TYPE=checkpoint."
         )
 
-    if os.path.exists(model_value):
-        model_spec: str | Path = model_value
-    elif root._looks_like_filesystem_path(
-        model_value,
-        suffixes=(".pt", ".pth", ".ckpt", ".jit", ".ts"),
-    ):
-        raise FileNotFoundError(f"{backend_name} model not found: {model_value}")
-    else:
-        model_spec = model_value
+    model_spec: str | Path = model_value
 
     unsupported_accelerators = [
         tag_name

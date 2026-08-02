@@ -21,6 +21,8 @@ and does not include calculation output.
 - `phonopy_displacement_force_sets`: NequIP-backed phonopy-generated displaced supercells followed by static VPMDK force calculations and `phonopy -f`
 - `phonopy_residual_force_subtraction`: Allegro-backed phonopy-generated displaced supercells plus perfect-supercell residual-force subtraction with `phonopy --fz`
 - `uspex_9_4_4_si`: USPEX 9.4.4 input deck showing `vpmdk` as a drop-in executable in a VASP-oriented structure-search workflow
+- `server_batch`: optional POSIX resident-model workflow with readiness polling,
+  sequential directory submission, cleanup traps, and idle-timeout protection
 
 ## Run
 
@@ -41,6 +43,7 @@ python ./examples/chgcar_charge3net/predict_api.py
 ./examples/phonopy_supercell_dfpt_force_constants/run.sh
 ./examples/phonopy_displacement_force_sets/run.sh
 ./examples/phonopy_residual_force_subtraction/run.sh
+./examples/server_batch/run.sh
 ```
 
 ## Notes
@@ -66,6 +69,9 @@ python ./examples/chgcar_charge3net/predict_api.py
 - `phonopy_residual_force_subtraction` demonstrates the same finite-displacement flow with residual forces from the perfect supercell subtracted by `phonopy --fz`.
 - Band structures, meshes, DOS, thermal properties, irreducible representations, and animation-style post-processing are not VPMDK-specific once `FORCE_CONSTANTS` or `FORCE_SETS` exists, so they are intentionally left to normal phonopy commands rather than duplicated as separate VPMDK examples.
 - `neb_nequip_vtst/run.sh` optionally accepts `NEQUIP_SOURCE` env var when NequIP is not installed in the current Python environment.
+- `server_batch` defaults to CHGNet on CPU so it is runnable without a local
+  checkpoint. Edit `model_config/BCAR` to validate GPU residency or another
+  backend; one server still processes its queue serially.
 - VTST scripts are downloaded to a temporary directory and removed automatically.
 - No checkpoint or VTST source code is stored in this repository.
 - `reference/` is only an easy-to-read example of expected output style.

@@ -202,6 +202,127 @@ Nose-Hoover chain notes:
 - `NHC_NCHAINS=0` is VASP's NVE switch-off mode; use `thermostat="nve"` or
   `MDALGO=0` instead
 
+## Resident Server Client
+
+### `VPMDKClient(socket_path=None, connect_timeout=2.0)`
+
+Synchronous POSIX Unix-socket client used by the server-mode CLI. `socket_path`
+uses the same resolution order as the CLI: explicit argument,
+`VPMDK_SOCKET`, then the per-user default. Positive method timeouts bound the
+entire protocol exchange, including connection and request transmission; they
+do not begin only after the request has been sent.
+
+Use `from vpmdk_client import VPMDKClient` in orchestration-only processes. That
+module depends only on the Python standard library and does not import
+`vpmdk_core` or ML packages. The historical
+`from vpmdk import VPMDKClient` spelling remains available but loads the full
+calculation API.
+
+Methods:
+
+#### `run(workdir=".", *, timeout=0.0, log_callback=None, event_callback=None)`
+
+Converts `workdir` to an absolute path, submits one calculation, and blocks for
+its terminal event. A positive `timeout` is a single deadline covering connect,
+send, and receive; `timeout=0.0` means no request deadline after the independent
+connection timeout. `log_callback` receives streamed stdout lines.
+`event_callback` receives every accepted, log, heartbeat, and terminal protocol
+object. The request includes the caller's current directory for one-shot
+equivalence of relative environment-provided charge paths. Returns the
+successful `done` object.
+
+A single stdout line larger than the 1 MiB protocol event limit is transported
+as multiple continuation events, but is reassembled before one
+`log_callback` call. `event_callback` still receives each raw continuation
+event. Oversized remote exception text is marked and truncated, but still
+raises `RemoteCalculationError` or `RemoteBackendMismatch` rather than
+`ProtocolError`.
+
+Missing or invalid VASP-style inputs raise `RemoteInputError`; the CLI maps
+that exception to exit code 1. Backend execution failures remain
+`RemoteCalculationError` and exit code 2.
+
+A client timeout or disconnect does not cancel a job already accepted by the
+server.
+
+#### `status(*, timeout=2.0)`
+
+Returns the status object, including state, backend identity, PID, uptime,
+completed/failed counts, queue length, protocol version, and current work
+directory when busy.
+
+#### `stop(*, force=False, timeout=60.0)`
+
+Requests shutdown and waits for socket removal. Returns the server's accepted
+shutdown object. `force=True` rejects queued work and disconnects the active
+client, but server teardown still waits for an active executor to return because
+Python threads and GPU kernels cannot be cancelled safely. `timeout=0.0` does
+not wait for socket removal. Both graceful and force shutdown become observable
+only after the acknowledgement has been sent. `force` must be a Python `bool`;
+other types raise `TypeError` before a connection is attempted.
+
+Exception hierarchy:
+
+- `VPMDKClientError`: base class
+  - `ServerConnectionError`: unavailable server or lost connection
+    - `ProtocolError`: malformed or incompatible peer response
+  - `ClientTimeoutError`: client-side deadline expired
+  - `RemoteCalculationError`: calculation failed in the server; exposes
+    `.traceback`
+    - `RemoteInputError`: required workdir input is missing or invalid
+    - `RemoteBackendMismatch`: request BCAR conflicts with the resident backend
+
+All methods are synchronous. A client instance does not own or start the
+server, and no method falls back to one-shot execution.
+
+See [Server Mode](../user-guide/server-mode.md) for lifecycle, queueing,
+configuration authority, protocol, and security behavior.
+
+## Server Embedding Primitives
+
+The CLI is the supported default for server lifecycle management. Advanced
+integrations can use the following re-exported primitives.
+
+### `VPMDKServer(...)`
+
+```python
+VPMDKServer(
+    socket_path,
+    calculator,
+    backend_tags,
+    *,
+    backend_base_dir,
+    idle_timeout=0.0,
+    heartbeat_interval=30.0,
+    pidfile=None,
+    log_file=None,
+    executor=None,
+)
+```
+
+Owns one prebuilt calculator and one FIFO worker. `serve_forever()` binds the
+socket, invokes an optional `ready_callback`, and blocks until shutdown.
+`status()` returns the in-process status object, while `request_stop(force=False)`
+changes lifecycle state. Signal handler installation is explicit through
+`install_signal_handlers()` and `restore_signal_handlers()` and only operates
+from the main thread.
+
+`backend_tags` and `backend_base_dir` define the authoritative resident
+identity used to reject conflicting request BCAR settings. Applications using
+this class directly are responsible for calculator construction, process
+supervision, POSIX availability, and calling `serve_forever()`.
+For `MLP=DEEPMD`, `backend_tags` must include a non-empty
+`DEEPMD_TYPE_MAP`; the server rejects structure-derived resident type maps even
+when the calculator was constructed by the embedding application.
+
+Related helpers:
+
+- `default_socket_path()`
+- `resolve_socket_path(explicit=None)`
+- `backend_identity(tags, *, base_dir)`
+- `validate_request_backend(resident, request_tags, *, request_base_dir)`
+- `PROTOCOL_VERSION`
+
 ### `vpmdk.compat.vasp.VaspCompatConfig`
 
 | Field | Default |

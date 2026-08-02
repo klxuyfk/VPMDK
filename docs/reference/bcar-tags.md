@@ -26,19 +26,34 @@ backend or helper explicitly consumes them.
 | `MLP` | backend name | `CHGNET` |
 | `NNP` | legacy alias of `MLP` | none |
 | `MODEL` | checkpoint path or named model | backend-dependent |
-| `DEVICE` | device hint such as `cpu`, `cuda`, `cuda:0` | auto-detected or backend default |
+| `DEVICE` | device hint such as `cpu`, `cuda`, `cuda:0` | auto-detected or backend default; the value is case-folded at parse (`CPU` ≡ `cpu`), matching the server's case-insensitive comparison |
+
+### Interpretation in Server Mode
+
+For `vpmdk serve`, the startup BCAR constructs the resident calculator. A
+submitted calculation may omit `MLP`/`NNP`, `MODEL`, `DEVICE`, shared backend
+tuning tags, and the force-field backend tags listed below; omission means
+inheritance from the server. If a request states one of those construction
+tags explicitly, its normalized value must match the resident configuration or
+that request is rejected.
+
+Output/compatibility tags, all `CHARGE_*` tags, and
+`FORCE_CONSTANTS_DISPLACEMENT` remain per-request. They do not rebuild or alter
+the resident force-field calculator. See
+[Server Mode](../user-guide/server-mode.md#startup-bcar-and-request-bcar) for
+the complete authority and mismatch behavior.
 
 ## Output and Compatibility Tags
 
 | Tag | Meaning | Default |
 |-----|---------|---------|
 | `WRITE_ENERGY_CSV` | write `energy.csv` during relaxation | `0` |
-| `WRITE_LAMMPS_TRAJ` | write `lammps.lammpstrj` during MD | `0` |
+| `WRITE_LAMMPS_TRAJ` | write `lammps.lammpstrj` during MD (LAMMPS `metal` units: velocities in Å/ps) | `0` |
 | `LAMMPS_TRAJ_INTERVAL` | frame interval for the LAMMPS trajectory | `1` |
 | `WRITE_PSEUDO_SCF` | echo pseudo electronic-step blocks into compatibility files | `0` |
 | `WRITE_OSZICAR_PSEUDO_SCF` | legacy alias of `WRITE_PSEUDO_SCF` | none |
 | `WRITE_CHGCAR` | run charge-density prediction after the main run | `0` |
-| `FORCE_CONSTANTS_DISPLACEMENT` | VPMDK finite-difference displacement in Angstrom for `IBRION=7`/`8`; `IBRION=5`/`6` use `POTIM` instead | `0.01` |
+| `FORCE_CONSTANTS_DISPLACEMENT` | VPMDK finite-difference displacement in Angstrom for `IBRION=7`/`8`; `IBRION=5`/`6` use `POTIM` instead | `0.01`; must be at least `1e-6` Angstrom and a plain number (a corrupted token such as `1D-2` is rejected, not read as its leading digits) |
 
 See
 [VASP Force-Constants Compatibility](../development/force-constants.md) for the
@@ -73,6 +88,11 @@ Backend-specific overrides win over the shared graph-converter tags.
 | `CHARGE_PYTHON` | Python interpreter used by the subprocess runner |
 | `CHARGE_CUTOFF` | ChargE3Net cutoff override |
 | `CHARGE_MAX_PROBES_PER_BATCH` | probe batch size |
+
+A charge configuration that can never work — no checkpoint resolvable through
+`CHARGE_MODEL`/environment variables, or a `CHARGE_PYTHON` interpreter that
+does not exist — is reported as an input error (exit 1 in both one-shot and
+server mode), not as a retryable calculation failure.
 
 ### ChargE3Net Model-Config Tags
 
@@ -135,6 +155,14 @@ Backend-specific overrides win over the shared graph-converter tags.
 - `MATTERSIM_COMPUTE_STRESS`
 - `MATTERSIM_STRESS_WEIGHT`
 
+`MODEL` may be an existing local checkpoint or a selector understood by
+`MatterSimCalculator.from_checkpoint`, such as `mattersim-v1.0.0-5M`. An
+explicit non-path selector is always forwarded; it cannot silently fall back
+to the calculator default. Absolute/relative paths, values containing a path
+separator, and checkpoint-suffixed values must exist locally. Older MatterSim
+builds without `from_checkpoint` may use a declared `load_path` constructor;
+otherwise named selectors fail with an explicit compatibility error.
+
 ### AlphaNet
 
 - `ALPHANET_CONFIG`
@@ -154,13 +182,16 @@ Backend-specific overrides win over the shared graph-converter tags.
 - `NEQUIX_COMPILE`
 - `NEQUIX_CAPACITY_MULTIPLIER`
 
-### SevenNet / FlashTP
+### SevenNet / FlashTP / EquFlash
 
 - `SEVENNET_FILE_TYPE`
 - `SEVENNET_MODAL`
 - `SEVENNET_ENABLE_CUEQ`
 - `SEVENNET_ENABLE_FLASH`
 - `SEVENNET_ENABLE_OEQ`
+
+EquFlash uses checkpoint mode with FlashTP forced on and CUEQ/OEQ forced off;
+explicit repetitions of those effective values are accepted in server mode.
 
 ### UPET
 
@@ -210,10 +241,27 @@ support surface because they depend on older OCP trainer conventions.
 - `GRACE_MIN_DIST`
 - `GRACE_FLOAT_DTYPE`
 
+When `MODEL` is omitted, GRACE selects `GRACE-2L-MP-r6` if it is present in
+the installed foundation-model registry, or the registry's first model
+otherwise. Server status and `list_backends()` report that effective choice.
+An unknown non-path foundation-model name produces a warning and selects the
+same effective default. A missing path-shaped value remains an error.
+
 ### DeePMD
 
 - `DEEPMD_TYPE_MAP`
 - `DEEPMD_HEAD`
+
+For one-shot execution, omitting `DEEPMD_TYPE_MAP` lets VPMDK infer a list from
+that calculation's structure. Resident server mode instead requires an
+explicit `DEEPMD_TYPE_MAP` in the startup BCAR because one calculator cannot
+safely retain an ordering inferred from a startup POSCAR and then process
+requests with different species subsets or orderings. List elements must be in
+the type-index order expected by the DeepMD model, for example:
+
+```text
+DEEPMD_TYPE_MAP=Si,O
+```
 
 DPA-family checkpoints use the DeePMD path:
 
@@ -232,6 +280,39 @@ shared libraries are resolved consistently.
 `MODEL` and most backend-local paths are resolved relative to the active run
 directory because the CLI changes into the selected calculation directory
 before constructing the calculator.
+
+Server startup is the exception to that one-shot wording: an explicit relative
+`MODEL` or configuration path in the startup BCAR is resolved from the
+directory containing that BCAR. A request that explicitly repeats a relative
+model path resolves it from the request calculation directory before VPMDK
+compares it with the resident path. Prefer absolute checkpoint paths when the
+startup configuration and calculations live in different directory trees.
+Server startup rejects a local-path `MODEL` that does not exist, preventing a
+backend's default-model fallback from disagreeing with the resident identity
+reported by `vpmdk status`. For local-only backends, extensionless values are
+also paths. Non-path named-model identifiers remain supported, including
+slash-containing FAIRChem identifiers such as `org/model`.
+The same MODEL classifier is used by one-shot builders, server startup, status,
+and request compatibility checks. Except for GRACE's documented warning plus
+fallback, an explicit MODEL is never changed to the default. Unknown
+static-registry names, rejected upstream registry names, missing checkpoints
+for local-only selectors, and empty loader results fail explicitly. Backends
+whose upstream runtime resolves opaque selectors (MatterSim, all FAIRChem v2
+aliases, FAIRChem v1/OCP, and Nequix when `URLS` metadata is absent) receive the
+exact explicit name and are responsible for accepting or rejecting it.
+MatGL's `M3GNet-MP-2021.2.8-PES` default is also a named upstream model and is
+not resolved relative to the BCAR directory. Other MatGL registry names are
+also preserved as opaque model identities and loaded verbatim. Values that are
+absolute, explicitly relative, have a checkpoint suffix, contain a path
+separator, or already exist are normally treated as filesystem paths. Existing
+local paths preserve their lexical spelling for the loader, including symlinks,
+while server comparison uses their canonical real path. Matlantis model versions
+are always opaque strings. Both FAIRChem generations may delegate unresolved
+path-like selectors to their upstream loaders; MatterSim delegates only
+non-path preset names. The legacy
+`m3gnet` fallback uses its own bundled default only when `MODEL` is omitted;
+explicit legacy values must resolve to readable local files and are never
+replaced with that default after a load failure.
 
 Charge-environment paths are a special case: relative `CHARGE_*` paths are
 handled differently depending on how they are provided:

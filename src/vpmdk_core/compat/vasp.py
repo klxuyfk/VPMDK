@@ -25,6 +25,13 @@ class VaspCompatConfig:
     neb_prev_positions: Any = None
     neb_next_positions: Any = None
     strict_forces: bool = False
+    # The INCAR-requested NSW, echoed into vasprun.xml (pymatgen's
+    # convergence rule depends on it being the REQUESTED value).
+    nsw_requested: int | None = None
+    # The applied PSTRESS in kBar, when the run honors one: VASP subtracts it
+    # from every stress output and echoes it in the OUTCAR 'Pullay stress'
+    # field, so the writers need it to reproduce those lines.
+    pstress_kbar: float | None = None
 
 
 @dataclass(frozen=True)

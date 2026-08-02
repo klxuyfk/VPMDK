@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from typing import Any, Dict
 
@@ -65,18 +64,16 @@ def _build_hienet_calculator(bcar_tags: Dict[str, str]):
     if root.HIENetCalculator is None:
         raise RuntimeError("HIENet calculator not available. Install hienet and dependencies.")
 
-    model_value = bcar_tags.get("MODEL") or root.DEFAULT_HIENET_MODEL
+    model_reference = root._resolve_backend_model_reference(
+        "HIENET", bcar_tags.get("MODEL")
+    )
+    model_value = str(model_reference.value)
     device = root._resolve_device(bcar_tags.get("DEVICE")) or "cpu"
     file_type = _normalize_hienet_file_type(bcar_tags.get("HIENET_FILE_TYPE"))
 
     model_path = model_value
-    if os.path.exists(model_value):
+    if model_reference.kind is root.ModelReferenceKind.LOCAL_PATH:
         pass
-    elif root._looks_like_filesystem_path(
-        model_value,
-        suffixes=(".pth", ".pt", ".ckpt", ".jit", ".ts"),
-    ):
-        raise FileNotFoundError(f"HIENet model not found: {model_value}")
     else:
         if file_type != "checkpoint":
             raise ValueError(

@@ -110,6 +110,16 @@ class VaspCompatObserver(RunObserver):
             write_oszicar_pseudo_scf=config.write_pseudo_scf,
             neb_prev_positions=config.neb_prev_positions,
             neb_next_positions=config.neb_next_positions,
+            pstress_kbar=config.pstress_kbar,
+            nsw_requested=config.nsw_requested,
+            # XDATCAR is written by on_step only for MD with write_xdatcar
+            # (the same condition as the write below); preflighting it for
+            # every mode aborted static runs over an inert XDATCAR node.
+            preflight_artifacts=(
+                ("XDATCAR",)
+                if context.mode == "md" and getattr(config, "write_xdatcar", False)
+                else ()
+            ),
         )
 
     def on_step(self, atoms, step: RunStep, context: RunContext) -> None:

@@ -36,11 +36,11 @@ Documentation = "https://github.com/klxuyfk/VPMDK#readme"
 "Issue Tracker" = "https://github.com/klxuyfk/VPMDK/issues"
 
 [project.scripts]
-vpmdk = "vpmdk:main"
+vpmdk = "vpmdk_entry:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-py-modules = ["vpmdk"]
+py-modules = ["vpmdk", "vpmdk_client", "vpmdk_entry", "vpmdk_protocol"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -15,6 +15,22 @@ vpmdk
 Use `--dir PATH` only when you want to target a calculation directory other
 than the current one.
 
+## One-Shot and Resident Execution
+
+The commands below enter the same VASP-style work-directory execution path:
+
+| Form | Calculator lifecycle | Recommended use |
+| --- | --- | --- |
+| `vpmdk --dir DIR` | Build a calculator for this process and release it on exit. | Default; isolated or heterogeneous calculations. |
+| `vpmdk run --dir DIR` | Submit to a calculator already created by `vpmdk serve`. | Many directories using the same model and construction settings. |
+
+Server mode does not change `INCAR` mode selection or output semantics. It
+changes calculator ownership, queueing, environment authority, failure
+handling, and shutdown responsibilities. It is POSIX-only, serializes work per
+server, and never falls back silently to one-shot execution. Read
+[Server Mode](server-mode.md) before replacing `vpmdk` with `vpmdk run` in an
+automated workflow.
+
 ## Input Files
 
 The CLI looks for:
@@ -52,6 +68,18 @@ Behavior:
 - the file is read through `pymatgen.io.vasp.Incar`
 - unsupported tags are ignored with warnings
 - a small subset of NEB and pseudo-SCF tags are recognized specially
+- several tags may share one line separated by `;`, and a value may be continued
+  with a trailing `\`, exactly as the parser accepts them
+
+`POSCAR` parsing:
+
+- the file is read through `pymatgen.io.vasp.Poscar`, so `#` starts a comment on
+  any line
+- the sixth line decides the format: species names (VASP 5) or ion counts
+  (VASP 4)
+- a VASP-4 file has no species names of its own, so the elements come from the
+  `POTCAR`; without one -- or with a `POTCAR` whose entry count does not match
+  the ion groups -- the run is an input error rather than a guess
 
 ## Mode Selection
 
@@ -117,7 +145,9 @@ mapped onto ASE filters:
 - `ISIF=3`: ions + full cell
 - `ISIF=4`: ions + shape at constant volume
 - `ISIF=5`: cell-only shape at constant volume, ions frozen
-- `ISIF=6`: cell only via `StrainFilter`
+- `ISIF=6`: cell only via `StrainFilter`; when `PSTRESS` is set, a frozen-ion
+  `UnitCellFilter` is used instead because `StrainFilter` cannot apply an
+  external pressure
 - `ISIF=7`: isotropic cell changes, ions frozen
 - `ISIF=8`: ions + isotropic volume changes
 
@@ -131,8 +161,19 @@ Optional relaxation outputs:
 
 - `WRITE_ENERGY_CSV=1` writes `energy.csv`
 - `WRITE_PSEUDO_SCF=1` adds pseudo electronic-step blocks to compatibility files
+  (the fabricated SCF ladder: `OSZICAR` `DAV:` lines, the `OUTCAR` iteration
+  blocks, `NELM`/`NELMIN`/`EDIFF` metadata and SCF timings). The single
+  `vasprun.xml` `scstep` entry carrying each ionic step's energy is written
+  regardless, because ASE's and pymatgen's `vasprun.xml` readers require it.
 
 ## Molecular Dynamics
+
+VPMDK MD is **fixed-cell** (NVE/NVT): the ions are integrated, the cell never
+moves, and no barostat exists. A VASP NPT input (`IBRION=0` with `ISIF>=3`
+and/or `PSTRESS`) therefore runs as a fixed-cell trajectory — `ISIF` and
+`PSTRESS` affect only the stress/enthalpy output conventions, and VPMDK warns
+when they are combined with MD. To equilibrate the cell, use a relaxation
+(`IBRION=2`, `ISIF=3`) instead.
 
 MD mode uses ASE molecular-dynamics drivers, selected by `MDALGO`:
 
@@ -147,11 +188,23 @@ Additional behavior:
 
 - `TEEND` enables linear temperature ramping from `TEBEG`, including
   Nose-Hoover chain runs when the installed ASE exposes compatible thermostat
-  state
+  state. The ramp moves the **thermostat's target**, so the trajectory keeps the
+  canonical fluctuations of the requested `MDALGO` and follows the target with
+  that thermostat's own time constant rather than tracking it exactly. `MDALGO=0`
+  (NVE) is the exception: with no thermostat to retarget, its ramp rescales the
+  velocities to the target at every step
 - `SMASS > 0` upgrades default `MDALGO=0` to Nose-Hoover (`2`)
 - `SMASS < 0` upgrades default `MDALGO=0` to Langevin (`3`)
+- `SMASS > 0` also sets the Nose-Hoover chain damping time, read as a value in
+  **femtoseconds** — VASP's `SMASS` is a Nose *mass*, so the numbers are not
+  interchangeable. With `SMASS` omitted the damping time is `100 * POTIM`; a
+  value below `10 * POTIM` is reported as strong coupling because it pins the
+  temperature and can make the chain integrator diverge
 - `NHC_PERIOD` sets the Nose-Hoover chain damping time in MD steps, so VPMDK
   passes `NHC_PERIOD * POTIM` as the ASE damping time
+- velocities are always initialised from a Maxwell-Boltzmann distribution at
+  `TEBEG`; a `POSCAR`/`CONTCAR` velocity block is not read, so an MD run cannot
+  be continued from the recorded velocities
 - `NHC_NCHAINS=0` is VASP's NVE switch-off mode; use `MDALGO=0` in VPMDK
   instead
 - `XDATCAR` is written for advanced MD steps
@@ -170,7 +223,8 @@ Supported NEB controls:
 
 - `SPRING` sets the NEB spring magnitude; VASP/VTST negative values are accepted
   and converted to a positive ASE spring constant
-- truthy `LCLIMB` enables climbing-image NEB
+- truthy `LCLIMB` enables climbing-image NEB; when the tag is omitted VPMDK
+  runs plain NEB and warns (VTST's documented default is `.TRUE.`)
 - `IOPT=1`, `3`, `5`, or `7` select ASE LBFGS, Quick-Min-like MDMin, BFGS, or
   FIRE respectively; other VTST optimizer values fall back to BFGS with a
   warning
@@ -183,6 +237,12 @@ Current limitations:
   points for compatibility; if `IBRION == 0`, it runs independent image MD
 - ASE NEB optimization requires at least three numbered directories: initial,
   one moving image, and final
+- one-shot NEB remains compatible with older ASE constructors that do not
+  expose `allow_shared_calculator`; VPMDK omits that keyword in one-shot mode
+- resident-server NEB reuses one calculator across images and therefore
+  enables `allow_shared_calculator` when ASE exposes it; on older releases,
+  per-image delegate identities forward serial evaluations to that same
+  resident calculator
 
 Additional NEB behavior:
 

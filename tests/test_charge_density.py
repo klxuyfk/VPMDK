@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 import importlib
 import importlib.util
@@ -110,6 +111,75 @@ def test_determine_vasp_fft_grid_preserves_partial_explicit_coarse_override():
     )
 
     assert grid_shape == (160, 108, 120)
+
+
+@pytest.mark.parametrize(
+    "incar",
+    [
+        # ENCUT=1e30 is finite and passes every is-it-a-number check, but it
+        # pushes the per-axis smooth-number search past 1e17 candidates, each
+        # trial-dividing to sqrt(candidate): a multi-year spin that wedged a
+        # server worker permanently on one request. It must be rejected as an
+        # input error, and FAST.
+        {"PREC": "N", "ENCUT": "1e30"},
+        # The explicit-grid route has the same class of hole: NGXF=1e12 sails
+        # through the positive-integer check and only fails at CHGCAR-write
+        # time as a MemoryError, i.e. a "retryable" exit 2 a batch driver
+        # resubmits forever. The grid is pure input; judge it at input time.
+        {"NGXF": "1e12", "NGYF": "64", "NGZF": "64"},
+        {"ENCUT": "400", "PREC": "N", "NGX": "1e12"},
+    ],
+    ids=["absurd-encut", "absurd-ngxf", "absurd-ngx"],
+)
+def test_determine_vasp_fft_grid_rejects_absurd_grids_fast(incar):
+    atoms = Atoms(
+        "H2",
+        positions=[[0.0, 0.0, 0.0], [0.0, 0.75, 0.0]],
+        cell=[
+            [10.5475997925, 0.0, 0.0],
+            [-5.2737998962, 9.1344893692, 0.0],
+            [0.0, 0.0, 8.4589996338],
+        ],
+        pbc=True,
+    )
+
+    started = time.monotonic()
+    with pytest.raises(ValueError, match="exceeds the supported maximum"):
+        vasp_compat.determine_vasp_fft_grid(atoms, incar)
+    assert time.monotonic() - started < 5.0
+
+
+def test_determine_vasp_fft_grid_bounds_the_total_not_just_each_axis():
+    # R136 (P3): NGXF=NGYF=NGZF=99999 is per-axis legal under the R135 cap but
+    # a 1e15-point (8 PB) grid -- the whole calculation ran and then died at
+    # CHGCAR-write time as a "retryable" MemoryError, exactly the failure mode
+    # the R135 guard was written to prevent. Bound the RESOURCE (total
+    # points), not just the parameter axis.
+    atoms = Atoms(
+        "H2",
+        positions=[[0.0, 0.0, 0.0], [0.0, 0.75, 0.0]],
+        cell=np.eye(3) * 8.0,
+        pbc=True,
+    )
+    with pytest.raises(ValueError, match="total points"):
+        vasp_compat.determine_vasp_fft_grid(
+            atoms, {"NGXF": "99999", "NGYF": "99999", "NGZF": "99999"}
+        )
+    # One long axis with small others stays inside both bounds.
+    assert vasp_compat.determine_vasp_fft_grid(
+        atoms, {"NGXF": "100000", "NGYF": "4", "NGZF": "4"}
+    ) == (100000, 4, 4)
+
+
+def test_next_even_smooth_number_accepts_values_below_the_cap():
+    # The bound must not clip legitimate grids: the cap sits >10x above the
+    # largest realistic per-axis count, and values just under it still return
+    # promptly (7-smooth numbers stay dense at this magnitude).
+    assert charge_density_module._next_even_smooth_number(108) == 108
+    below_cap = charge_density_module._next_even_smooth_number(
+        charge_density_module._MAX_FFT_GRID_POINTS_PER_AXIS - 1
+    )
+    assert below_cap >= charge_density_module._MAX_FFT_GRID_POINTS_PER_AXIS - 1
 
 
 @pytest.mark.parametrize(
@@ -1278,3 +1348,81 @@ def test_charge3net_runner_falls_back_to_defaults_when_inference_finds_nothing(
         "num_basis": 20,
         "spin": False,
     }
+
+
+def test_unconfigured_charge_backend_is_an_input_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # R149 (P2): a permanently unconfigured charge backend (no CHARGE_MODEL /
+    # VPMDK_CHARGE_MODEL / CHARGE_SOURCE_DIR anywhere) raised a plain
+    # RuntimeError from inside the backend runner, AFTER the full ionic loop
+    # had completed -- so server mode classified it as calculation_error
+    # (exit 2), which SERVER_MODE_SPEC 2.5 documents as RETRYABLE, and a
+    # retry driver re-ran the whole calculation on the same broken directory
+    # forever, while one-shot exited 1 for the byte-identical input. The
+    # unmirrored half of the CHARGE_MLP selector fix one function away.
+    atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3), pbc=True)
+
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_charge_source_dir",
+        lambda source_dir, backend=None: None,
+    )
+
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_charge_model_path",
+        lambda model_path, source_dir, backend=None: None,
+    )
+    with pytest.raises(vpmdk.WorkdirInputError, match="checkpoint not found"):
+        charge_density_module._run_charge3net_backend(atoms, grid_shape=(2, 2, 2))
+
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_deepdft_model_dir",
+        lambda model_path, source_dir: None,
+    )
+    with pytest.raises(vpmdk.WorkdirInputError, match="model directory not found"):
+        charge_density_module._run_deepdft_backend(atoms, grid_shape=(2, 2, 2))
+
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_deepcdp_checkpoint_path",
+        lambda model_path, source_dir: None,
+    )
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_charge_metadata_path",
+        lambda metadata_path, model_path, backend=None: None,
+    )
+    with pytest.raises(vpmdk.WorkdirInputError, match="checkpoint not found"):
+        charge_density_module._run_deepcdp_backend(atoms, grid_shape=(2, 2, 2))
+
+
+def test_missing_charge_python_interpreter_is_an_input_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    # R149 (P2), same family: CHARGE_PYTHON naming a non-existent interpreter
+    # surfaced as a bare FileNotFoundError from subprocess.run -> exit 2
+    # (retryable) in server mode, though no retry can create the executable.
+    atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3), pbc=True)
+
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_charge_source_dir",
+        lambda source_dir, backend=None: None,
+    )
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_charge_model_path",
+        lambda model_path, source_dir, backend=None: str(tmp_path / "model.pt"),
+    )
+    missing_python = tmp_path / "missing-bin" / "python"
+    monkeypatch.setattr(
+        charge_density_module,
+        "_resolve_charge_python",
+        lambda python_executable, backend=None: str(missing_python),
+    )
+
+    with pytest.raises(vpmdk.WorkdirInputError, match="interpreter not found"):
+        charge_density_module._run_charge3net_backend(atoms, grid_shape=(2, 2, 2))
