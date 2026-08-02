@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0 - 2026-08-02
+
 - fix: a quoted continuation value that closes on its own line is
   unwrapped like pymatgen unwraps it — the quoted mirror applied only to
   an unterminated quote, so `POTIM =` followed by `"2.0"` kept its quote
