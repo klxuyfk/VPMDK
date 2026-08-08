@@ -39,20 +39,8 @@ def _move_module_to_device(module: Any, device: str | None) -> Any:
     """
 
     if device is None or not str(device).strip():
-        # A present-but-BLANK ``DEVICE =`` resolves to "" (_resolve_device only
-        # autodetects for None), and ``module.to("")`` raises
-        # "Device string must not be empty". Before this relocation helper
-        # existed, a blank device was simply absorbed by ASE's
-        # ``Calculator.__init__(**kwargs)`` and ignored, so the calculator built
-        # fine; raising here would newly abort `vpmdk serve` AFTER the model is
-        # loaded (and break the one-shot run too). Treat it like an omitted
-        # device: leave placement alone.
-        #
-        # (server.py's _DEVICE_BLANK_TO_CPU_IDENTITIES does list MATGL, so a
-        # blank DEVICE is advertised as "cpu" in the resident's configuration --
-        # that is about what `vpmdk status` reports and how §3.4 compares tags,
-        # not about where this module is placed, which is what the guard above
-        # decides. An earlier version of this comment claimed the opposite.)
+        # A blank DEVICE is equivalent to omitted placement. Status may report
+        # the effective CPU identity, but this helper must not call module.to("").
         return module
     mover = getattr(module, "to", None)
     if not callable(mover):

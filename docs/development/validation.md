@@ -1,5 +1,10 @@
 # Validation Notes
 
+> **Status:** Historical manual validation record. Results apply to the dated
+> environments shown below and are not claims about current upstream releases.
+> Re-run the relevant smoke or integration tests before relying on an entry for
+> a release decision.
+
 ## Scope
 
 This page records backend validation that has been run against real upstream
@@ -15,101 +20,19 @@ not a benchmark-quality comparison against reference DFT data.  Blocked entries
 record adapter behavior or missing public artifacts rather than successful
 calculator evaluation.
 
-## 2026-07-17 Lightweight Client Validation
+## Server-Mode Validation Summary
 
-The server client entrypoint was measured against an absent Unix socket, which
-exercises argument parsing, import, connection failure, error rendering, and
-exit code 3 without including server calculation time.
+The v0.5.0 server work was validated with mocked lifecycle tests, real CHGNet
+CPU calculations, MACE CUDA calculations, and a GRACE CPU environment. Checks
+covered startup readiness, lightweight client imports, FIFO execution,
+one-shot output compatibility, status during work, graceful shutdown, socket
+cleanup, and resident-model reuse.
 
-- Before lightweight dispatch: approximately 4.1 s wall time
-- After lightweight dispatch: approximately 0.02 s wall time
-- Acceptance target: less than 0.3 s
-- Isolated import checks: `run`, `status`, and `stop` left `vpmdk_core`, torch,
-  CHGNet, MACE, e3nn, ASE, pymatgen, and NumPy unloaded
-- Full real-pymatgen/CUDA suite: 453 collected, 432 passed, 21 optional-backend
-  skips
-- 2026-07-19 minimal CPU environment regression: 491 collected, 465 passed,
-  26 optional-backend/CUDA skips; all 106 resident-server tests passed with Unix
-  sockets enabled outside the managed sandbox
-- GRACE 0.6.0 CPU validation (`vpmdk-grace`): the installed registry omitted
-  VPMDK's named default and resolved to `GRACE-FS-OAM`; a real Si2 calculation
-  produced finite energy, forces, and stress, and the resident server reported
-  that effective model, completed one request, wrote VASP outputs, and stopped
-  cleanly; the latest full suite with the GRACE integration enabled collected
-  491 tests, with 465 passed and 26 unrelated optional-backend skips
-- 2026-07-20 shared MODEL resolver validation: the main environment completed
-  all 620 non-integration tests, including 226 backend tests and all 111
-  resident-server tests. The classification matrix covers every one of the 26
-  built-in backends across omitted, existing-local, missing-path, named, and
-  upstream-delegated MODEL inputs; every policy field is fixed by the test
-  table, and builder tests cover relevant device-signature and legacy-loader
-  compatibility. Real CHGNet CPU one-shot and resident-server comparisons both
-  passed with real pymatgen enabled. With `GRACE-FS-OAM` enabled on CPU, the
-  `vpmdk-grace` environment completed the full 646-test collection with 621
-  passed (including real GRACE MD) and 25 unrelated optional-backend skips.
-- No new CUDA claim was made for that resolver run: the active runtime exposed
-  no `nvidia-smi`, `/dev/nvidia*`, or PyTorch CUDA device, and the previously
-  supplied `/mnt/d/lin_temp/codex` checkpoint mount was not present. The CUDA
-  results later on this page are prior recorded sweeps, not results inferred
-  from the CPU-only rerun.
-- ASE compatibility smoke: real ASE 3.20.1 completed a resident NEB force
-  evaluation through three per-image delegates to one calculator, without an
-  `allow_shared_calculator` keyword; the one-shot constructor path also passed
-- Bundled server batch: passed with real CHGNet on CPU and the local MACE
-  checkpoint on CUDA through the installed lightweight console entrypoint
-- DeepMD resident safety smoke: passed in `codex_deepmd` with DeepMD 3.2.0b0,
-  local `DPA-3.1-3M.pt`, `DEEPMD_HEAD=Omat24`, and the model's explicit
-  118-element type map on CPU; startup, one MD request, output checks, and
-  graceful teardown all completed
-
-Wall-clock performance is recorded here as a manual observation rather than a
-pytest assertion because host scheduling is nondeterministic. The import
-boundary and exit-code behavior are deterministic regression tests in
-`tests/test_client_entry.py`.
-
-## 2026-07-16 Resident Server Validation
-
-The resident server was validated through both mocked lifecycle tests and real
-CPU/CUDA calculators.
-
-- Host GPU: NVIDIA TITAN V, 12 GiB, driver 560.94
-- Main environment: Python 3.13.5, torch 2.8.0+cu128
-- Server backends: CHGNet default model and local `mace_mp_small.model`
-- Workload: bundled `examples/server_batch` Si2 directories
-- Lifecycle observed: startup readiness, `idle`/`busy` JSON status, two
-  sequential requests, streamed completion markers, graceful stop, socket
-  cleanup, and VRAM return to the pre-server level
-- CHGNet integration: one resident model handled three requests and was
-  compared with one-shot execution
-
-The CHGNet server comparison required exact equality for `OSZICAR`, `CONTCAR`,
-and `vasprun.xml`, plus exact `OUTCAR` content before its live resource-accounting
-footer. Model initialization occurred once for the server rather than once per
-request.
-
-CUDA status identified the resident backend and current workdir while busy.
-Observed total device memory was approximately 1.25 GiB for the active CHGNet
-server and 1.30 GiB for the idle MACE server, compared with a host baseline of
-approximately 0.94 GiB. These values demonstrate residency on this host only;
-they are not memory requirements or benchmarks.
-
-Additional CUDA workflow smokes passed for ORB and MatterSim MD and NequIP and
-Allegro single points in their dedicated environments. They validate that the
-shared CLI/runtime changes did not regress those calculator families; they are
-not additional server-concurrency tests.
-
-The full real-pymatgen suite with MACE integration on CUDA completed as:
-
-```text
-375 collected
-355 passed
-20 skipped
-```
-
-The skipped tests require optional backend packages not installed together in
-the main environment. The fast stub-mode suite completed with 350 passed and
-25 integration tests deselected; the package sdist/wheel build also passed. No
-VPMDK process or Unix socket remained after validation.
+The lightweight client path reduced an absent-socket invocation from about
+4.1 seconds to about 0.02 seconds on the validation host. These measurements
+and the recorded GPU memory values were host-specific observations, not package
+performance guarantees. Current behavior is enforced by the unit and optional
+integration tests rather than by preserving individual development-run counts.
 
 ## 2026-06-03 EquiformerV3 Validation
 

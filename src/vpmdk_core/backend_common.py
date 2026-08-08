@@ -216,9 +216,8 @@ _DEFAULT_SIMPLE_MODEL_POLICY = BackendModelPolicy(allow_named=True)
 # Backends whose named-model resolver is a spec lookup returning a
 # ``{"display_name": ...}`` mapping. They share one closure shape, keyed here by
 # the ``named_resolver`` policy value to the root-module resolver attribute.
-# Each entry: (spec-resolver attribute, named-models registry attribute, label).
-# The registry/label let the resolver raise the same "Available: <names>"
-# diagnostic the per-backend builders used to raise for an unknown named model.
+# Each entry stores the spec-resolver attribute, named-model registry attribute,
+# and label used for an "Available: <names>" diagnostic.
 _SPEC_NAMED_RESOLVERS = {
     "eqnorm": (
         "_resolve_eqnorm_named_model_spec",
@@ -367,15 +366,8 @@ def _resolve_model_reference(
     if allow_local:
         candidate_exists = os.path.exists(candidate)
         if candidate_exists:
-            # MODEL was the one user-supplied input path with no non-regular
-            # check (the R140/R141/R153/R154 guards are applied per read
-            # path, and no loader path covers MODEL): a FIFO here made the
-            # loader's open() block forever -- a silent one-shot hang, and in
-            # server mode a daemon child blocked mid-load while HOLDING the
-            # endpoint's pidfile, poisoning the socket for every later serve.
-            # Narrowed to FIFOs (the blocking type), not
-            # _require_regular_input_file: directory-shaped checkpoints are
-            # legitimate for some backends.
+            # Reject FIFOs before a loader can block on open(). Directories stay
+            # valid because some backends use directory-shaped checkpoints.
             try:
                 candidate_stat = os.stat(candidate)
             except OSError:
@@ -498,9 +490,8 @@ def _resolve_backend_model_reference(
             spec = spec_resolver(value)
             if spec is not None:
                 return str(spec["display_name"])
-            # The value already failed the local-path checks, so it was meant as
-            # a named model. Raise the descriptive enumeration the per-backend
-            # builders used to raise instead of a generic "unsupported" message.
+            # The value failed local-path checks and is therefore a named-model
+            # request; report the available names.
             available = ", ".join(
                 sorted(
                     str(named["display_name"])

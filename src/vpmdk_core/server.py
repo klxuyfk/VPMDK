@@ -33,13 +33,8 @@ from vpmdk_protocol import (
 )
 
 try:
-    # ASE raises PropertyNotImplementedError (a NotImplementedError subclass) at
-    # COMPUTE time when a calculator cannot provide a requested property (e.g.
-    # get_stress() on a forces-only model during ISIF>=3). That is a genuine
-    # calculation failure, distinct from VPMDK's own NotImplementedError raises
-    # for unsupported INPUT config (VTST ICHAIN / NFREE), so _execute_job must not
-    # fold it into input_error. Empty-tuple fallback => isinstance is always False
-    # (all NotImplementedError then classify as input_error, the prior behavior).
+    # ASE's compute-time PropertyNotImplementedError is a calculation failure;
+    # VPMDK's NotImplementedError for unsupported input remains an input error.
     from ase.calculators.calculator import (
         PropertyNotImplementedError as _ASEPropertyNotImplementedError,
     )
@@ -47,13 +42,8 @@ except Exception:  # pragma: no cover - ASE is always present in server mode
     _ASEPropertyNotImplementedError = ()
 
 try:
-    # Used to isolate the process-global numpy RNG per request: a resident MD run
-    # (IBRION=0 + T>0) draws initial velocities from MaxwellBoltzmannDistribution,
-    # which consumes np.random's global state. Without per-request save/restore,
-    # request B advances that state so a repeated request A (and the A->B->A
-    # isolation sequence) would produce different velocities than a fresh one-shot
-    # process. Saving before and restoring after each job keeps every request
-    # deterministic from the resident's startup state.
+    # Save and restore NumPy's process-global RNG around each job so resident MD
+    # requests replay the server's startup state instead of influencing one another.
     import numpy as _np
 except Exception:  # pragma: no cover - numpy is always present in server mode
     _np = None
@@ -174,7 +164,7 @@ def _pidfile_content(expected_socket: str) -> str:
     The third line records the kernel start time of this process so a later
     liveness check can identify it WITHOUT parsing its cmdline (a
     default-socket serve's cmdline does not mention the socket at all, which
-    made the R136 force-drain protection silently inapplicable to the plain
+    made the force-drain protection silently inapplicable to the plain
     `vpmdk serve` invocation). Omitted where /proc is unavailable; readers
     fall back to the cmdline heuristic then.
     """
@@ -403,7 +393,7 @@ def _pidfile_names_live_server(socket_path: str) -> bool:
 def _remove_stale_pidfile(socket_path: str) -> None:
     """Remove a leftover pidfile paired with a socket already found stale.
 
-    SERVER_MODE_SPEC 2.1 keys staleness solely on the socket: once the socket has
+    the server lifecycle contract keys staleness solely on the socket: once the socket has
     been found unresponsive and unlinked, the daemon that wrote ``<socket>.pid``
     is dead, so the pidfile is stale too -- even if its recorded PID has since
     been recycled to an unrelated live process. Remove it (matching only the
@@ -430,22 +420,9 @@ def _remove_stale_pidfile(socket_path: str) -> None:
         if not stat.S_ISREG(file_stat.st_mode):
             return
         if file_stat.st_size == 0:
-            # A ZERO-LENGTH pidfile is the daemon's own crash residue, not an
-            # external supervisor's data: _write_pidfile's O_CREAT|O_EXCL makes an
-            # empty file and flushes the bytes only on close, so a SIGKILL/power
-            # loss in that window (or ext4 delayed allocation after a crash) leaves
-            # <socket>.pid empty. Since the paired socket has ALREADY been found
-            # unresponsive/absent before this runs, that empty file is stale.
-            # Remove it -- otherwise the NEXT daemon's _write_pidfile hits the
-            # FileExistsError branch, reads empty (metadata None), and raises "not
-            # owned by this VPMDK socket", permanently blocking `serve --daemon`
-            # restart until an operator manually deletes it (the exact deadlock
-            # this restart-resilience function exists to prevent). Removing an
-            # empty file destroys nothing, so it never clobbers foreign data. This
-            # is race-free against a concurrent starting daemon: _bind writes the
-            # pidfile only AFTER the socket is listening, so any half-written empty
-            # pidfile coincides with a LIVE socket that prepare_socket_path rejects
-            # via ServerAlreadyRunning before ever calling this.
+            # After the paired socket is confirmed stale, an empty pidfile is
+            # incomplete daemon metadata and can be removed safely. A live
+            # concurrent daemon is rejected through its listening socket first.
             pass  # fall through to the inode-guarded unlink below
         else:
             with os.fdopen(fd, "rb") as file_obj:
@@ -623,7 +600,7 @@ def _probe_foreground_log_file(path: str) -> int:
     immediately delivered EOF to a FIFO's waiting reader (``cat fifo``),
     which then exited -- so the post-load FileHandler reopened the FIFO
     with no reader left and blocked forever, the exact hang the probe
-    exists to prevent (cross-review finding).
+    exists to prevent.
     """
 
     return os.open(
@@ -1116,7 +1093,7 @@ BACKEND_CONFIGURATION_TAGS = frozenset(
 # no cross-backend read and no cross-module delegation into it). A resident of a
 # different backend ignores such a leftover tag exactly as the one-shot builder
 # does, so the request-validation path drops it instead of raising a spurious
-# exit-5 mismatch (SERVER_MODE_SPEC 3.4). Each maps prefix -> owning MLP.
+# exit-5 mismatch (the server-mode backend-compatibility contract). Each maps prefix -> owning MLP.
 #
 # Deliberately EXCLUDED (kept and still compared, i.e. fail-closed) because their
 # tags are shared across a builder family or read via delegation, where dropping
@@ -1206,7 +1183,7 @@ _LOWERCASE_CONFIGURATION_TAGS = frozenset(
 # "use default": it is kept so ``_normalize_configuration_value`` reproduces the
 # same rejection the one-shot builder would (a coerce error for bool/int/float,
 # or a mismatch against the resident's real value for the string tags), keeping
-# server and one-shot acceptance equivalent (SERVER_MODE_SPEC 3.4). Every OTHER
+# server and one-shot acceptance equivalent (the server-mode backend-compatibility contract). Every OTHER
 # optional tag defaults a blank -- via ``or DEFAULT`` (ORB_MODEL, MATRIS_TASK,
 # MATLANTIS_PRIORITY, ALPHANET_PRECISION, SEVENNET_FILE_TYPE ...), an ``if raw:``
 # guard (EQNORM_VARIANT), or ``_parse_optional_float`` returning ``None``
@@ -1340,7 +1317,7 @@ def _canonical_mlp_identity(mlp: str) -> str:
 # variable itself "cpu" BEFORE it reaches the calculator, so a blank-DEVICE
 # resident actually runs on CPU and must ADVERTISE "cpu" -- otherwise it reports
 # "" and rejects a later explicit DEVICE=cpu request as exit 5 even though both
-# select the identical CPU calculator (SERVER_MODE_SPEC 3.4).
+# select the identical CPU calculator (the server-mode backend-compatibility contract).
 #
 # MatGL/M3GNet is INCLUDED for the same "where does it actually land" reason,
 # reached differently: `matgl.load_model()` builds the potential on CPU, and a
@@ -1350,7 +1327,7 @@ def _canonical_mlp_identity(mlp: str) -> str:
 # potential still on the CPU: a request explicitly naming "cuda" was ACCEPTED and
 # then silently ran on the CPU, while "cpu" -- the device it really uses -- was
 # rejected with exit 5. Fixing it here rather than by autodetecting inside the
-# builder keeps one-shot behavior byte-identical (SPEC 1.1); the server simply
+# builder keeps one-shot behavior byte-identical; the server simply
 # stops describing a placement that never happened.
 # MatRIS is INCLUDED even though only two of its three build paths apply the
 # fallback, because those two are the ones real runs take: a local checkpoint and
@@ -1371,7 +1348,7 @@ def _canonical_mlp_identity(mlp: str) -> str:
 # any of the three builders). For them DEVICE is a tag the one-shot builder
 # IGNORES, so comparing it produced a permanent exit 5 for a request naming any
 # device other than the host's autodetected one -- while `vpmdk --dir` on that
-# same directory builds a byte-identical calculator. SERVER_MODE_SPEC 3.4 rejects
+# same directory builds a byte-identical calculator. the server-mode backend-compatibility contract rejects
 # only tags that DIFFER in effect, so it is dropped from the comparison (status
 # still reports the resident's actual device, which stays informational).
 _DEVICE_IGNORING_IDENTITIES = frozenset(
@@ -1436,7 +1413,7 @@ def _resolve_backend_device(mlp: str | None, raw_device: Any) -> str:
     if resolved.startswith("cpu:") and resolved[4:].isdigit():
         # torch's cpu type has exactly ONE underlying device: 'cpu:1' builds
         # and computes byte-identically to 'cpu' in one-shot, so rejecting
-        # the pair as a mismatch (exit 5) violated SPEC 3.4's
+        # the pair as a mismatch (exit 5) violated the backend-compatibility contract's
         # reject-only-what-DIFFERS rule. Every index collapses, not just 0.
         resolved = "cpu"
     if len(resolved) > 2 and resolved.endswith(":0"):
@@ -1460,7 +1437,7 @@ def _resolve_backend_device(mlp: str | None, raw_device: Any) -> str:
         # resident started from a template BCAR with `DEVICE=` (an unset
         # ${VPMDK_DEVICE}) advertise device="" and then PERMANENTLY reject every
         # request naming the device it actually runs on -- exit 5 for a config the
-        # one-shot builder accepts, breaking SERVER_MODE_SPEC 3.4 ("reject only
+        # one-shot builder accepts, breaking the server-mode backend-compatibility contract ("reject only
         # tags that DIFFER"). Resolve it the same way an omitted DEVICE resolves.
         return _resolve_backend_device(mlp, None)
     return resolved
@@ -1536,7 +1513,7 @@ def _normalize_configuration_value(
         # _OMIT_TAG (treated as omitted) instead of raising. Raising here would
         # reject a request the one-shot builder accepts, and -- for a resident
         # started with such a value -- crash backend_identity AFTER the model is
-        # already loaded (SERVER_MODE_SPEC 3.4 non-equivalence).
+        # already loaded (the server-mode backend-compatibility contract non-equivalence).
         parsed = root._parse_optional_float(value, key=tag)
         if parsed is None:
             return _OMIT_TAG
@@ -1749,7 +1726,7 @@ def _effective_configuration(
         # config it actually loaded: otherwise a request whose BCAR spells out the
         # very same file -- which `vpmdk --dir` runs with a byte-identical
         # calculator -- compares request='<path>' against server=None and is
-        # rejected with exit 5, contradicting SERVER_MODE_SPEC 3.4 ("reject only
+        # rejected with exit 5, contradicting the server-mode backend-compatibility contract ("reject only
         # tags that DIFFER") and the documented "Matching backend tags repeated |
         # Accepted". Same shape as the EQNORM_VARIANT inference below. The helper
         # never downloads and returns None when it cannot infer without side
@@ -1801,7 +1778,7 @@ def _effective_configuration(
         # has no SEVENNET_ENABLE_* keys, so a request that explicitly spells out a
         # no-op disable (e.g. SEVENNET_ENABLE_CUEQ=0 -> False) is rejected as
         # request=False vs server=None even though both select the identical
-        # non-accelerated calculator (SERVER_MODE_SPEC 3.4). Recording the implied
+        # non-accelerated calculator (the server-mode backend-compatibility contract). Recording the implied
         # False makes the equivalent request match; an omitted flag is still not
         # compared, and an enabling request (True) still mismatches a plain
         # resident, as it must.
@@ -1837,7 +1814,7 @@ def backend_identity(tags: Mapping[str, Any], *, base_dir: str) -> dict[str, Any
     # normalizing it here would raise for a strict-typed foreign value (e.g.
     # ALPHANET_PRECISION=16 or NEQUIX_CAPACITY_MULTIPLIER=auto under an MLP=CHGNET
     # resident) and crash `serve` AFTER a full model load -- a startup failure
-    # with no one-shot analog (SERVER_MODE_SPEC 1-2). Keeping this symmetric with
+    # with no one-shot analog (the one-shot/server compatibility contract). Keeping this symmetric with
     # the request path also ensures a foreign tag is absent from both sides of the
     # comparison. Only verified-exclusive foreign prefixes are stripped, so a tag
     # the resident builder actually consumes is never dropped.
@@ -1940,7 +1917,7 @@ _MATLANTIS_FAMILY_IDENTITIES = frozenset({_canonical_mlp_identity("MATLANTIS")})
 # forwarding the full bcar_tags) -- so EQUIFORMER_V3 is a real consumer of these
 # two tags and MUST be an owner, else an EQUIFORMER_V3 resident strips them and
 # never compares them, silently accepting a mismatched predictor/config (an
-# under-comparison / SERVER_MODE_SPEC 3.4 breach). _build_fairchem_calculator
+# under-comparison / the server-mode backend-compatibility contract breach). _build_fairchem_calculator
 # (modern) does NOT read them, so it stays out.
 _FAIRCHEM_TAG_OWNERS = {
     "FAIRCHEM_TASK": frozenset({_canonical_mlp_identity("FAIRCHEM")}),
@@ -1997,7 +1974,7 @@ def _strip_foreign_backend_tags(
 
     A tag consumed only by backend family F is ignored by the one-shot builder of
     any resident outside F, so keeping it would raise a spurious exit-5 mismatch
-    (SERVER_MODE_SPEC 3.4). Relevance is by verified family membership
+    (the server-mode backend-compatibility contract). Relevance is by verified family membership
     (_tag_owner_mlp_identities): a resident inside the tag's family keeps it (it
     is a genuine config), and generic / shared-resolver / unknown tags are always
     kept -- so the server never ignores a tag its resident builder might consume.
@@ -2197,7 +2174,7 @@ def validate_request_backend(
                 # real difference with "MACE MODEL path not found: <workdir>/
                 # CHGNet-v0.3.0" -- naming a backend and a checkpoint path the
                 # user never wrote, instead of enumerating the differing tag as
-                # SERVER_MODE_SPEC 3.4 requires. Comparisons across two different
+                # the server-mode backend-compatibility contract requires. Comparisons across two different
                 # backends are meaningless anyway; the MLP is the difference to fix.
                 raise BackendConfigurationMismatch(differences)
 
@@ -2224,11 +2201,11 @@ def validate_request_backend(
             and nequix_compile_is_inert
         ):
             # See _nequix_torch_only_tag_is_inert: dead under jax, so a
-            # differing value does not make the calculators differ (SPEC 3.4).
+            # differing value does not make the calculators differ.
             continue
         if tag == "DEVICE" and device_is_inert:
             # The resident's builder cannot act on DEVICE, so a differing value
-            # does not make the request's calculator differ (SERVER_MODE_SPEC 3.4
+            # does not make the request's calculator differ (the server-mode backend-compatibility contract
             # rejects only tags that DIFFER in effect). Comparing it rejected a
             # configuration `vpmdk --dir` builds identically.
             continue
@@ -2270,7 +2247,7 @@ def validate_request_backend(
                 )
 
     # A present-but-blank (or omitted) MODEL carries no model intent: per
-    # SERVER_MODE_SPEC §3.4 only backend tags that *differ* from the resident are
+    # the server-mode backend-compatibility contract only backend tags that *differ* from the resident are
     # rejected, and an unspecified MODEL means "reuse the resident model". It is
     # therefore intentionally not compared here — resolving it to a default and
     # comparing against resident['model'] mis-rejects backends whose model
@@ -2433,7 +2410,7 @@ def _detect_calculator_graph_converter_algorithm(calculator) -> str | None:
     CHGNET resident used to advertise GRAPH_CONVERTER_ALGORITHM=None, so a
     request spelling out the algorithm the bundled default model ALREADY uses
     (measured: CHGNet v0.3.0 ships algorithm='fast') was rejected exit 5
-    while one-shot computed byte-identical numbers -- a SPEC 3.4 violation.
+    while one-shot computed byte-identical numbers, violating backend compatibility.
     Reading the value from the already-loaded calculator advertises reality:
     an explicit matching request now matches, and a resident genuinely loaded
     with a legacy converter still correctly rejects 'fast'.
@@ -2725,11 +2702,8 @@ class _EventSender:
             if not self.connected:
                 return False
             try:
-                # Serialization stays inside the guard: an encoding failure here
-                # used to escape send(), escape _execute_job's finally and kill
-                # the worker thread, leaving the server alive but unable to run
-                # anything ever again. Any failure (socket or encoding) simply
-                # marks the connection unusable.
+                # Socket and encoding failures only mark this connection unusable;
+                # they must not terminate the worker.
                 for payload in _event_payloads(event):
                     self.connection.sendall(payload)
                 return True
@@ -2896,7 +2870,7 @@ class VPMDKServer:
         # converter: only when no spelling of the tag was given explicitly
         # (an explicit tag stays authoritative), advertise the algorithm the
         # resident model actually carries so an explicit matching request is
-        # not rejected exit 5 (SPEC 3.4). Only spellings the RESIDENT's
+        # not rejected with exit 5. Only spellings the RESIDENT's
         # builder actually reads suppress detection: a stale FOREIGN spelling
         # (a CHGNET resident with a leftover MATRIS_GRAPH_CONVERTER from an
         # edited template) is ignored by the builder AND stripped as foreign
@@ -3278,7 +3252,7 @@ class VPMDKServer:
             # enqueues in accept order; gating status/stop on it lets an earlier
             # connection that is slow or silent in _read_request (up to
             # REQUEST_READ_TIMEOUT) stall a monitoring status or an operator stop,
-            # violating SERVER_MODE_SPEC 3.2 ("respond immediately"). The finally
+            # violating the server control-plane contract ("respond immediately"). The finally
             # below still advances this connection's sequence in accept order, so
             # the run-queue ordering invariant is preserved.
             if op == "status":
@@ -3348,7 +3322,7 @@ class VPMDKServer:
             # as the filesystem takes. _enqueue_lock is the server's single global
             # gate -- status(), the stop handler, _should_exit() on every accept
             # iteration, and _worker_loop's next dequeue all take it -- so holding
-            # it across that walk froze status/stop (which SERVER_MODE_SPEC 3.2
+            # it across that walk froze status/stop (which the server control-plane contract
             # requires to answer even while busy), stalled the accept loop, left
             # the worker unable to start the next job on an idle GPU, and blocked
             # both shutdown paths, so an operator could not even stop the server.
@@ -3587,7 +3561,7 @@ class VPMDKServer:
                     # (needed early because validate_request_backend consumes
                     # request_tags) skipped them on the failure path, so a
                     # failing request lost the Note: lines the byte-identical
-                    # one-shot prints -- SPEC 3.3's own log-event example is
+                    # one-shot prints -- the server protocol's log-event example is
                     # exactly the KPOINTS line. Inside the redirect, so the
                     # notices stream to the client before the diagnostic, in
                     # one-shot's order. A malformed/unreadable request BCAR
@@ -3662,7 +3636,7 @@ class VPMDKServer:
                 # capture one raised MID-CALCULATION by a third-party backend
                 # (torch's "Could not run 'aten::...' with arguments from the
                 # 'CUDA' backend" for an unregistered kernel), which
-                # SERVER_MODE_SPEC 2.5 defines as exit 2 -- and the exit-1 branch
+                # the server-mode exit-code contract defines as exit 2 -- and the exit-1 branch
                 # additionally suppresses the traceback the user needs.
                 # ASE's PropertyNotImplementedError (a NotImplementedError
                 # subclass) is likewise NOT input: it is raised mid-calculation by a
@@ -3682,7 +3656,7 @@ class VPMDKServer:
                 ),
             ) or (
                 isinstance(exc, OSError)
-                # errnos WITHOUT a dedicated Python subclass (lesson xxxix):
+                # errnos WITHOUT a dedicated Python subclass:
                 # a read-only mount, a self-referential symlink loop at an
                 # artifact path, an over-long symlink target. All are
                 # deterministic properties of the submitted workdir.
@@ -3691,8 +3665,8 @@ class VPMDKServer:
                 # EROFS spelled out: Python has no dedicated OSError subclass
                 # for a read-only FILESYSTEM (a read-only NFS export, `mount -o
                 # remount,ro`, a container image layer), so "a read-only tree"
-                # -- which the comment below has promised exit 1 for since
-                # R135 -- only actually matched when read-only-ness came from
+                # -- which should map to exit 1 -- only actually matched when
+                # read-only-ness came from
                 # permission bits (EACCES -> PermissionError), not from the
                 # mount itself.
                 # Writing outputs into the client's workdir failed because of the
@@ -3700,7 +3674,7 @@ class VPMDKServer:
                 # tree). These are deterministic properties of the submitted
                 # workdir -- retrying reproduces them byte-for-byte -- so
                 # advertising exit 2 ("retryable calculation failure",
-                # SERVER_MODE_SPEC 2.5) sends batch drivers into a retry loop
+                # the server-mode exit-code contract) sends batch drivers into a retry loop
                 # that can never succeed. The one-shot CLI dies with an
                 # uncaught-OSError exit 1 for the same tree, so exit 1 here also
                 # keeps the two paths in agreement. Other OSErrors (ENOSPC,
@@ -3959,8 +3933,8 @@ class VPMDKServer:
         default). Meanwhile the listener is already closed, so `status`/`stop`
         get ECONNREFUSED. With a long job in flight the operator's only recourse
         was SIGKILL -- which skips _cleanup entirely and leaves the socket file
-        and pidfile behind, exactly what SERVER_MODE_SPEC's shutdown checklist
-        forbids, with the model still holding VRAM.
+        and pidfile behind, violating the documented shutdown contract, with
+        the model still holding VRAM.
 
         So poll the join and watch for a NEW delivery, completing the escalation
         ladder: first signal = graceful, second = force, third = stop waiting for
@@ -4297,7 +4271,7 @@ def _daemon_exec_argv(args, socket_path: str, log_file: str) -> list[str]:
         sys.executable,
         # -u: the daemon's stdout is a dup2'd REGULAR FILE (the log), which
         # CPython block-buffers. Every print()-based startup diagnostic --
-        # including the SERVER_MODE_SPEC 2.1 "BCAR not found; starting server
+        # including the the server lifecycle contract "BCAR not found; starting server
         # with default MLP=CHGNET." warning and the backend builders' own
         # messages -- then sat in that buffer for the life of the daemon, so
         # `grep` on the log found nothing while the server ran and the text was
@@ -4476,7 +4450,8 @@ def _drain_stream_guarded(stream) -> None:
     """Flush one standard stream without letting a dead consumer override the
     exit code.
 
-    ``vpmdk serve`` was the one subcommand still exposed to the R142 class:
+    ``vpmdk serve`` was the one subcommand still exposed to this buffered-stream
+    failure class:
     with the stream on a full filesystem or a pipe whose reader exited, the
     daemon-parent success print (and a clean foreground shutdown) buffered,
     serve_cli returned 0, and CPython's interpreter-exit flush failure
@@ -4552,7 +4527,7 @@ def _serve_cli_inner(args) -> int:
         return report_error("--idle-timeout must be a finite non-negative number.")
     try:
         socket_path = resolve_socket_path(args.socket)
-        # serve_cli always writes a pidfile (R136), so pidfile problems are
+        # serve_cli always writes a pidfile, so pidfile problems are
         # decidable here, before the model load.
         prepare_socket_path(socket_path, pidfile_expected=True)
     except ServerAlreadyRunning as exc:
