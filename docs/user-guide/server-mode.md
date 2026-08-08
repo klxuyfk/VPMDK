@@ -188,11 +188,18 @@ provides a reusable shell script.
 | Code | Meaning |
 | ---: | --- |
 | `0` | Success. |
-| `1` | Invalid arguments, startup configuration, or calculation input. |
-| `2` | Calculation failed in the server. |
+| `1` | Invalid arguments, startup configuration, or calculation input; non-retryable until corrected. |
+| `2` | Calculation failed while running in the server; potentially retryable. |
 | `3` | Server unavailable or connection lost. |
 | `4` | Client timeout. |
 | `5` | Request backend settings do not match the resident calculator. |
+
+Exit codes 1 and 2 are intentionally distinct. Code 1 (`input_error`) is a
+permanent failure for an unchanged input directory, so a batch driver must not
+retry it until the user corrects the input or configuration. Code 2
+(`calculation_error`) is the retryable calculation-failure class: it covers
+runtime exceptions, out-of-memory failures, and similar errors that may clear
+on a later attempt. It does not guarantee that retrying will succeed.
 
 ## Python Client
 
