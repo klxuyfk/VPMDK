@@ -499,13 +499,8 @@ def _read_non_comment_lines(path: str) -> list[str]:
         import stat as stat_lib
 
         if not stat_lib.S_ISREG(os.stat(path).st_mode):
-            # A FIFO here cannot be caught by the except below: open() on a
-            # readerless FIFO BLOCKS forever instead of raising, which wedged
-            # the resident worker permanently at OUTCAR-header time (stop
-            # --force could not preempt the blocked open). KPOINTS was the one
-            # input file the regular-file sweep missed -- it is read at OUTPUT
-            # time, not input time. stat never blocks; degrade to "no lines"
-            # exactly like the unreadable cases below.
+            # A readerless FIFO blocks on open(), so inspect KPOINTS before the
+            # output-time read and treat non-regular input as unavailable.
             return []
     except OSError:
         pass
@@ -777,7 +772,7 @@ def _initialize_vasp_compat_outputs(
     # mode writes are checked unconditionally: XDATCAR is MD-only and
     # CHGCAR/energy.csv are flag-gated, and checking those regardless aborted
     # an ordinary static run over an ignored CHGCAR directory that
-    # _print_unused_input_notices itself calls unused (cross-review finding).
+    # _print_unused_input_notices itself calls unused.
     # The sites that KNOW they will write a conditional artifact preflight it
     # themselves (the MD observer via preflight_artifacts, run_relaxation for
     # energy.csv, run_workdir's WRITE_CHGCAR branch for CHGCAR).
@@ -944,16 +939,8 @@ def _append_outcar_compat_step(
                     chain_plus_total = np.zeros(3, dtype=float)
 
             handle.write(
-                # EXACTLY two numeric fields, as real VTST writes (spring
-                # projection, signed REAL tangential projection). VTST's
-                # nebbarrier.pl takes the LAST whitespace field of this line as
-                # the interior-image force and nebspline.pl uses it as -dE/ds;
-                # a third field (the non-negative max perpendicular force this
-                # line used to append) fed the spline a slope <= 0 at every
-                # interior image and fabricated saddle points and minima that
-                # do not exist in the computed energies (measured: a strictly
-                # monotonic 3-image band gained a spurious saddle 36% above
-                # its highest image).
+                # VTST expects exactly two numeric fields and reads the final
+                # field as the signed tangential force used by nebspline.pl.
                 " NEB: projections on to tangent (spring, REAL) "
                 f"{0.0:12.6f} {tangential_force:12.6f}\n\n"
             )

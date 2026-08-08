@@ -17,19 +17,10 @@ than the current one.
 
 ## One-Shot and Resident Execution
 
-The commands below enter the same VASP-style work-directory execution path:
-
-| Form | Calculator lifecycle | Recommended use |
-| --- | --- | --- |
-| `vpmdk --dir DIR` | Build a calculator for this process and release it on exit. | Default; isolated or heterogeneous calculations. |
-| `vpmdk run --dir DIR` | Submit to a calculator already created by `vpmdk serve`. | Many directories using the same model and construction settings. |
-
-Server mode does not change `INCAR` mode selection or output semantics. It
-changes calculator ownership, queueing, environment authority, failure
-handling, and shutdown responsibilities. It is POSIX-only, serializes work per
-server, and never falls back silently to one-shot execution. Read
-[Server Mode](server-mode.md) before replacing `vpmdk` with `vpmdk run` in an
-automated workflow.
+Use `vpmdk --dir DIR` for normal isolated runs. `vpmdk run --dir DIR` submits
+the same directory to an existing resident calculator. Server lifecycle,
+configuration inheritance, and queueing are documented in
+[Server Mode](server-mode.md).
 
 ## Input Files
 
@@ -322,62 +313,8 @@ there usually abort the run.
 Unknown `BCAR` tags are not globally validated; they are simply ignored unless
 some backend or helper explicitly consumes them.
 
-## EquiformerV2 / eqV2 Checkpoints
+## Backend-Specific Configuration
 
-EquiformerV2 / eqV2 checkpoints use the FAIRChem v1/OCP backend. There is no
-separate `MLP=EQUIFORMER_V2` tag.
-
-Typical `BCAR`:
-
-```text
-MLP=FAIRCHEM_V1
-MODEL=/path/to/eqV2_checkpoint.pt
-DEVICE=cuda
-```
-
-Use a FAIRChem v1 environment, not a FAIRChem v2 environment. Original
-Equiformer V1 `graph_attention_transformer` checkpoints are not part of the
-documented support surface because they require older OCP trainer conventions.
-
-## EquiformerV3 Backend
-
-`MLP=EQUIFORMER_V3` is a dedicated entry point for EquiformerV3 checkpoints. It
-uses the FAIRChem v1/OCP calculator path after importing the official
-EquiformerV3 registration module.
-
-Before launching `vpmdk`, make the official source tree importable:
-
-```bash
-export PYTHONPATH=/path/to/equiformer_v3/src:${PYTHONPATH}
-```
-
-Typical `BCAR`:
-
-```text
-MLP=EQUIFORMER_V3
-MODEL=/path/to/equiformer_v3_checkpoint.pt
-DEVICE=cuda
-```
-
-If your registration module is not
-`fairchem.experimental.models.equiformer_v3.equiformer_v3`, set:
-
-```text
-EQUIFORMER_V3_MODULE=your.module.name
-```
-
-## DPA / DPA-4 Checkpoints
-
-DPA-family checkpoints use DeePMD-kit through `MLP=DEEPMD`.
-
-Typical `BCAR`:
-
-```text
-MLP=DEEPMD
-MODEL=/path/to/dpa_checkpoint.pt
-```
-
-For DPA-4 / DPA4 / SeZM checkpoints, use a `deepmd-kit` build that includes the
-matching `dpa4` / `SeZM` model registration. If DeepMD fails while resolving MPI
-shared libraries, make sure the backend environment's `lib` directory is first
-on `LD_LIBRARY_PATH`.
+Model selection, environment requirements, and backend-specific `BCAR` examples
+belong in the [Backend Reference](../reference/backends.md) and
+[Backend Environment Notes](../development/backend-environments.md).

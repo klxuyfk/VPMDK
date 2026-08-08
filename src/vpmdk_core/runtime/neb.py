@@ -156,8 +156,8 @@ def _read_last_vasprun_step(path: str) -> tuple[float, np.ndarray | None, np.nda
         raise ValueError("vasprun.xml has no <calculation> blocks")
     calculation = calculations[-1]
 
-    # The image file is self-describing about PSTRESS (echoed in <incar> per
-    # the R139 fix), and its calculation-level energies/stress carry the VASP
+    # The image file is self-describing about PSTRESS (echoed in <incar>), and
+    # its calculation-level energies/stress carry the VASP
     # PSTRESS transformations: energy = E + PSTRESS*V (enthalpy) and the
     # stress diagonal has PSTRESS subtracted. This reader feeds the PARENT
     # aggregate writers, which re-apply those transformations from the parent
@@ -345,7 +345,7 @@ def _read_neb_image_atoms(
     -- consume the same user input, and a degenerate image lattice raises a raw
     ``numpy.linalg.LinAlgError`` from the cell inversion inside them. Left
     outside, that escaped as ``calculation_error`` (exit 2, which
-    SERVER_MODE_SPEC 2.5 documents as RETRYABLE, so a retry driver resubmits a
+    the server-mode exit-code contract documents as RETRYABLE, so a retry driver resubmits a
     permanently broken NEB directory forever) while the byte-identical POSCAR in
     a flat workdir is ``input_error`` (exit 1) -- run_workdir wraps exactly these
     steps. Same input, two classifications, purely because of the directory
@@ -369,9 +369,7 @@ def _read_neb_image_atoms(
     try:
         atoms = root.AseAtomsAdaptor.get_atoms(structure)
         root._apply_vasp_comment_from_structure(atoms, structure)
-        # One shared rule for the lattice AND the positions: this branch used to
-        # check only the cell determinant, so non-finite POSITIONS passed here as
-        # well as in the flat path.
+        # Apply the same finite-geometry rule to lattice and positions.
         root._validate_finite_geometry(atoms)
         if wrap:
             atoms.wrap()
@@ -983,7 +981,7 @@ def _run_ase_neb_relaxation(
         # VPMDK's absent-tag default is plain NEB, which UNDERESTIMATES the
         # barrier (measured with EMT: 0.2848 vs 0.3745 eV, 24% low, for an
         # Au/Al(001) hop with 2 moving images) -- silently, with exit 0.
-        # Changing the default would alter existing runs (SPEC 1.1), so the
+        # Changing the default would alter existing runs, so the
         # divergence is disclosed instead, like ANDERSEN_PROB's.
         print(
             "Warning: LCLIMB is not set; VPMDK runs PLAIN NEB (climb=False), "
@@ -1182,7 +1180,7 @@ def run_neb_images(
                             # (the len(steps) fallback) while the parent
                             # aggregate of the SAME run and a flat workdir
                             # with the same INCAR both echo the requested
-                            # value (the R142 wiring's missing half).
+                            # value so both paths agree.
                             nsw=settings.nsw,
                         )
                     elif settings.ibrion == 0:

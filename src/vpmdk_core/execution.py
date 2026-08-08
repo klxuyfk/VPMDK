@@ -375,7 +375,7 @@ def execute_md(
     # take the square root of a negative number with no exception at all, so the
     # trajectory silently becomes nan and the nan surfaces far away as a raw
     # ValueError from the energy formatter -- reported as calculation_error, i.e.
-    # exit 2, which SERVER_MODE_SPEC 2.5 documents as RETRYABLE for a permanently
+    # exit 2, which the server-mode exit-code contract documents as RETRYABLE for a permanently
     # invalid INCAR. Caught up front it is exit 1 instead.
     #   MDALGO 2/4 (Nose-Hoover chain): T <= 0 breaks (Q = 3NkT*tdamp^2 = 0).
     #   MDALGO 5   (CSVR/Bussi):        T <= 0 breaks ("Initial kinetic energy is
@@ -384,7 +384,7 @@ def execute_md(
     #                                  and completes today -- only T < 0 breaks.
     #   MDALGO 0   (plain NVE):         unaffected; it already completes at 0 K with
     #                                  exit 0, and legacy one-shot behavior must not
-    #                                  change (SPEC 1.1).
+    #                                  change (one-shot compatibility contract).
     if mdalgo in (1, 3) and (config.temperature < 0 or target_end < 0):
         raise _root().WorkdirInputError(
             "TEBEG and TEEND must not be negative; an absolute temperature below "

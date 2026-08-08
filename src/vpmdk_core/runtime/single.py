@@ -299,7 +299,7 @@ def _symmetry_operations(atoms, *, symprec: float):
         # atoms". A static range check would therefore reject values that are fine
         # for some cells. Classify the failure instead: it is unusable INPUT for
         # this structure (exit 1), not a retryable calculation failure (exit 2),
-        # which is what SERVER_MODE_SPEC 2.5 says exit 2 means -- a retry driver
+        # which is what the server-mode exit-code contract says exit 2 means -- a retry driver
         # resubmitted the permanently broken INCAR forever.
         raise _root().WorkdirInputError(
             f"Symmetry analysis failed at SYMPREC={symprec:g}: {exc}. "

@@ -150,11 +150,6 @@ def test_determine_vasp_fft_grid_rejects_absurd_grids_fast(incar):
 
 
 def test_determine_vasp_fft_grid_bounds_the_total_not_just_each_axis():
-    # R136 (P3): NGXF=NGYF=NGZF=99999 is per-axis legal under the R135 cap but
-    # a 1e15-point (8 PB) grid -- the whole calculation ran and then died at
-    # CHGCAR-write time as a "retryable" MemoryError, exactly the failure mode
-    # the R135 guard was written to prevent. Bound the RESOURCE (total
-    # points), not just the parameter axis.
     atoms = Atoms(
         "H2",
         positions=[[0.0, 0.0, 0.0], [0.0, 0.75, 0.0]],
@@ -1353,14 +1348,6 @@ def test_charge3net_runner_falls_back_to_defaults_when_inference_finds_nothing(
 def test_unconfigured_charge_backend_is_an_input_error(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    # R149 (P2): a permanently unconfigured charge backend (no CHARGE_MODEL /
-    # VPMDK_CHARGE_MODEL / CHARGE_SOURCE_DIR anywhere) raised a plain
-    # RuntimeError from inside the backend runner, AFTER the full ionic loop
-    # had completed -- so server mode classified it as calculation_error
-    # (exit 2), which SERVER_MODE_SPEC 2.5 documents as RETRYABLE, and a
-    # retry driver re-ran the whole calculation on the same broken directory
-    # forever, while one-shot exited 1 for the byte-identical input. The
-    # unmirrored half of the CHARGE_MLP selector fix one function away.
     atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3), pbc=True)
 
     monkeypatch.setattr(
@@ -1402,9 +1389,6 @@ def test_unconfigured_charge_backend_is_an_input_error(
 def test_missing_charge_python_interpreter_is_an_input_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
-    # R149 (P2), same family: CHARGE_PYTHON naming a non-existent interpreter
-    # surfaced as a bare FileNotFoundError from subprocess.run -> exit 2
-    # (retryable) in server mode, though no retry can create the executable.
     atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=np.eye(3), pbc=True)
 
     monkeypatch.setattr(
