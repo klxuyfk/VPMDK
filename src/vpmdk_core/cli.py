@@ -42,7 +42,7 @@ class UnsupportedInputError(NotImplementedError):
     (exit 1) WITHOUT also capturing a NotImplementedError that a third-party
     backend raises mid-calculation -- e.g. torch's "Could not run 'aten::...'
     with arguments from the 'CUDA' backend" for an unregistered kernel. That one
-    is an exception DURING the calculation, which the server-mode exit-code contract defines as
+    is an exception DURING the calculation, which SERVER_MODE_SPEC 2.5 defines as
     exit 2, and misclassifying it as exit 1 also suppressed its traceback (only
     the calculation-failure branch prints one).
 
@@ -57,7 +57,7 @@ def _print_unused_input_notices(workdir: str) -> None:
     One home for the loop: run_workdir emits these as its FIRST output, and
     the server calls the same helper on its hoisted request-BCAR failure path
     so a failing request still shows the notices the byte-identical one-shot
-    run prints first (the server protocol's log-event example is exactly the
+    run prints first (SPEC 3.3's own log-event example is exactly the
     KPOINTS line).
     """
 
@@ -126,7 +126,7 @@ def _capability_backend_tags(bcar, backend_tags) -> dict:
     """Return the tags that describe the backend this run will ACTUALLY use.
 
     In server mode ``bcar`` holds only what the REQUEST spelled out, and
-    the server-mode backend-compatibility contract deliberately lets a request omit backend tags to
+    SERVER_MODE_SPEC §3.4 deliberately lets a request omit backend tags to
     inherit the resident (the documented batch pattern -- see
     examples/server_batch/calculations/0001/BCAR). Resolving capabilities from
     the request alone therefore fell back to ``BackendConfig``'s CHGNET default,
@@ -576,8 +576,13 @@ def run_workdir(
                     "Invalid CHGCAR grid settings",
                     lambda: root.determine_vasp_fft_grid(atoms, incar),
                 )
-                # Validate CHARGE_* input before running the main calculation so
-                # permanent configuration errors fail immediately.
+                # Parse the CHARGE_* tags here too. They are pure BCAR input (the
+                # backend selector included), but the parse used to sit next to
+                # the CHGCAR write at the very END, so a one-character typo like
+                # CHARGE_MLP=CHARGE3NE ran the entire relaxation/MD first and only
+                # then failed -- burning the whole calculation to report a
+                # permanent input error. Validating up front costs nothing and
+                # makes the failure immediate, matching the grid check above.
                 charge_options = _read_workdir_input(
                     "Invalid CHARGE_* option",
                     lambda: root._charge_density_options_from_bcar(bcar),
@@ -717,7 +722,7 @@ _SERVER_SUBCOMMANDS = frozenset({"serve", *CLIENT_SUBCOMMANDS})
 
 
 def _legacy_main(argv: Sequence[str]) -> None:
-    # the one-shot compatibility contract is a non-negotiable contract: the behavior of `vpmdk`
+    # SERVER_MODE_SPEC 1.1 is a non-negotiable contract: the behavior of `vpmdk`
     # and `vpmdk --dir DIR` must not change by a single byte. `--help` is not a
     # subcommand, so it dispatches HERE -- which means this parser's description,
     # arguments and (absent) epilog are part of that byte-for-byte contract.
@@ -790,10 +795,10 @@ def _server_main(argv: Sequence[str]) -> int:
     from vpmdk_client import client_cli, parse_client_args
 
     # Same usage-error mapping as the import-light client entry point: argparse's
-    # sys.exit(2) collides with the server-mode exit-code contract's "retryable calculation
+    # sys.exit(2) collides with SERVER_MODE_SPEC 2.5's "retryable calculation
     # failure", and serve's own failures already report 1. Only the SUBCOMMAND
     # parser is remapped -- _legacy_main's parser is covered by the byte-for-byte
-    # one-shot compatibility contract and is deliberately left untouched.
+    # compatibility contract (SPEC 1.1) and is deliberately left untouched.
     args = parse_client_args(_server_parser(), list(argv))
     if args.command == "serve":
         return serve_cli(args)

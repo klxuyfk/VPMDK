@@ -72,6 +72,13 @@ raise SystemExit(exit_code)
 
 
 def test_client_run_resolves_workdir_exactly_like_one_shot(tmp_path: Path, monkeypatch):
+    # SERVER_MODE_SPEC 2.2: `run --dir D` must mean exactly what one-shot
+    # `vpmdk --dir D` means, and run_workdir resolves with a bare os.path.abspath.
+    # Expanding ~ here made the SAME argument resolve to two different
+    # directories: the request went to $HOME/calc while one-shot read ./~/calc --
+    # so the identical invocation could compute a different structure, write
+    # outputs elsewhere, or exit 0 through the server and 1 one-shot. SPEC 1.1
+    # forbids changing the one-shot side, so the client must not expand.
     from vpmdk_client import VPMDKClient
 
     home = tmp_path / "home"
@@ -121,6 +128,10 @@ def test_root_script_uses_lightweight_client_entry(tmp_path: Path):
 def test_socket_creation_failure_is_classified_as_unreachable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    # R125: socket() and settimeout() were called OUTSIDE the classified try, so an
+    # OSError raised there (EMFILE/ENFILE near RLIMIT_NOFILE, ENOBUFS) escaped every
+    # VPMDKClientError mapping as an uncaught traceback with an off-contract exit
+    # code, instead of the documented exit 3 for an unreachable server.
     import socket as socket_module
 
     from vpmdk_client import ServerConnectionError, VPMDKClient
@@ -155,6 +166,12 @@ def test_socket_creation_failure_is_classified_as_unreachable(
 
 
 def test_read_current_umask_does_not_mutate_the_process_mask():
+    # Cross-review (R181 window, P2): the os.umask read-back dance is
+    # process-global, so two concurrent run() calls could interleave -- one
+    # observing the other's temporary mask 0, or restoring 0 as the process
+    # mask, after which every later file was world-writable. On Linux the
+    # mask is now read from /proc/self/status without mutating anything; the
+    # mutating fallback is serialized behind a module lock.
     import vpmdk_client
 
     previous = os.umask(0o027)
@@ -194,6 +211,11 @@ def test_read_current_umask_fallback_is_correct_and_serialized():
 
 
 def test_client_rejects_invalid_connect_timeouts():
+    # Cross-review (R181 window, P2): float() accepted negative, NaN,
+    # infinite, or beyond-time_t values and the FIRST request then died in
+    # socket.settimeout() -- outside the connection-error handlers, after
+    # the socket object existed, leaving its descriptor to garbage
+    # collection. The constructor now validates like the request timeout.
     import vpmdk_client
 
     for bad in (-1.0, float("nan"), float("inf"), -float("inf"), 0.0, 1e18):

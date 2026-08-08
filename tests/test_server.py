@@ -108,6 +108,12 @@ def test_legacy_cli_dispatch_is_unchanged(monkeypatch):
 
 
 def test_legacy_help_output_is_byte_for_byte_unchanged(capsys):
+    # SERVER_MODE_SPEC 1.1 (non-negotiable): the behavior of `vpmdk` and
+    # `vpmdk --dir DIR` must not change by a single byte. `--help` is not a
+    # subcommand, so it dispatches to the legacy parser -- its stdout is part of
+    # that contract. Locking it against an independently reconstructed pre-server
+    # parser catches any description/argument/epilog drift (e.g. advertising the
+    # server subcommands here, which is what this test was added to prevent).
     import argparse
 
     expected_parser = argparse.ArgumentParser(
@@ -216,6 +222,8 @@ def test_server_passes_client_cwd_and_one_bcar_snapshot(
     captured: dict[str, object] = {}
 
     def parse_once(path: str, **kwargs):
+        # **kwargs: the server's hoisted parse passes warn_unknown_tags=False
+        # (R162), which this counting stub must accept like the real function.
         nonlocal parse_calls
         parse_calls += 1
         return original_parse(path, **kwargs)
@@ -245,6 +253,10 @@ def test_server_passes_client_cwd_and_one_bcar_snapshot(
     assert captured["workdir"] == str(request_dir)
     assert captured["bcar_tags"] == {"MLP": "CHGNET", "DEVICE": "cpu"}
     assert captured["charge_base_dir"] == os.getcwd()
+    # R132: the RESIDENT's effective configuration travels with the request, so
+    # the capability gate resolves the backend that will actually compute even
+    # when the request inherits its tags (SPEC 3.4) instead of restating them.
+    # It is a capability fallback only -- bcar_tags above is unchanged.
     assert captured["backend_tags"]["MLP"] == "CHGNET"
     assert captured["backend_tags"]["DEVICE"] == "cpu"
 
@@ -304,6 +316,11 @@ def test_unsupported_config_notimplemented_maps_to_input_error(tmp_path: Path):
 
 
 def test_backend_notimplemented_maps_to_calculation_error(tmp_path: Path):
+    # The complement of the test above: a plain NotImplementedError raised
+    # MID-CALCULATION by a third-party backend (torch's "Could not run
+    # 'aten::...' with arguments from the 'CUDA' backend") is an exception DURING
+    # the calculation, which SERVER_MODE_SPEC 2.5 defines as exit 2 -- and only
+    # that branch prints the traceback the user needs to diagnose it.
     socket_path = tmp_path / "server.sock"
     request_dir = tmp_path / "work"
     request_dir.mkdir()
@@ -398,6 +415,12 @@ def test_generic_oserror_stays_calculation_error(tmp_path: Path):
 
 
 def test_readonly_filesystem_oserror_is_an_input_error(tmp_path: Path):
+    # R150 (P2): Python has no OSError subclass for EROFS, so a read-only
+    # MOUNT (read-only NFS export, remount,ro, container image layer) fell
+    # past the R135 (PermissionError, ...) tuple into calculation_error /
+    # exit 2 -- documented RETRYABLE for a condition a retry can never fix --
+    # while permission-bit read-only-ness (EACCES -> PermissionError), the
+    # docs, and the one-shot CLI all say exit 1.
     socket_path = tmp_path / "server.sock"
     request_dir = tmp_path / "work"
     request_dir.mkdir()
@@ -416,6 +439,12 @@ def test_readonly_filesystem_oserror_is_an_input_error(tmp_path: Path):
 def test_unwritable_foreground_log_file_is_rejected_before_the_model_load(
     tmp_path: Path, capsys, monkeypatch
 ):
+    # R150 (P3): the daemon path opens an explicit --log-file in _daemonize
+    # BEFORE any backend work, but the foreground path deferred the identical
+    # open to VPMDKServer.__init__ -- after the full model load -- so an
+    # unwritable path cost a complete checkpoint load per retry, and a FIFO
+    # at the path blocked the post-load open forever with no socket bound and
+    # no diagnostic.
     if os.geteuid() == 0:
         pytest.skip("directory permissions do not bind as root")
 
@@ -1318,6 +1347,10 @@ def test_backend_configuration_mismatch_is_rejected(
 
 
 def test_foreign_backend_tag_is_ignored_like_one_shot(tmp_path: Path):
+    # A request carrying a leftover tag that belongs exclusively to a DIFFERENT
+    # backend (e.g. ORB_PRECISION / MATTERSIM_STRESS_WEIGHT under an MLP=CHGNET
+    # resident) is ignored by the one-shot builder, so the server must ignore it
+    # too rather than raise a spurious exit-5 mismatch (SERVER_MODE_SPEC 3.4).
     resident = backend_identity(
         {"MLP": "CHGNET", "DEVICE": "cpu"}, base_dir=str(tmp_path)
     )
@@ -1433,6 +1466,11 @@ def test_fairchem_family_tags_are_owned_per_sub_builder(tmp_path: Path):
             {"MLP": "FAIRCHEM", "FAIRCHEM_TASK": "omc", "DEVICE": "cpu"},
             request_base_dir=str(tmp_path),
         )
+    # SAFETY: EQUIFORMER_V3 delegates to _build_fairchem_v1_calculator, which reads
+    # FAIRCHEM_V1_PREDICTOR (predictor-backed vs OCPCalculator -- numerically
+    # different) and FAIRCHEM_CONFIG (config_yml). An EQUIFORMER_V3 resident must
+    # therefore COMPARE both -- stripping them would silently accept a mismatched
+    # predictor/config and run the wrong calculator (SERVER_MODE_SPEC 3.4).
     eqv3 = backend_identity(
         {"MLP": "EQUIFORMER_V3", "DEVICE": "cpu"}, base_dir=str(tmp_path)
     )
@@ -1526,6 +1564,16 @@ def test_blank_device_resolves_like_an_omitted_one_and_is_still_compared(tmp_pat
 
 
 def test_blank_device_canonicalizes_to_cpu_for_cpu_defaulting_backends(tmp_path: Path):
+    # EQNORM/ALPHANET/HIENET and the SevenNet family resolve DEVICE via
+    # `_resolve_device(...) or "cpu"`, so a present-but-blank DEVICE actually runs
+    # on CPU. The resident must ADVERTISE "cpu" (not "") and accept an equivalent
+    # explicit DEVICE=cpu request, while still rejecting DEVICE=cuda -- otherwise a
+    # blank-device resident spuriously exit-5's a cpu request (SERVER_MODE_SPEC 3.4).
+    # MATRIS (and MATGL) belong to this family too -- matris.py's build paths
+    # apply `device or "cpu"`. R139 found this test still listing MATRIS in
+    # the OUTSIDE loop below, which pinned the pre-fix claim and failed on any
+    # CUDA host (blank -> cpu but omitted -> cuda) while staying vacuously
+    # green on CPU-only hosts.
     for mlp in ("EQNORM", "ALPHANET", "HIENET", "SEVENNET", "FLASHTP", "EQUFLASH", "MATRIS"):
         resident = backend_identity(
             {"MLP": mlp, "DEVICE": ""}, base_dir=str(tmp_path)
@@ -1565,6 +1613,13 @@ def test_blank_device_canonicalizes_to_cpu_for_cpu_defaulting_backends(tmp_path:
 
 
 def test_resident_advertises_detected_graph_converter_algorithm(tmp_path: Path):
+    # R140 (P3): a tagless CHGNET resident advertised
+    # GRAPH_CONVERTER_ALGORITHM=None, so a request spelling out the algorithm
+    # the bundled default model ALREADY uses (CHGNet v0.3.0 ships 'fast') was
+    # rejected exit 5 while one-shot computed byte-identical numbers. The
+    # server now READS the algorithm from the loaded calculator at startup --
+    # the _detect_calculator_device pattern -- so an explicit matching request
+    # matches, and a genuinely different one still rejects.
     calculator = DummyCalculator()
     calculator.model = SimpleNamespace(
         graph_converter=SimpleNamespace(algorithm="fast")
@@ -1587,6 +1642,11 @@ def test_resident_advertises_detected_graph_converter_algorithm(tmp_path: Path):
             {"MLP": "CHGNET", "DEVICE": "cpu", "GRAPH_CONVERTER": "legacy"},
             request_base_dir=str(tmp_path),
         )
+    # A stale FOREIGN spelling (a CHGNET resident with a leftover
+    # MATRIS_GRAPH_CONVERTER from an edited template) is ignored by the
+    # builder AND stripped as foreign, so it must NOT suppress detection --
+    # R141 found it leaving the resident advertising None and rejecting every
+    # explicit converter request in both directions.
     foreign = VPMDKServer(
         str(tmp_path / "gc3.sock"),
         calculator,
@@ -1615,6 +1675,11 @@ def test_resident_advertises_detected_graph_converter_algorithm(tmp_path: Path):
 
 
 def test_device_index_zero_matches_the_unindexed_spelling(tmp_path: Path):
+    # R139 (P3): only the literal 'cuda:0' was normalized, so the torch-
+    # equivalent cpu:0/cpu pair was rejected exit 5 in BOTH directions while
+    # one-shot built the identical calculator (torch.device('cpu:0') ==
+    # torch.device('cpu'); CHGNet energies byte-identical). Index 0 is the
+    # default device for every type; ':1' and higher stay distinct.
     resident = backend_identity(
         {"MLP": "CHGNET", "DEVICE": "cpu"}, base_dir=str(tmp_path)
     )
@@ -1690,6 +1755,12 @@ def test_validation_warning_is_forwarded_to_the_client(tmp_path: Path):
 
 
 def test_foreign_backend_tag_does_not_crash_startup(tmp_path: Path):
+    # A leftover strict-typed tag belonging to a DIFFERENT backend must not crash
+    # resident startup. backend_identity strips it (the resident's own builder
+    # ignores it, exactly as the one-shot builder does) instead of raising while
+    # normalizing a foreign value -- which would abort `serve` AFTER a full model
+    # load, with no one-shot analog (SERVER_MODE_SPEC 1-2). Mirrors the request
+    # path's _strip_foreign_backend_tags so both sides ignore the foreign tag.
     for foreign, value in (
         # exclusive-prefix foreign tags -> dropped by _strip_foreign_backend_tags
         ("ALPHANET_PRECISION", "16"),
@@ -1719,6 +1790,8 @@ def test_foreign_backend_tag_does_not_crash_startup(tmp_path: Path):
     )
     assert "MATLANTIS_PRIORITY" not in chgnet_priority["effective_configuration"]
 
+    # A FAIRCHEM v2 resident with a leftover v1-only tag carrying a bad value
+    # (the finding's FAIRCHEM_V1_PREDICTOR=perhaps case) must start.
     fairchem = backend_identity(
         {"MLP": "FAIRCHEM_V2", "FAIRCHEM_V1_PREDICTOR": "perhaps", "DEVICE": "cpu"},
         base_dir=str(tmp_path),
@@ -2251,6 +2324,10 @@ def test_status_timeout_maps_to_unreachable_exit_code():
 
 
 def test_status_and_stop_map_all_failures_to_their_spec_exit_codes():
+    # SERVER_MODE_SPEC 2.3: `status` is only exit 0/3. 2.4: `stop` is only 0/3/4.
+    # A server-side internal_error (RemoteCalculationError) or protocol_error
+    # (ProtocolError) reaching these commands must map to exit 3 -- NOT the
+    # calculation-failure code 2 -- while a client stop timeout stays exit 4.
     import argparse
 
     lcm = lightweight_client_module
@@ -2287,6 +2364,10 @@ def test_status_and_stop_map_all_failures_to_their_spec_exit_codes():
 
 
 def test_malformed_status_backend_is_a_protocol_error_not_a_traceback():
+    # A valid JSON status whose `backend` is not an object -- e.g.
+    # {"event":"status","backend":[1]} -- must be rejected as a ProtocolError
+    # (-> exit 3, SERVER_MODE_SPEC 2.3), never let the formatter raise an uncaught
+    # AttributeError that escapes client_cli's excepts as an off-contract traceback.
     import argparse
 
     lcm = lightweight_client_module
@@ -2326,6 +2407,11 @@ def test_malformed_status_backend_is_a_protocol_error_not_a_traceback():
 
 
 def test_malformed_status_uptime_is_a_protocol_error_not_a_traceback():
+    # Sibling of the backend guard: _format_status coerces uptime_s with float(),
+    # so a present non-numeric value (null -> TypeError, "abc" -> ValueError, and a
+    # JSON bool) from a non-conforming peer must map to exit 3, never an uncaught
+    # exception escaping client_cli as an off-contract traceback (SERVER_MODE_SPEC
+    # 2.3: status is only exit 0 or 3).
     import argparse
 
     lcm = lightweight_client_module
@@ -2392,6 +2478,15 @@ def test_absurd_request_timeout_is_rejected_before_settimeout_overflow():
 
 
 def test_blank_lenient_float_tag_uses_builder_default(tmp_path: Path):
+    # MATTERSIM_STRESS_WEIGHT / GRACE_PAD_NEIGHBORS_FRACTION / GRACE_MIN_DIST are
+    # float tags, but their builders parse them with _parse_optional_float, which
+    # maps a blank to None -> "use the constructor default" (a common template
+    # pattern). Membership in the blank-reject set is by *builder behaviour*, not
+    # value category, so the server must treat these blanks as omitted rather than
+    # reject them:
+    #  (a) a resident started with a blank value must not crash in backend_identity
+    #      (previously the coerce-float path raised, killing server startup), and
+    #  (b) a request carrying the blank must be accepted, matching one-shot mode.
     for mlp, tag in (
         ("MATTERSIM", "MATTERSIM_STRESS_WEIGHT"),
         ("GRACE", "GRACE_PAD_NEIGHBORS_FRACTION"),
@@ -2567,6 +2662,11 @@ def test_malformed_request_bcar_is_reported_as_input_error(tmp_path: Path):
 
 
 def test_codeless_failed_done_maps_to_calculation_error():
+    # SERVER_MODE_SPEC 3.3 documents a terminal failure as
+    # {"event":"done","ok":false,"error":...} with NO code field. The client must
+    # treat a failed done whose code is absent (or an unrecognized future code) as
+    # a calculation failure (exit 2), not a ProtocolError/ServerConnectionError
+    # (exit 3), which would misreport a real backend failure as a lost connection.
     with pytest.raises(RemoteCalculationError):
         VPMDKClient._raise_event_error(
             {"event": "done", "ok": False, "error": "OOM ...", "traceback": "tb"}
@@ -2583,6 +2683,11 @@ def test_codeless_failed_done_maps_to_calculation_error():
 
 
 def test_protocol_error_code_maps_to_connection_error_exit_three():
+    # The server's `protocol_error` code (version skew, malformed/oversized frame)
+    # is a protocol/connection failure, not a calculation failure: the client must
+    # raise ProtocolError (a ServerConnectionError -> exit 3), not
+    # RemoteCalculationError (exit 2). exit 3 is also the only non-alive result the
+    # status contract (SERVER_MODE_SPEC 2.3) permits.
     with pytest.raises(lightweight_client_module.ProtocolError) as excinfo:
         VPMDKClient._raise_event_error(
             {
@@ -2595,6 +2700,13 @@ def test_protocol_error_code_maps_to_connection_error_exit_three():
 
 
 def test_non_string_remote_traceback_keeps_the_documented_exit_code():
+    # `traceback` is a diagnostic-only field that client_cli prints with
+    # .rstrip(). A malformed/version-skewed peer sending a TRUTHY NON-string
+    # (e.g. a list of frames, a number, or true) previously stored it unchanged,
+    # so .rstrip() raised an uncaught AttributeError -- a Python traceback plus an
+    # off-contract exit instead of the exit code documented for the failure.
+    # RemoteCalculationError.__init__ now accepts only a real string, which covers
+    # every construction site, so each code still maps to its documented exit.
     import argparse
 
     lcm = lightweight_client_module
@@ -2690,6 +2802,12 @@ def test_no_malformed_peer_event_can_crash_the_client_or_escape_the_exit_contrac
 
 
 def test_server_supplied_text_with_surrogates_keeps_the_exit_contract():
+    # Filesystem paths decode with errors="surrogateescape", and the protocol
+    # transports those code points intact. Writing them to a strict UTF-8 stdout
+    # raises UnicodeEncodeError -- a ValueError -- so client_cli's trailing
+    # `except ValueError` turned a SUCCESSFUL calculation into exit 1 and swallowed
+    # the `Calculation completed.` marker SERVER_MODE_SPEC 1.3 requires. Output
+    # encoding must never change the exit code.
     import argparse
 
     lcm = lightweight_client_module
@@ -2751,6 +2869,11 @@ def test_server_supplied_text_with_surrogates_keeps_the_exit_contract():
     assert code == 0
     assert b"\xe9" in out
 
+    # The machine-readable rendering must stay PARSEABLE instead (R150): the
+    # raw 0xff/0xe9 byte made `status --json | jq` and json.loads fail on a
+    # stream the exit code called healthy, degrading the server's conforming
+    # wire frame (whose _serialize_event already falls back to
+    # ensure_ascii=True for exactly this payload).
     code, out, _ = run_with_streams("status", status_event, json=True)
     assert code == 0
     parsed = json.loads(out.decode("utf-8"))
@@ -2760,6 +2883,12 @@ def test_server_supplied_text_with_surrogates_keeps_the_exit_contract():
 def test_alphanet_inferred_config_is_advertised_so_a_matching_request_is_accepted(
     tmp_path: Path,
 ):
+    # AlphaNet's builder INFERS the config JSON beside the checkpoint when
+    # ALPHANET_CONFIG is omitted. Without recording it, the resident advertised no
+    # ALPHANET_CONFIG, so a request whose BCAR spells out the very same file --
+    # which `vpmdk --dir` runs with a byte-identical calculator -- was compared
+    # against server=None and rejected with exit 5, contradicting
+    # SERVER_MODE_SPEC 3.4 ("reject only tags that DIFFER").
     checkpoint = tmp_path / "ckpt.pt"
     checkpoint.write_bytes(b"placeholder")
     config = tmp_path / "alpha_config.json"
@@ -2873,6 +3002,13 @@ def test_server_loggers_are_private_and_do_not_accumulate(tmp_path: Path):
 
 
 def test_status_answers_while_a_handler_resolves_a_slow_workdir(tmp_path: Path, monkeypatch):
+    # os.path.realpath walks the path component by component with lstat, so on an
+    # autofs/NFS mount it can block for a long time. Doing that while holding
+    # _enqueue_lock -- the server's single global gate, also taken by status(),
+    # the stop handler, _should_exit() on every accept iteration, and the worker's
+    # next dequeue -- froze the whole control plane, violating SERVER_MODE_SPEC
+    # 3.2 (status/stop must answer even while busy) and leaving an operator unable
+    # to stop the server.
     socket_path = tmp_path / "slow.sock"
     workdir = tmp_path / "work"
     workdir.mkdir()
@@ -3362,6 +3498,12 @@ def test_default_socket_parent_must_be_private(tmp_path: Path, monkeypatch):
 def test_default_socket_parent_gate_covers_sibling_socket_names(
     tmp_path: Path, monkeypatch
 ):
+    # R131: the client keyed this gate on the full socket FILENAME while the
+    # SERVER has keyed its own on the parent DIRECTORY since round 112. Any
+    # sibling name inside the predictable default directory -- the documented
+    # one-server-per-GPU layout `--socket $XDG_RUNTIME_DIR/vpmdk-<uid>/gpu0.sock`
+    # -- therefore skipped the symlink / foreign-owner / world-writable checks
+    # entirely on the client, even though the server refuses to bind there.
     lcm = lightweight_client_module
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     parent = Path(lcm.default_socket_path()).parent
@@ -3546,6 +3688,12 @@ def test_blank_device_matches_the_cpu_family_on_a_gpu_host(tmp_path: Path, monke
 
 
 def test_blank_startup_device_advertises_the_real_device(tmp_path: Path):
+    # A template BCAR with `DEVICE=` (an unset ${VPMDK_DEVICE}) counts as absent:
+    # it names no device and the builders resolve it exactly as an omitted one.
+    # Treating the key's mere presence as "explicit" skipped calculator detection,
+    # so the resident advertised device="" and then permanently rejected every
+    # request naming the device it actually runs on (exit 5) -- for a directory
+    # `vpmdk --dir` runs fine, breaking SERVER_MODE_SPEC 3.4.
     class _DeviceCalculator(DummyCalculator):
         device = "cpu"
 
@@ -3609,6 +3757,14 @@ def test_derived_log_rejects_planted_non_regular_and_foreign_files(tmp_path: Pat
 
 
 def test_teardown_stops_listening_before_joining_the_worker(tmp_path: Path):
+    # On a force stop the accept loop exits at once but the worker join waits for
+    # the whole in-flight calculation. The listener used to stay bound until
+    # _cleanup (which runs AFTER that join), so a client connecting in that window
+    # landed in the kernel backlog, had its request accepted by sendall, and then
+    # blocked in recv with no `accepted` and no terminal event for the rest of the
+    # job (`run --timeout 0` waits forever). Listening must stop BEFORE the join.
+    # The socket FILE must still outlive it, so a positive-timeout `stop` client
+    # cannot mistake this for completed shutdown.
     socket_path = tmp_path / "teardown.sock"
     server = VPMDKServer(
         str(socket_path),
@@ -3729,6 +3885,12 @@ def test_explicit_log_file_may_be_a_symlink(tmp_path: Path):
 
 
 def test_backend_notimplementederror_is_a_calculation_failure_not_input():
+    # The blanket "NotImplementedError -> input_error" rule also captured a
+    # NotImplementedError raised MID-CALCULATION by a third-party backend (torch's
+    # "Could not run 'aten::...' with arguments from the 'CUDA' backend"), which
+    # SERVER_MODE_SPEC 2.5 defines as exit 2 -- and the exit-1 branch additionally
+    # suppresses the traceback (only the calculation-failure branch prints one).
+    # VPMDK's own "mode not implemented" raises now use a dedicated subclass.
     def classify(exc):
         if isinstance(exc, BackendConfigurationMismatch):
             return "backend_mismatch"
@@ -3756,6 +3918,9 @@ def test_backend_notimplementederror_is_a_calculation_failure_not_input():
 
 
 def test_client_usage_errors_do_not_use_the_retryable_exit_code():
+    # argparse exits 2 for a usage error, but SERVER_MODE_SPEC 2.5 reserves exit 2
+    # for a RETRYABLE server-side calculation failure -- so a permanently
+    # malformed command line was reported to a retry driver as worth retrying.
     lcm = lightweight_client_module
 
     def exit_code(main, argv):
@@ -3782,10 +3947,17 @@ def test_client_usage_errors_do_not_use_the_retryable_exit_code():
     # The full CLI's subcommand parser is mapped the same way...
     assert exit_code(vpmdk.main, ["run", "--timeout", "abc"]) == 1
     assert exit_code(vpmdk.main, ["serve", "--idle-timeout", "x"]) == 1
+    # ...while the LEGACY parser keeps argparse's exit 2 (SPEC 1.1 byte-for-byte).
     assert exit_code(vpmdk.main, ["--bogus"]) == 2
 
 
 def test_huge_uptime_does_not_break_the_status_exit_contract():
+    # OverflowError is an ArithmeticError, NOT a ValueError: a JSON integer past
+    # ~1.8e308 (but under json.loads' own 4300-digit literal limit) passes
+    # status()'s isinstance(int) check and then makes _format_status' float()
+    # raise it, escaping every client_cli handler as a traceback plus an
+    # undocumented exit code -- while `status --json` rendered the byte-identical
+    # payload as exit 0. Both renderings must stay within spec 2.3 (0 or 3).
     import argparse
 
     lcm = lightweight_client_module
@@ -3866,7 +4038,7 @@ def test_client_refuses_a_socket_another_user_owns(tmp_path: Path, monkeypatch):
         args = lcm.argparse.Namespace(
             command="status", socket=str(impostor), json=False
         )
-        assert lcm.client_cli(args) == 3
+        assert lcm.client_cli(args) == 3  # unreachable, per spec 2.3
     finally:
         listener.close()
 
@@ -3894,6 +4066,12 @@ def test_client_accepts_its_own_socket(tmp_path: Path):
 def test_cross_mlp_request_reports_the_mlp_difference_not_a_foreign_model_path(
     tmp_path: Path,
 ):
+    # A request naming a DIFFERENT MLP was still canonicalized under the RESIDENT's
+    # backend policy: a valid CHGNet named MODEL resolved under MACE's local-only
+    # policy raises FileNotFoundError, and the except replaced the real difference
+    # with "MACE MODEL path not found: <workdir>/CHGNet-v0.3.0" -- naming a backend
+    # and a checkpoint path the user never wrote. SERVER_MODE_SPEC 3.4 requires the
+    # differing tag to be enumerated.
     checkpoint = tmp_path / "mace.model"
     checkpoint.write_text("placeholder")
     resident = backend_identity(
@@ -4427,6 +4605,9 @@ def test_matgl_named_default_is_stable_across_directories(
 def test_validate_request_blank_model_inherits_resident_for_orb(
     tmp_path: Path, monkeypatch
 ):
+    # ORB's model identity comes from ORB_MODEL, not MODEL. A blank MODEL is
+    # unspecified and must inherit the resident (SERVER_MODE_SPEC §3.4), not be
+    # resolved to None and mis-rejected against the resident's ORB_MODEL.
     monkeypatch.setattr(vpmdk, "_USING_LEGACY_M3GNET", False)
     resident = backend_identity(
         {"MLP": "ORB", "DEVICE": "cpu"}, base_dir=str(tmp_path)
@@ -4486,6 +4667,9 @@ def test_validate_request_blank_model_inherits_nondefault_resident(
 def test_validate_request_blank_model_inherits_resident_for_required_backend(
     tmp_path: Path, monkeypatch
 ):
+    # Server mode reuses the resident model for an unspecified MODEL, even for a
+    # required backend: per SERVER_MODE_SPEC §3.4 only backend tags that differ
+    # from the resident are rejected, and a blank MODEL does not differ.
     monkeypatch.setattr(vpmdk, "_USING_LEGACY_M3GNET", False)
     model_path = tmp_path / "deployed.pth"
     model_path.write_text("weights")
@@ -4713,6 +4897,16 @@ def test_foreground_start_preserves_pidfile_when_socket_is_absent(tmp_path: Path
 def test_unresponsive_socket_with_live_server_pidfile_is_not_stolen(
     tmp_path: Path, monkeypatch
 ):
+    # R136 (P3): a FOREGROUND server draining an uninterruptible job after
+    # `stop --force` keeps its socket file but stops answering (listener
+    # closed, worker computing). A second `vpmdk serve` classified that as a
+    # stale socket, unlinked the LIVE server's socket, and loaded a second
+    # resident model beside it -- the daemon path refused via its pidfile, but
+    # serve_cli passed pidfile=None for foreground, so the protection was
+    # one-sided. Foreground serves now write the pidfile too, and
+    # prepare_socket_path consults it BEFORE unlinking: an unresponsive socket
+    # whose pidfile names a live vpmdk serve for this socket must be refused,
+    # not stolen.
     socket_path = tmp_path / "service.sock"
     drained = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     drained.bind(str(socket_path))
@@ -4741,6 +4935,10 @@ def test_unresponsive_socket_with_live_server_pidfile_is_not_stolen(
 def test_serve_cli_writes_pidfile_for_foreground_servers(
     tmp_path: Path, prepare_inputs, monkeypatch
 ):
+    # Companion to the drain test above: the pidfile is the only liveness
+    # evidence that survives a force-stop drain, so the FOREGROUND path must
+    # write one too (it used to be daemon-only, which made the drain
+    # protection one-sided).
     workdir = tmp_path / "work"
     workdir.mkdir()
     prepare_inputs(workdir, incar_overrides={"NSW": "0"})
@@ -4778,6 +4976,14 @@ def test_serve_cli_writes_pidfile_for_foreground_servers(
 def test_pidfile_records_start_time_and_identifies_default_socket_serves(
     tmp_path: Path,
 ):
+    # R137 (P2): the R136 drain protection identified a live server only by
+    # finding the socket path inside /proc/<pid>/cmdline -- but a DEFAULT-
+    # socket `vpmdk serve` (no --socket argument) carries no socket path in
+    # its cmdline at all, so the protection was silently inapplicable to the
+    # plain invocation: a second serve during a force-stop drain unlinked the
+    # LIVE server's socket and pidfile and double-loaded the model. The
+    # pidfile now records the writer's kernel start time; (pid, starttime) is
+    # a recycle-proof process identity that needs no cmdline at all.
     socket_path = tmp_path / "service.sock"
     my_start = server_module._process_start_time(os.getpid())
     assert my_start is not None  # Linux test host
@@ -4811,6 +5017,9 @@ def test_pidfile_records_start_time_and_identifies_default_socket_serves(
 
 
 def test_daemon_startup_failure_strips_the_error_marker(tmp_path: Path, capsys, monkeypatch):
+    # R141 (P3): the readiness-pipe children prepend 'ERROR:' but the parent
+    # stripped only READY:/TIMEOUT:, so every failed daemon start printed the
+    # internal marker twice: 'Error: daemon failed to start: ERROR:...'.
     monkeypatch.setattr(
         server_module,
         "_daemonize",
@@ -4835,6 +5044,15 @@ def test_daemon_startup_failure_strips_the_error_marker(tmp_path: Path, capsys, 
 def test_externally_deleted_socket_with_live_server_refuses_before_load(
     tmp_path: Path,
 ):
+    # R143 (P3): "no socket => no live server" is false when a /tmp ager or
+    # an accidental rm deleted the socket under a LIVING server -- the
+    # restart passed prepare_socket_path silently, paid for the FULL model
+    # load, and only then failed in _write_pidfile with a message naming no
+    # pid. The pidfile still names the live process, so the refusal is fully
+    # decidable up front.
+    # The live owner must be a FOREIGN process: a pidfile naming THIS process
+    # is serve_cli's own pre-load endpoint reservation and passes through
+    # (see test_serve_cli_reserves_the_endpoint_before_the_model_load).
     socket_path = tmp_path / "gone.sock"  # never created: deleted externally
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     try:
@@ -4867,6 +5085,11 @@ def test_externally_deleted_socket_with_live_server_refuses_before_load(
 
 
 def test_unusable_pidfile_is_refused_before_the_model_load(tmp_path: Path):
+    # R145 (P3): a pre-existing unusable pidfile (foreign content, FIFO)
+    # aborted `serve` only AFTER the full model load, inside _write_pidfile.
+    # The refusal is decidable up front; prepare_socket_path now performs it
+    # for pidfile-using launches (serve_cli), while library servers running
+    # WITHOUT a pidfile leave a foreign file alone as before.
     socket_path = tmp_path / "pre.sock"
     pidfile = Path(pidfile_path(str(socket_path)))
     pidfile.write_text("external supervisor metadata\n")
@@ -4881,6 +5104,11 @@ def test_unusable_pidfile_is_refused_before_the_model_load(tmp_path: Path):
     with pytest.raises(RuntimeError, match="non-regular pidfile"):
         prepare_socket_path(str(socket_path), pidfile_expected=True)
 
+    # R146 (P3): a WELL-FORMED pidfile recording a DIFFERENT socket (a moved
+    # runtime directory) passed the first version of this gate and paid the
+    # full model load before _write_pidfile refused -- on every retry, since
+    # the stale sweep deliberately preserves a different-socket file. Both
+    # halves of _write_pidfile's refusal are now mirrored.
     pidfile.unlink()
     pidfile.write_text("999999\nsocket=/somewhere/else.sock\n")
     with pytest.raises(RuntimeError, match="not owned by this VPMDK socket"):
@@ -4888,6 +5116,12 @@ def test_unusable_pidfile_is_refused_before_the_model_load(tmp_path: Path):
 
 
 def test_named_log_file_may_be_a_symlink_even_at_the_default_name(tmp_path: Path):
+    # R148 (P3): the foreground symlink refusal keyed on the log path STRING
+    # equalling <socket>.log, so `vpmdk serve --log-file X.log` (the default
+    # name spelled out) died after the full model load while the identical
+    # --daemon line accepted it. serve_cli now threads log_file_named=True
+    # for any explicit --log-file; library callers passing the derived path
+    # WITHOUT the flag keep the hardened refusal (planted-symlink test).
     socket_path = tmp_path / "n.sock"
     real_log = tmp_path / "rotated" / "real.log"
     real_log.parent.mkdir()
@@ -4910,6 +5144,10 @@ def test_named_log_file_may_be_a_symlink_even_at_the_default_name(tmp_path: Path
 def test_foreign_owned_pidfile_is_refused_before_the_model_load(
     tmp_path: Path, monkeypatch
 ):
+    # R148 (P3, third half-mirror of this pair): _write_pidfile refuses a
+    # foreign-owned pidfile, but the pre-load gate omitted that condition, so
+    # a pidfile planted by another user in a shared sticky directory passed
+    # the gate and aborted only after the full model load -- on every retry.
     shared = tmp_path / "shared"
     shared.mkdir()
     socket_path = shared / "own.sock"
@@ -4917,6 +5155,10 @@ def test_foreign_owned_pidfile_is_refused_before_the_model_load(
     pidfile.write_text(f"4242\nsocket={os.path.realpath(str(socket_path))}\n")
     real_uid = os.geteuid()
     monkeypatch.setattr(server_module.os, "geteuid", lambda: real_uid + 1)
+    # In the real scenario the directory is a WRITABLE shared sticky /tmp and
+    # only the foreign file's unlink hits EPERM. Simulate exactly that at the
+    # unlink call (a read-only directory would instead trip the R149
+    # unwritable-parent gate first, which rejects for a different reason).
     real_unlink = os.unlink
 
     def sticky_unlink(path, *args, **kwargs):
@@ -4930,6 +5172,12 @@ def test_foreign_owned_pidfile_is_refused_before_the_model_load(
 
 
 def test_zombie_server_process_does_not_block_restart(tmp_path: Path):
+    # R138 (P2): a SIGKILLed serve whose supervisor never called wait() stays
+    # in /proc as a ZOMBIE with its original starttime, so the R137
+    # (pid, starttime) identity matched and prepare_socket_path refused every
+    # restart with "refusing to replace it while its process holds the model"
+    # -- indefinitely, for a process holding nothing. State 'Z' now reads as
+    # not-live.
     child = os.fork()
     if child == 0:
         os._exit(0)
@@ -4965,6 +5213,12 @@ def test_zombie_server_process_does_not_block_restart(tmp_path: Path):
 
 
 def test_client_run_from_deleted_cwd_reports_clean_error(monkeypatch):
+    # R137 (P3): `vpmdk run` from a deleted working directory died with a raw
+    # FileNotFoundError traceback from os.getcwd() while building the
+    # request's caller_cwd field -- exit 1 only via the interpreter's
+    # uncaught-exception default -- while status/stop from the same state
+    # printed the clean one-line 'Error:' diagnostic. The guarded helper maps
+    # it to ValueError, which client_cli reports cleanly as exit 1.
     def deleted_cwd():
         raise FileNotFoundError(2, "No such file or directory")
 
@@ -4974,6 +5228,12 @@ def test_client_run_from_deleted_cwd_reports_clean_error(monkeypatch):
 
 
 def test_stale_vpmdk_pidfile_with_reused_pid_is_removed(tmp_path: Path):
+    # After an ungraceful death, a leftover VPMDK pidfile may name a PID the OS
+    # has since recycled to a live process. Since staleness is keyed on the socket
+    # (SERVER_MODE_SPEC 2.1), once the socket is gone/stale that pidfile is stale
+    # too and must be removed, so a legitimate restart is not blocked by a false
+    # ServerAlreadyRunning at _write_pidfile. A LIVE PID (this process) is used to
+    # prove removal does not depend on the recorded PID being dead.
     socket_path = tmp_path / "service.sock"
     stale_pidfile = Path(pidfile_path(str(socket_path)))
     stale_pidfile.write_text(
@@ -5249,6 +5509,10 @@ def _protocol_payloads_ok(payloads: list[bytes]) -> bool:
 
 
 def test_oversized_log_event_with_surrogates_splits_without_crashing():
+    # The oversized-event path (_fit_event_text) must apply the same
+    # ensure_ascii fallback as _serialize_event: a surrogate-escaped byte in a
+    # line longer than the limit used to raise UnicodeEncodeError, be swallowed
+    # by send(), and drop the terminal event.
     line = "a" * server_module.MAX_REQUEST_BYTES + "\udce9" + "b" * 128
     chunks = server_module._split_log_event({"event": "log", "line": line})
 
@@ -5534,6 +5798,10 @@ def test_daemon_exec_argv_rebuilds_a_fresh_serve_command(tmp_path: Path):
     import vpmdk_entry
 
     assert argv[0] == sys.executable
+    # -u is required, not cosmetic: the daemon's stdout is a dup2'd regular file
+    # (the log), which CPython block-buffers, so every print()-based startup
+    # diagnostic -- including the SPEC 2.1 "BCAR not found" warning -- would sit
+    # in that buffer for the life of the daemon and be lost entirely on SIGKILL.
     assert "-u" in argv[1:argv.index("serve")]
     # The entrypoint *script* is executed rather than `-m vpmdk_entry`, so
     # sys.path[0] becomes its directory and a source checkout keeps working
@@ -5817,6 +6085,10 @@ def test_daemon_pidfile_records_socket_ownership_and_is_cleaned(tmp_path: Path):
     _, thread = _start_server(socket_path, pidfile=daemon_pidfile)
     try:
         lines = daemon_pidfile.read_text().splitlines()
+        # Third line (R137): the writer's kernel start time, so a restart can
+        # tell the recorded process apart from a pid-recycled impostor -- and
+        # can positively identify a default-socket serve whose cmdline names
+        # no socket at all.
         assert lines[:2] == [str(os.getpid()), f"socket={socket_path}"]
         assert len(lines) == 3
         assert lines[2] == (
@@ -6618,6 +6890,10 @@ def test_transient_accept_error_does_not_kill_the_server(tmp_path: Path):
 
 
 def test_status_is_not_blocked_by_a_slow_earlier_connection(tmp_path: Path):
+    # SERVER_MODE_SPEC 3.2: status/stop respond immediately. A peer that connects
+    # first and then stalls mid-send must not delay a later status behind its
+    # accept-order turn (which only run enqueues need) for the whole
+    # REQUEST_READ_TIMEOUT window.
     socket_path = tmp_path / "server.sock"
     _, thread = _start_server(socket_path)
     staller = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -6640,6 +6916,15 @@ def test_status_is_not_blocked_by_a_slow_earlier_connection(tmp_path: Path):
 
 
 def test_shutdown_signal_handler_is_async_signal_safe(tmp_path: Path):
+    # The SIGINT/SIGTERM handler must be async-signal-safe: set plain flags ONLY,
+    # taking no lock and calling no Event.set(). Two deadlocks are guarded:
+    #  (R67) acquiring _enqueue_lock would invert the enqueue->state order against
+    #        the worker (AB-BA);
+    #  (R74) calling Event.set() would re-enter the Event's non-reentrant internal
+    #        lock if a signal interrupts the main thread mid-set() on the same
+    #        Event during shutdown, self-deadlocking the main thread.
+    # The main thread translates the flags into the shutdown Events in
+    # _should_exit.
     server = VPMDKServer(
         str(tmp_path / "s.sock"),
         DummyCalculator(),
@@ -6677,6 +6962,9 @@ def test_shutdown_signal_handler_is_async_signal_safe(tmp_path: Path):
         # blocked, this would time out.
         assert done.wait(2.0), "signal handler blocked (acquired a lock)"
 
+        # The handler set only plain flags: NO shutdown Event is set yet. If it
+        # (re)called Event.set()/_publish_force_stop(), these would already be set
+        # -- the exact R74 reentrancy hazard.
         assert server._stop_signal is True
         assert server._force_signal is True
         assert not server._stop_requested.is_set()
@@ -7147,6 +7435,16 @@ def test_resident_calculator_is_reset_for_every_request(
 
 
 def test_serialize_event_emits_rfc_valid_json_for_non_finite_values():
+    # R125: json.dumps' default allow_nan=True writes the bare tokens NaN/Infinity,
+    # which are NOT valid JSON (RFC 8259). CPython's json.loads happens to accept
+    # them, so the bundled client survived -- but the protocol is specified as
+    # NDJSON, so any strict or non-Python peer (jq, a Go/Rust wrapper, --json piped
+    # into a validator) cannot parse the frame at all. A resident legitimately holds
+    # such values, e.g. NEQUIX_CAPACITY_MULTIPLIER=inf, which status() echoes back.
+    #
+    # Self-audit follow-up: the sanitizer must also cover mapping KEYS, because
+    # json.dumps coerces a non-string key through the same float writer, so a
+    # non-finite KEY raises under allow_nan=False even when every value is clean.
     import numpy
 
     def reject_bare_constant(token: str) -> object:
@@ -7177,6 +7475,11 @@ def test_serialize_event_emits_rfc_valid_json_for_non_finite_values():
 def test_restore_signal_handlers_tolerates_a_non_python_handler(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    # R125: signal.getsignal() returns None when the previous handler was installed
+    # outside Python (a C extension calling sigaction -- an MPI runtime, a JNI
+    # library). Replaying that None raises TypeError, which escaped serve_cli's
+    # finally: a clean shutdown was reported as exit 1 and the remaining signals
+    # stayed bound to the dead server's handler.
     server = server_module.VPMDKServer.__new__(server_module.VPMDKServer)
     server._previous_signal_handlers = {
         signal.SIGTERM: None,
@@ -7227,6 +7530,16 @@ def _idle_probe_server(**overrides) -> server_module.VPMDKServer:
 
 
 def test_server_is_not_idle_while_a_terminal_event_is_still_being_sent():
+    # R126: _execute_job publishes _busy=False, _current_workdir=None and
+    # _last_activity=now BEFORE delivering the terminal `done` event, so a client
+    # that stopped draining left the worker parked in sendall (up to
+    # EVENT_SEND_TIMEOUT=900s) while the server already looked idle. --idle-timeout
+    # then exited the accept loop and _close_listener() ran, so NOTHING accepted
+    # while the process stayed alive holding the resident model: status/stop
+    # returned exit 3/4, `stop --force` (the one designed preemption for a blocked
+    # send) became unreachable, and the live server looked stale to the next
+    # `serve`, which bound over its socket. _current_sender is deliberately kept
+    # published for exactly this window, so it is the precise signal.
     sending = _idle_probe_server(_current_sender=object())
     assert sending._should_exit() is False
 
@@ -7245,6 +7558,17 @@ def test_server_is_not_idle_while_a_terminal_event_is_still_being_sent():
 def test_abandoned_worker_exits_without_finalizing_the_interpreter(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    # R126: the third shutdown signal deliberately abandons a worker that is still
+    # inside native backend code (_await_worker_exit's documented ladder). Returning
+    # normally then let CPython finalize the interpreter underneath that daemon
+    # thread, C++ std::terminate fired ("terminate called without an active
+    # exception") and a textbook-correct teardown -- warning logged, socket
+    # unlinked, handlers restored -- died of SIGABRT, reporting 134 where the code
+    # intends exit 0. A supervisor reads that as a crash and can restart the server
+    # the operator just stopped. Measured on the real tree: pre-fix the foreground
+    # process ended with WTERMSIG=6, post-fix with exit 0; the daemon path was
+    # already immune because finish() used os._exit for it, so the two entry points
+    # disagreed on the same shutdown path.
     launch = tmp_path / "scratch"
     launch.mkdir()
     exits: list[int] = []
@@ -7301,6 +7625,15 @@ def test_abandoned_worker_exits_without_finalizing_the_interpreter(
 def test_stale_pidfile_cleanup_spares_a_live_server_for_the_same_socket(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    # R128: during a force-stop drain the server closes its listener BEFORE joining
+    # the worker (deliberate: otherwise a client sits in recv for the whole job), so
+    # a live daemon that still holds the model stops answering. The socket then looks
+    # stale, _remove_stale_pidfile deleted the LIVE pidfile -- its docstring premise,
+    # "an unresponsive socket means the daemon that wrote it is dead", is false in
+    # this window -- and that disarmed _write_pidfile's ServerAlreadyRunning guard, so
+    # a second `serve` loaded a SECOND copy of the model beside the first. Measured on
+    # the real tree: pre-fix the second `serve` returned 0 and two resident processes
+    # were alive at once; post-fix it is refused with "belongs to a live process".
     socket_path = tmp_path / "s.sock"
     pidfile = Path(server_module.pidfile_path(str(socket_path)))
     resolved = os.path.realpath(os.path.abspath(str(socket_path)))
@@ -7344,6 +7677,10 @@ def test_live_server_probe_requires_a_serve_process_for_this_socket(tmp_path: Pa
 
 
 def test_write_pidfile_rejects_a_fifo_with_an_actionable_message(tmp_path: Path):
+    # R128: os.fdopen(fd, "r+") raises io.UnsupportedOperation("File or stream is not
+    # seekable") for a FIFO BEFORE the S_ISREG check could run, so `serve --daemon`
+    # died after the full model load with a message naming neither the pidfile nor
+    # the cause -- while the correct message sat right below, unreachable.
     socket_path = tmp_path / "s.sock"
     pidfile = Path(server_module.pidfile_path(str(socket_path)))
     os.mkfifo(pidfile)
@@ -7395,6 +7732,14 @@ def _capability_request_dir(root: Path, name: str, bcar: str | None, incar: str)
 def test_energy_only_resident_is_input_error_however_the_request_spells_it(
     tmp_path: Path, bcar
 ):
+    # R132: R131's capability gate resolved its BackendConfig from the REQUEST
+    # BCAR alone, and BackendConfig.from_mapping({}) defaults to CHGNET. So a
+    # request that RESTATED the resident's tags got exit 1 before any compute,
+    # while the byte-identical request that INHERITED them (SPEC 3.4, and what
+    # examples/server_batch/calculations/0001/BCAR documents as the intended
+    # form) ran the full inference, wrote a partial OUTCAR/OSZICAR and failed as
+    # calculation_error -> exit 2, which SPEC 2.5 documents as RETRYABLE: a
+    # retry driver would resubmit a permanently broken configuration forever.
     socket_path = tmp_path / "energy-only.sock"
     workdir = _capability_request_dir(
         tmp_path, f"req{abs(hash(str(bcar))) % 997}", bcar, "IBRION = -1\nNSW = 0\n"
@@ -7421,6 +7766,10 @@ def test_energy_only_resident_is_input_error_however_the_request_spells_it(
 def test_missing_stress_warning_does_not_depend_on_restating_resident_tags(
     tmp_path: Path, bcar
 ):
+    # Same root cause, the §1.2 half: the warning R131 added so an omitted stress
+    # block would not be silent was emitted only when the request happened to
+    # spell MATRIS_TASK out, so two ways of expressing the same run produced
+    # different output.
     socket_path = tmp_path / "stressless.sock"
     workdir = _capability_request_dir(
         tmp_path,
@@ -7464,6 +7813,14 @@ def test_resident_backend_tags_are_only_a_capability_fallback(tmp_path: Path):
 
 
 def test_unwritable_custom_socket_parent_is_rejected_before_the_model_load(tmp_path):
+    # R149 (P3): an existing-but-unwritable CUSTOM socket parent passed the
+    # whole pre-load gate (makedirs(exist_ok=True) succeeds on an existing
+    # directory regardless of write permission, and the ownership probe runs
+    # only for the DEFAULT parent), so `vpmdk serve` paid the full model load
+    # and then died in listener.bind() with a PermissionError whose filename
+    # is None -- a bare "Permission denied" naming no path at all. AF_UNIX
+    # bind() unconditionally needs write+search on the directory, so the
+    # failure is fully decidable up front.
     if os.geteuid() == 0:
         pytest.skip("directory permissions do not bind as root")
 
@@ -7483,6 +7840,17 @@ def test_unwritable_custom_socket_parent_is_rejected_before_the_model_load(tmp_p
 
 
 def test_calculation_stderr_and_warnings_are_relayed_to_the_client(tmp_path: Path):
+    # R151 (P3): only stdout was request-scoped; the calculation's stderr --
+    # exactly where third-party physics caveats go (ASE FutureWarning about
+    # fixcm NVT sampling, pymatgen BadPoscarWarning, numpy RuntimeWarning) --
+    # went to the server's own stderr / private 0600 log, so the submitting
+    # client saw nothing while the byte-identical one-shot run printed it.
+    # Worse, Python's per-process warning dedup meant a resident emitted each
+    # warning for the FIRST job only; catch_warnings() per job restores the
+    # one-shot per-run behavior. (warnings.warn itself cannot be asserted
+    # under pytest, whose plugin captures warnings before they reach stderr;
+    # the warning half is emulated with the default showwarning behavior --
+    # a formatted line written to sys.stderr at warn time.)
     socket_path = tmp_path / "server.sock"
     request_dir = tmp_path / "work"
     request_dir.mkdir()
@@ -7514,6 +7882,12 @@ def test_calculation_stderr_and_warnings_are_relayed_to_the_client(tmp_path: Pat
 
 
 def test_permanent_pathology_oserrors_are_input_errors(tmp_path: Path):
+    # R152 (P2): ELOOP (self-referential symlink at an artifact path),
+    # ENAMETOOLONG, and FileNotFoundError (dangling symlink into a missing
+    # directory) have no place in the R135 subclass tuple or the R150 EROFS
+    # test, so they fell to calculation_error / exit 2 -- documented
+    # RETRYABLE for conditions that are permanent properties of the
+    # submitted workdir, while one-shot exits 1 (lesson xxxix).
     socket_path = tmp_path / "server.sock"
     request_dir = tmp_path / "work"
     request_dir.mkdir()
@@ -7536,6 +7910,11 @@ def test_permanent_pathology_oserrors_are_input_errors(tmp_path: Path):
 
 
 def test_relayed_stderr_is_dropped_when_client_stderr_is_closed():
+    # R152 (P3): with fd 2 closed (`vpmdk run 2>&-`) CPython sets sys.stderr
+    # to None; _write_line treats a None stream as stdout, so the R151
+    # stderr relay injected warning text into the stdout stream scripts
+    # parse, where one-shot drops those lines entirely (lesson xxxii: a None
+    # stream is part of the condition's state space).
     import argparse
 
     lcm = lightweight_client_module
@@ -7564,6 +7943,12 @@ def test_relayed_stderr_is_dropped_when_client_stderr_is_closed():
 
 
 def test_server_jobs_enable_torch_warn_always(tmp_path: Path):
+    # R152 (P3): TORCH_WARN_ONCE dedups in C++ below the Python warnings
+    # layer, so the R151 per-job catch_warnings() could not re-arm it and
+    # torch-originated warnings reached the client on the FIRST job of a
+    # resident only. Each job now enables torch's warnAlways, which forwards
+    # every occurrence to the Python layer where the per-job filter scope
+    # restores exactly once-per-job (measured: no intra-job over-emission).
     torch = pytest.importorskip("torch")
     previous = torch.is_warn_always_enabled()
     torch.set_warn_always(False)
@@ -7585,6 +7970,13 @@ def test_server_jobs_enable_torch_warn_always(tmp_path: Path):
 
 
 def test_client_umask_governs_output_artifact_modes(tmp_path: Path, monkeypatch):
+    # R152 (P2): output artifacts were created with the SERVER's launch
+    # umask; the submitting client's umask was never transmitted, so
+    # `umask 077; vpmdk run` silently wrote world-readable outputs from a
+    # umask-022 resident and the reverse broke group pipelines with 0600
+    # files after exit 0. The request now carries the client's umask and the
+    # worker applies it around the calculation (process-global like the cwd
+    # the job also swaps), restoring it afterwards.
     socket_path = tmp_path / "server.sock"
     request_dir = tmp_path / "work"
     request_dir.mkdir()
@@ -7618,6 +8010,14 @@ def test_daemon_fifo_log_file_fails_fast_with_a_diagnostic(
     # Bound the launcher wait so a regression cannot stall the suite for the
     # default 600 s.
     monkeypatch.setenv("VPMDK_DAEMON_START_TIMEOUT", "20")
+    # R154 (P2): a reader-less FIFO at an explicit --log-file made the forked
+    # daemon child block forever in a plain os.open -- the launcher waited
+    # the full 600 s daemon-start timeout, printed advice that cannot work
+    # ('check with vpmdk status' for a socket that will never appear), and
+    # leaked a permanently stuck orphan -- while the identical FOREGROUND
+    # invocation fails in under a second. O_NONBLOCK turns the condition
+    # into an immediate ENXIO reported through the readiness pipe
+    # (set_blocking(True) afterwards keeps a FIFO WITH a reader working).
     fifo = tmp_path / "collector.fifo"
     os.mkfifo(fifo)
     args = SimpleNamespace(
@@ -7638,6 +8038,9 @@ def test_daemon_fifo_log_file_fails_fast_with_a_diagnostic(
 
 
 def test_dangling_request_bcar_symlink_is_an_input_error(tmp_path: Path):
+    # R155 (P3) wiring, server half: a broken BCAR link in a submitted
+    # workdir must be input_error / exit 1, not a silent fallback to the
+    # resident's tags as if the request BCAR were absent.
     socket_path = tmp_path / "server.sock"
     request_dir = tmp_path / "work"
     request_dir.mkdir()
@@ -7655,6 +8058,13 @@ def test_dangling_request_bcar_symlink_is_an_input_error(tmp_path: Path):
 
 
 def test_nequix_compile_tag_is_inert_under_jax_backend(tmp_path: Path):
+    # R156 (P3): upstream nequix stores use_compile but reads it ONLY in its
+    # torch branch, and NEQUIX_BACKEND defaults to jax -- so a request that
+    # spells out NEQUIX_USE_COMPILE against a jax resident was rejected exit
+    # 5 for a calculator one-shot builds bit-for-bit identically. Sibling of
+    # the DEVICE-under-jax rule in _device_tag_is_inert. The torch half
+    # (NEQUIX_CAPACITY_MULTIPLIER inert under torch) is deliberately NOT
+    # mirrored: no torch checkpoint exists here to verify it.
     jax_resident = backend_identity(
         {"MLP": "NEQUIX", "DEVICE": "cpu"}, base_dir=str(tmp_path)
     )
@@ -7687,6 +8097,11 @@ def test_nequix_compile_tag_is_inert_under_jax_backend(tmp_path: Path):
 def test_failing_request_bcar_still_streams_the_unused_input_notices(
     tmp_path: Path,
 ):
+    # R157 (P3): the server hoists the request-BCAR parse out of run_workdir
+    # (validate_request_backend needs the tags), so when that parse failed
+    # the client never received the "Note: KPOINTS detected..." lines the
+    # byte-identical one-shot run prints FIRST -- the very line SPEC 3.3
+    # uses as its canonical log-event example.
     socket_path = tmp_path / "server.sock"
     request_dir = tmp_path / "work"
     request_dir.mkdir()
@@ -7709,6 +8124,12 @@ def test_failing_request_bcar_still_streams_the_unused_input_notices(
 
 
 def test_request_bcar_typo_warning_matches_oneshot_position(tmp_path: Path):
+    # R162 (P2): the server's hoisted request-BCAR parse emitted the R161
+    # unknown-tag warning BEFORE run_workdir's Note: lines (one-shot prints
+    # it after), and emitted it even for a request whose INCAR fails before
+    # one-shot ever reads BCAR -- a SPEC 1.2 stdout divergence. The hoisted
+    # parse now suppresses the warning and run_workdir re-emits it for the
+    # passed tags at the one-shot position.
     socket_path = tmp_path / "server.sock"
     request_dir = tmp_path / "work"
     request_dir.mkdir()
@@ -7747,6 +8168,12 @@ def test_request_bcar_typo_warning_matches_oneshot_position(tmp_path: Path):
 def test_foreground_fifo_log_with_live_reader_does_not_hang(
     tmp_path: Path, monkeypatch
 ):
+    # Cross-review (P2): the R152 probe opened and immediately CLOSED its
+    # writer on the log path, which delivered EOF to a FIFO's waiting reader
+    # (cat) -- the reader exited, and the post-load FileHandler then
+    # reopened the FIFO with no reader left and blocked forever, with no
+    # socket and no diagnostic. The probe fd is now held until the server's
+    # FileHandler has opened the path.
     fifo = tmp_path / "collector.fifo"
     os.mkfifo(fifo)
 
@@ -7859,6 +8286,15 @@ def test_grace_ignored_device_request_warning():
 
 
 def test_resolve_backend_device_mirrors_bam_upstream_collapse():
+    # R177 (P2): RACECalculator.configure_device maps ONLY the literal 'cpu'
+    # to the cpu and every other spelling ('cuda', 'cuda:1', 'gpu', 'CPU',
+    # 'cpu:0') to cuda-if-available-else-cpu, dropping the index. Raw-string
+    # identity therefore rejected byte-identical request/resident pairs with
+    # exit 5 and equated pairs that differ in effect. The resolver now
+    # mirrors the builder exactly for BAM.
+    # Mirror the resolver's own fallback instead of requiring torch: the
+    # unit-test CI env installs no optional backends, and the production
+    # branch maps a missing/broken torch to cpu.
     try:
         import torch
 
@@ -7878,6 +8314,12 @@ def test_resolve_backend_device_mirrors_bam_upstream_collapse():
 
 
 def test_serve_cli_closes_the_log_probe_fd_when_startup_fails(tmp_path, monkeypatch, capsys):
+    # Cross-review (R179 window, P2): the foreground --log-file probe fd is
+    # opened BEFORE backend loading and, on the success path, closed right
+    # after VPMDKServer construction -- but when _load_backend_for_server or
+    # construction raised, only the error tail ran and the fd leaked. A
+    # long-lived caller invoking serve_cli repeatedly leaked one fd per
+    # failed start (eventually EMFILE).
     def boom(*args, **kwargs):
         raise RuntimeError("backend load boom")
 
@@ -7909,6 +8351,12 @@ def test_serve_cli_closes_the_log_probe_fd_when_startup_fails(tmp_path, monkeypa
 
 
 def test_serve_cli_reserves_the_endpoint_before_the_model_load(tmp_path, monkeypatch, capsys):
+    # Cross-review (R181 window, P2): prepare_socket_path is a check, not a
+    # reservation, so two concurrent serves targeting the same unused socket
+    # both proceeded to load a potentially GPU-sized backend and the loser
+    # was only detected at _bind. serve_cli now writes the pidfile
+    # (O_CREAT|O_EXCL with live-owner detection) BEFORE the model load and
+    # releases it on the startup error tail.
     import vpmdk_client
 
     socket_path = str(tmp_path / "s.sock")
@@ -7962,6 +8410,14 @@ def test_serve_cli_reserves_the_endpoint_before_the_model_load(tmp_path, monkeyp
 
 
 def test_bind_failure_releases_the_preload_reservation(tmp_path, monkeypatch, capsys):
+    # R182 (P3, fixed as completion of the cross-review "release it on
+    # failure" item): pidfile ownership transfers at the LAST statement of
+    # _bind (_pidfile_written = True), but server_ref is populated before
+    # serve_forever -- so a _bind failure (AF_UNIX path too long, parent
+    # turned unwritable during the model load, EADDRINUSE) skipped BOTH
+    # release paths and left the pre-load reservation <socket>.pid on disk.
+    # For a long-lived in-process serve_cli caller the leaked record names a
+    # LIVE pid, permanently refusing every other serve on that endpoint.
     monkeypatch.setattr(
         server_module,
         "_load_backend_for_server",
@@ -7990,6 +8446,13 @@ def test_bind_failure_releases_the_preload_reservation(tmp_path, monkeypatch, ca
 
 
 def test_daemon_ready_print_survives_a_dead_stdout_consumer(tmp_path, monkeypatch):
+    # R183 (P2): the daemon launcher's success print was unguarded, so with
+    # an unbuffered stdout whose consumer had exited (PYTHONUNBUFFERED=1 |
+    # head -1), EPIPE surfaced inside print() itself -- past the flush-time
+    # _drain_stream_guarded in serve_cli's finally -- and a SUCCESSFULLY
+    # started, model-holding resident was reported as exit 1 with a raw
+    # BrokenPipeError traceback. A supervisor reads that as "failed to
+    # start" and orphans the resident.
     monkeypatch.setattr(
         server_module,
         "_daemonize",

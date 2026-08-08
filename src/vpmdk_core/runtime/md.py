@@ -128,7 +128,7 @@ def _warn_md_is_fixed_cell(*, isif: int | None, pstress: float | None) -> None:
     ensemble: ISIF/MDALGO/PSTRESS echoed, per-step 'Pullay stress' lines, the
     enthalpy E+PV in vasprun. An EOS/density consumer read a fixed-volume NVT
     trajectory as equilibrated NPT with exit 0 and no warning. Same
-    warn-don't-reject remedy as the existing MDALGO normalization: the run is
+    warn-don't-reject remedy as the R132 MDALGO normalization: the run is
     still a valid fixed-cell trajectory, so completing inputs keep completing.
     """
 
@@ -303,7 +303,7 @@ def _select_md_dynamics(
     #   POTIM < 0: only MDALGO 3 breaks (UFuncTypeError from a complex sqrt); the
     #              others integrate backwards in time and complete.
     # Reject exactly what breaks: anything that merely completes today keeps doing
-    # so (one-shot compatibility contract). Left unguarded, the nan surfaced far downstream as a bare
+    # so (SPEC 1.1). Left unguarded, the nan surfaced far downstream as a bare
     # ValueError, i.e. calculation_error = exit 2 = documented RETRYABLE for a
     # permanently invalid INCAR -- the same class as the POTIM guard IBRION=5/6
     # already has.
@@ -372,7 +372,7 @@ def _select_md_dynamics(
             # default of 0.1 samples a strongly-coupled Andersen ensemble
             # instead (measured: conserved-energy range 0.21 eV vs 0.0007 eV
             # over 25 steps). Changing the default would alter existing runs
-            # (one-shot compatibility contract), so it is DISCLOSED instead, like the MDALGO and
+            # (SPEC 1.1), so it is DISCLOSED instead, like the MDALGO and
             # fixed-cell warnings.
             print(
                 "Warning: MDALGO=1 without ANDERSEN_PROB uses VPMDK's default "
@@ -550,7 +550,7 @@ def _select_md_dynamics(
             # exp(-dt/taut); taut<0 raises "math domain error" from the sqrt in
             # calculate_alpha), so the run cannot proceed at all. Without this the
             # failure surfaced MID-RUN as calculation_error, i.e. exit 2, which
-            # the server-mode exit-code contract documents as RETRYABLE -- so a retry driver
+            # SERVER_MODE_SPEC 2.5 documents as RETRYABLE -- so a retry driver
             # resubmits a permanently invalid INCAR forever. This is not the
             # "invalid values are ignored with warnings" case that applies to tags
             # ASE tolerates (ANDERSEN_PROB, LANGEVIN_GAMMA): there is no value to

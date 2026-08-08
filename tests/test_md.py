@@ -180,6 +180,14 @@ def test_run_md_uses_local_incar_pseudo_scf_settings_when_enabled(tmp_path, load
 
 
 def test_lammps_dump_writes_box_bounds_from_prism(tmp_path, load_atoms):
+    # R126/R127: this test used to mirror the implementation's own arithmetic
+    # (xlo = -MIN(tilt), xhi = lx - MAX(tilt)), so it restated the bug instead of
+    # checking it. LAMMPS defines the dump bounds as
+    #   xlo_bound = xlo + MIN(0, xy, xz, xy+xz),  xhi_bound = xhi + MAX(...)
+    #   ylo_bound = ylo + MIN(0, yz),             yhi_bound = yhi + MAX(0, yz)
+    # so the bounding box is at least as large as the cell; subtracting shrank it by
+    # |xy|+|xz| and readers, which recover the edge as
+    # (xhi_bound - xlo_bound) - |xy| - |xz|, rebuilt a lattice short by twice that.
     atoms = load_atoms()
     path = tmp_path / "traj.lammpstrj"
 
@@ -258,6 +266,10 @@ def test_select_md_dynamics_andersen_uses_probability(load_atoms, monkeypatch):
 
     updater(360.0)
     assert created["updates"] == [360.0]
+    # R134: a ramp retargets the THERMOSTAT and must not rescale the velocities
+    # on top of it -- doing that once per ionic step turned the requested
+    # Andersen/NHC/Langevin/CSVR run into an isokinetic one. This assertion used
+    # to require exactly that rescale.
     assert rescaled == []
 
 
@@ -530,6 +542,13 @@ def test_semantic_incar_md_checks_raise_workdir_input_error(load_atoms, monkeypa
             atoms, mdalgo=4, timestep=1.0, initial_temperature=300.0,
             smass=None, thermostat_params={"NHC_NCHAINS": 0},
         )
+    # R136 (P2): a finite-huge NHC_NCHAINS passed every check and reached ASE's
+    # NoseHooverChainThermostat, whose per-substep Python loop and state arrays
+    # are O(tchain): measured ~25 minutes PER IONIC STEP at 1e8 (a resident
+    # worker wedged for weeks with status=busy) and a 7 TiB MemoryError at 1e12
+    # classified as retryable exit 2 after partial outputs were written. Chains
+    # beyond ~10 links have no physical effect, so the magnitude is judged at
+    # input time -- the same huge-but-finite class as the R135 ENCUT hang.
     with pytest.raises(vpmdk.WorkdirInputError, match="exceeds the supported maximum"):
         vpmdk._select_md_dynamics(
             atoms, mdalgo=4, timestep=1.0, initial_temperature=300.0,
@@ -538,6 +557,11 @@ def test_semantic_incar_md_checks_raise_workdir_input_error(load_atoms, monkeypa
 
 
 def test_andersen_default_probability_is_disclosed(load_atoms, monkeypatch, capsys):
+    # R143 (P3): MDALGO=1 without ANDERSEN_PROB uses VPMDK's legacy default
+    # of 0.1 collisions/atom/step, where real VASP's documented default is 0
+    # (collision-free NVE) -- measured conserved-energy range 0.21 eV vs
+    # 0.0007 eV over 25 steps. Changing the default would alter existing runs
+    # (SPEC 1.1), so it is disclosed at run time instead.
     class RecordingAndersen:
         def __init__(self, *args, **kwargs):
             self.kwargs = kwargs
@@ -561,6 +585,11 @@ def test_andersen_default_probability_is_disclosed(load_atoms, monkeypatch, caps
 
 
 def test_md_warns_when_cell_dynamics_are_requested(capsys):
+    # R140 (P2): a standard VASP NPT INCAR (IBRION=0, ISIF=3, MDALGO=3,
+    # PSTRESS) silently ran fixed-cell NVT with exit 0 while every artifact
+    # actively claimed the pressure ensemble (ISIF/PSTRESS echoed, per-step
+    # Pullay lines, enthalpy E+PV in vasprun) -- the cell never moved. Same
+    # warn-don't-reject remedy as the R132 MDALGO normalization.
     vpmdk._warn_md_is_fixed_cell(isif=3, pstress=None)
     out = capsys.readouterr().out
     assert "FIXED-CELL" in out and "ISIF=3" in out
@@ -656,6 +685,11 @@ def test_select_md_dynamics_csvr_missing_dependency(load_atoms, monkeypatch):
 def test_md_temperature_guard_matches_what_ase_actually_breaks_on(
     load_atoms, mdalgo: int, temperature: float, rejected: bool
 ):
+    # R127: the TEBEG/TEEND guard covered only MDALGO 2/4. The rule is not "reject
+    # out-of-range values" -- it is "reject values the thermostat cannot run at all",
+    # which is why 0 K stays accepted where ASE handles it. MDALGO=0 is deliberately
+    # untouched: it already completes at 0 K with exit 0 and legacy one-shot behavior
+    # is non-negotiable (SPEC 1.1).
     from ase.calculators.emt import EMT
     from ase.build import bulk
     from vpmdk_core.compat import vasp as vasp_compat_models
@@ -678,6 +712,10 @@ def test_md_temperature_guard_matches_what_ase_actually_breaks_on(
 
 
 def test_negative_langevin_gamma_is_an_input_error(load_atoms):
+    # R127: friction = gamma/1000/fs is fed to ase.md.langevin, which computes
+    # sigma = sqrt(2 * T * friction / masses) -- a negative gamma gives nan
+    # velocities on the first step with no exception. GAMMA=0 ("no damping") is a
+    # legal limit and stays accepted.
     atoms = load_atoms()
 
     with pytest.raises(vpmdk.WorkdirInputError, match="LANGEVIN_GAMMA must not be"):
@@ -702,6 +740,12 @@ def test_negative_langevin_gamma_is_an_input_error(load_atoms):
 
 
 def test_non_finite_energy_reports_the_divergence_not_an_unpack_error():
+    # R127: _format_energy_value split f"{value:.8e}" on "e" with no finiteness
+    # check, so a diverged run died with "not enough values to unpack (expected 2,
+    # got 1)" -- an error naming neither the energy nor the divergence, raised from a
+    # formatter the caller never suspects. It still raises (emitting a NaN token
+    # instead would let a diverged run finish with exit 0 and a plausible-looking
+    # OSZICAR), but now it says what happened.
     for value in (float("nan"), float("inf"), -float("inf")):
         with pytest.raises(ValueError, match="calculation diverged"):
             vpmdk._format_energy_value(value)
@@ -711,6 +755,15 @@ def test_non_finite_energy_reports_the_divergence_not_an_unpack_error():
 
 
 def test_thermostat_energy_is_reported_so_the_total_is_conserved():
+    # R128: the probe looked for attribute names that exist on NO thermostat ASE
+    # ships, so SP=/SK= (OUTCAR "nose potential"/"nose kinetic", vasprun.xml
+    # nosepot/nosekinetic) were written as exactly 0.0 and the reported total energy
+    # was Epot+Ekin -- not the conserved quantity. Measured drift on a 40-step NHC
+    # run: 1.10 eV reported vs 0.0013 eV once the thermostat term is included, so the
+    # standard "is ETOTAL conserved / is POTIM small enough" acceptance check
+    # rejected a healthy trajectory. ase 3.29 exposes only the SUM
+    # (NoseHooverChainThermostat.get_thermostat_energy / Bussi.transferred_energy);
+    # the two halves of that sum ARE VASP's SP and SK.
     from ase.build import bulk
     from ase.calculators.emt import EMT
     from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
@@ -782,6 +835,9 @@ def test_thermostat_energy_is_reported_so_the_total_is_conserved():
 def test_md_potim_guard_matches_what_ase_actually_breaks_on(
     mdalgo: int, potim: float, rejected: bool
 ):
+    # R128: POTIM=0 was rejected up front for IBRION=5/6 but not for IBRION=0 MD, so
+    # the byte-identical tag failed mid-run and server mode reported exit 2
+    # (documented RETRYABLE) for a permanently invalid INCAR.
     from ase.build import bulk
     from ase.calculators.emt import EMT
     from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
@@ -834,6 +890,14 @@ def test_md_potim_guard_matches_what_ase_actually_breaks_on(
 def test_unsupported_mdalgo_falls_back_to_nve_out_loud(
     capsys, incar: dict, expected: int, warns: bool
 ):
+    # R132: _select_md_dynamics tests MDALGO against 1, (2, 4), 3 and 5 and
+    # otherwise drops to plain velocity-Verlet, so a typo or one of VASP's
+    # constrained-MD values ran an unthermostatted NVE trajectory (SP=/SK=
+    # identically zero, temperature free-drifting) while OUTCAR and vasprun.xml
+    # still reported the REQUESTED MDALGO -- the run claimed an ensemble it never
+    # sampled. Normalizing in the settings parser fixes the recorded metadata as
+    # well, and it warns rather than rejects because SERVER_MODE_SPEC 1.1 keeps
+    # inputs that currently complete completing.
     settings = vpmdk._load_incar_settings({"IBRION": 0, **incar})
 
     assert settings.mdalgo == expected
@@ -860,6 +924,15 @@ def test_unsupported_mdalgo_falls_back_to_nve_out_loud(
 def test_strong_thermostat_coupling_is_reported(
     capsys, smass, nhc_period, potim, expected_tdamp, warns
 ):
+    # R133: no document stated SMASS's unit (its siblings NHC_PERIOD and
+    # CSVR_PERIOD do), so `SMASS = 1.0` -- a perfectly ordinary VASP Nose mass --
+    # silently became a 1 fs damping time. It is a warning, not a rejection:
+    # whether the integration survives depends on the cell, the temperature and
+    # the drawn velocities (measured: tdamp = POTIM completes for some systems
+    # and diverges for others), so a hard rule would reject runs that currently
+    # complete. Converting SMASS from VASP's Nose mass is deliberately NOT done
+    # here -- that needs VASP's own Q definition, which cannot be verified
+    # offline, and would silently change results for anyone already using it.
     params = {} if nhc_period is None else {"NHC_PERIOD": nhc_period}
 
     tdamp = vpmdk._estimate_tdamp(smass, potim, params)
@@ -872,6 +945,17 @@ def test_strong_thermostat_coupling_is_reported(
 
 
 def test_temperature_ramp_keeps_the_requested_ensemble():
+    # R134 (P1): execute_md calls the temperature updater after EVERY ionic step
+    # of a TEBEG->TEEND ramp, and every thermostatted updater ended with a hard
+    # _rescale_velocities to the ramp target. That pinned the instantaneous
+    # kinetic temperature to the ramp line, i.e. it silently replaced the
+    # requested Nose-Hoover / Langevin / Andersen / CSVR run with an ISOKINETIC
+    # one while OUTCAR/vasprun still recorded the requested MDALGO. Measured on a
+    # 32-atom Cu cell, 150 steps: temperature spread 85.3 K -> 12.3 K and the
+    # conserved-energy drift 0.0013 eV -> 2.37 eV, because the rescale injects
+    # energy that neither the Nose SP/SK terms nor Bussi's transferred_energy
+    # account for. The switch was DISCONTINUOUS: TEEND=TEBEG gave a true
+    # canonical run and TEEND=TEBEG+0.0001 gave the isokinetic one.
     from ase.build import bulk
     from ase.calculators.emt import EMT
 
@@ -992,6 +1076,15 @@ def test_nose_hoover_chain_ramp_retargets_without_touching_momenta(load_atoms):
 
 
 def test_nose_hoover_chain_rejects_constrained_atoms(load_atoms, monkeypatch):
+    # R150 (P1): ASE's NoseHooverChainNVT integrates its OWN _q/_p arrays and
+    # never re-applies constraints to them (get_forces(md=True) skips
+    # adjust_forces for FixAtoms-family constraints, and set_momenta constrains
+    # only the atoms' copy), while its thermostat target is hard-coded to
+    # 3*N_global*kT with no constrained-DOF reduction. A POSCAR with selective
+    # dynamics therefore sampled 25-85 K where TEBEG said 300 K, with exit 0
+    # (measured: 16/32 frozen -> ~25 K, even 1/32 frozen -> ~82 K), while
+    # Langevin/Andersen/CSVR stayed on target. Until the integrator honors
+    # constraints, the combination must be an explicit input error.
     from ase.constraints import FixAtoms
 
     class DummyNoseHooverChain:
@@ -1032,6 +1125,13 @@ def test_nose_hoover_chain_rejects_constrained_atoms(load_atoms, monkeypatch):
 
 
 def test_lammps_dump_velocities_are_metal_units(tmp_path, load_atoms):
+    # R153 (P2): the dump's vx/vy/vz columns were written in ASE's internal
+    # velocity unit (Angstrom/ASE-time) while every consumer reads them as
+    # LAMMPS `metal` units (Angstrom/ps; ase.io.lammpsrun defaults
+    # units='metal' and converts) -- all velocities 98.227x too small,
+    # kinetic quantities 9648x, in a file whose positions and box in the
+    # SAME frame are exact, with exit 0. ASE's own write_lammps_data applies
+    # the ASE->metal conversion after the same prism rotation.
     import ase.io
     from ase import units as ase_units
     from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
@@ -1064,6 +1164,12 @@ def test_lammps_dump_velocities_are_metal_units(tmp_path, load_atoms):
 def test_andersen_com_freeze_temperature_convention_is_disclosed(
     load_atoms, monkeypatch, capsys
 ):
+    # R154 (P3): ASE's Andersen keeps fixcm=True (COM zeroed every step, so
+    # only 3N-3 kinetic DOF are populated) while the OSZICAR/stdout T divides
+    # by all 3N -- the reported number reads (3N-3)/3N of TEBEG (-25% at
+    # N=4) although the sampled ensemble is at TEBEG. VASP reports over
+    # 3N-3. Rescaling the number would change every existing OSZICAR, so the
+    # convention is disclosed (warn-don't-change, POMASS/LCLIMB precedent).
     class DummyAndersen:
         def __init__(self, *args, **kwargs):
             pass
@@ -1086,6 +1192,12 @@ def test_andersen_com_freeze_temperature_convention_is_disclosed(
 
 
 def test_single_atom_langevin_is_an_input_error(load_atoms, monkeypatch):
+    # R160 (P2): ase.md.langevin's fixcm=True default divides by N-1, so a
+    # legitimate 1-atom cell with MDALGO=3 died on the first step with
+    # ZeroDivisionError -- classified retryable exit 2 for a fixed property
+    # of the input (one-shot exits 1 on the identical tree), and reachable
+    # through three doors (MDALGO=3, SMASS<0 promotion, LANGEVIN_GAMMA).
+    # MDALGO 0/1/2/4/5 all handle a single atom fine.
     from ase import Atoms
 
     class DummyLangevin:
@@ -1121,6 +1233,14 @@ def test_single_atom_langevin_is_an_input_error(load_atoms, monkeypatch):
 
 
 def test_lammps_dump_records_species_via_element_column(tmp_path):
+    # R173 (P2): the dump carried only the integer `type` column and the
+    # type->species mapping existed nowhere in the file, so ase.io.lammpsrun
+    # (given no out-of-band specorder) fed the type index to
+    # Atoms(symbols=...) as an ATOMIC NUMBER: Si read back as H (every
+    # mass-weighted quantity off by m(Si)/m(H) = 27.86x) and a Li/Fe/O/Al
+    # cell read back as H/He/Li/Be -- wrong stoichiometry, silently. The
+    # reader prioritizes an `element` column over `type`, so the writer now
+    # appends one.
     import ase.io
     from ase import Atoms
     from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
@@ -1152,6 +1272,13 @@ def test_lammps_dump_records_species_via_element_column(tmp_path):
 
 
 def test_md_divergence_guard_stops_before_the_force_call(load_atoms, tmp_path, monkeypatch):
+    # R173 (P2): a trajectory thrown out of the cell by an oversized POTIM
+    # (or LANGEVIN_GAMMA) turned the NEXT force evaluation into an OOM-grade
+    # neighbour-search allocation (a measured 152 GB request; MemoryError ->
+    # server exit 2 RETRYABLE) or an uninterruptible native spin that wedged
+    # the resident. No input-time cap can catch this (POTIM=1e2 completes at
+    # NSW=3 and diverges at NSW=30), so execute_md now bounds the unwrapped
+    # coordinate span in front of every force call, inside dyn.run(1).
     monkeypatch.chdir(tmp_path)
     atoms = load_atoms()
     calculator = DummyCalculator()
@@ -1186,6 +1313,12 @@ def test_md_divergence_guard_stops_before_the_force_call(load_atoms, tmp_path, m
 
 
 def test_md_divergence_guard_bounds_each_axis(tmp_path, monkeypatch):
+    # Cross-review (R176 window): collinear motion separates atoms along ONE
+    # axis, the other spans stay ~zero, and the raw span product stayed zero
+    # no matter how far the atoms flew -- the guard never fired and the
+    # one-axis divergence reached the neighbour search anyway. Spans are now
+    # floored at 1 A per axis (the neighbour search keeps at least one bin
+    # per axis, so its cost tracks the floored product).
     from ase import Atoms
 
     monkeypatch.chdir(tmp_path)
@@ -1245,6 +1378,11 @@ def test_md_divergence_guard_respects_the_cell_bounding_box():
 
 
 def test_md_divergence_guard_bounds_a_single_axis_divergence(tmp_path, monkeypatch):
+    # Cross-review (R192 window, P1), MD mirror of the NEB single-axis hole:
+    # a collinear divergence with span (S, ~0, ~0) evaluates the floored
+    # product to S and passed the 1e9 A^3 volume rule for any S below 1e9,
+    # while the neighbour search's per-axis replication cost keeps growing
+    # (3.9e7 A measured MemoryError). The guard now bounds each axis too.
     from ase import Atoms
 
     monkeypatch.chdir(tmp_path)
@@ -1265,6 +1403,9 @@ def test_md_divergence_guard_bounds_a_single_axis_divergence(tmp_path, monkeypat
         vpmdk.velocitydistribution, "MaxwellBoltzmannDistribution", fake_maxwell
     )
 
+    # R193 (P3): when the per-axis rule fires, the message must name the
+    # per-axis bound -- the volume-only wording reported a span-volume far
+    # BELOW the printed maximum (self-contradictory, no actionable number).
     with pytest.raises(RuntimeError, match="per.?axis"):
         vpmdk.run_md(
             atoms,

@@ -390,7 +390,7 @@ class VPMDKClient:
             # A server-side defect, not a connectivity problem: surface it as a
             # failed request with the server traceback rather than exit 3.
             raise RemoteCalculationError(message, traceback=traceback)
-        # A failed terminal event whose ``code`` is absent (the server protocol contract
+        # A failed terminal event whose ``code`` is absent (SERVER_MODE_SPEC 3.3
         # documents ``{"event":"done","ok":false,"error":...}`` with no code) or
         # unrecognized (a newer server code) is still a failed *request*, not a
         # lost connection: report it as a calculation failure (exit 2) rather than
@@ -415,7 +415,7 @@ class VPMDKClient:
         request = {
             "op": "run",
             "version": PROTOCOL_VERSION,
-            # Absolutize ONLY -- deliberately no expanduser. the CLI compatibility contract
+            # Absolutize ONLY -- deliberately no expanduser. SERVER_MODE_SPEC 2.2
             # requires `run --dir D` to mean exactly what one-shot `vpmdk --dir D`
             # means, and run_workdir resolves with a bare os.path.abspath. An
             # unexpanded literal '~' (from a quoted argument or a shell variable)
@@ -426,7 +426,7 @@ class VPMDKClient:
             # A shell-expanded `--dir ~/calc` never reaches argv with a tilde, so
             # the ordinary case is unaffected; a literal tilde now fails
             # identically (POSCAR not found -> input_error) on both paths.
-            # The one-shot compatibility contract forbids "fixing" this there.
+            # SPEC 1.1 forbids "fixing" this on the one-shot side instead.
             "workdir": os.path.abspath(workdir),
             "caller_cwd": caller_cwd,
             # The client's umask, so the server creates output artifacts with
@@ -483,7 +483,7 @@ class VPMDKClient:
                 # Reject a structurally malformed status as a ProtocolError (-> exit
                 # 3) rather than letting the formatter raise an uncaught exception
                 # that escapes client_cli's excepts as an off-contract traceback
-                # (the status exit-code contract: status is only exit 0 or 3). Guard every
+                # (SERVER_MODE_SPEC 2.3: status is only exit 0 or 3). Guard every
                 # field the formatter does more than str-interpolate:
                 #   * `backend` is indexed with .get -> must be a JSON object (or
                 #     omitted); a non-object (e.g. [1]) would AttributeError.
@@ -578,7 +578,7 @@ def _write_line(text: str, *, stream: Any = None) -> None:
     to ``ensure_ascii=True``). Writing such a string to a strict UTF-8 stdout
     raises UnicodeEncodeError -- which is a ValueError, so client_cli's trailing
     ``except ValueError`` would turn a SUCCESSFUL calculation into exit 1 and
-    swallow the ``Calculation completed.`` marker that the streaming-output contract
+    swallow the ``Calculation completed.`` marker that SERVER_MODE_SPEC 1.3
     requires. An output-encoding detail must never change the exit contract, so
     fall back to writing the original bytes (surrogateescape round-trips them to
     exactly the bytes the filesystem gave us) and, failing that, to a lossy but
@@ -655,7 +655,7 @@ def _format_status(status: Mapping[str, Any]) -> str:
         # float() raise it. Uncaught, it escapes every client_cli handler as a
         # traceback plus an undocumented exit code, while `status --json` renders
         # the byte-identical payload as exit 0. Tolerate it here so both
-        # renderings agree and status stays 0/3 (the status exit-code contract).
+        # renderings agree and status stays 0/3 (SERVER_MODE_SPEC 2.3).
         uptime_s = 0.0
     lines = [
         f"VPMDK server: {status.get('state', 'unknown')}",
@@ -744,7 +744,7 @@ def client_cli(args: argparse.Namespace) -> int:
                     # warnings machinery no-ops). _write_line treats a None
                     # stream as stdout, which would inject warning text into
                     # the stream scripts parse -- a None stream is part of
-                    # this path's state space.
+                    # this path's state space (lesson xxxii).
                     return
                 _write_line(line, stream=sys.stderr)
 
@@ -761,7 +761,7 @@ def client_cli(args: argparse.Namespace) -> int:
             try:
                 status = client.status()
             except VPMDKClientError as exc:
-                # the status exit-code contract allows only exit 0 (alive) or exit 3
+                # SERVER_MODE_SPEC 2.3 allows only exit 0 (alive) or exit 3
                 # (unreachable) for `status`. ANY failure to obtain a status --
                 # an internal deadline timeout, a server-side internal_error, a
                 # protocol_error, or a lost connection -- means "not a usable
@@ -792,10 +792,10 @@ def client_cli(args: argparse.Namespace) -> int:
             try:
                 client.stop(force=args.force, timeout=args.timeout)
             except ClientTimeoutError:
-                # Client-side timeout waiting for shutdown -> exit 4 (stop contract).
+                # Client-side timeout waiting for shutdown -> exit 4 (spec 2.4).
                 raise
             except VPMDKClientError as exc:
-                # the stop exit-code contract allows only exit 0 (stopped) / 3
+                # SERVER_MODE_SPEC 2.4 allows only exit 0 (stopped) / 3
                 # (unreachable) / 4 (timeout) for `stop`. A non-timeout failure
                 # (server internal_error, protocol_error, connection loss) is
                 # "unreachable" -> exit 3, not a calculation failure (exit 2).
@@ -850,7 +850,7 @@ def parse_client_args(parser: argparse.ArgumentParser, arguments: Sequence[str])
 
     argparse calls ``sys.exit(2)`` for a usage error (unknown flag, ``--timeout
     abc``, a missing value), which happens BEFORE client_cli's carefully mapped
-    0/1/2/3/4/5 returns can run. But the server-mode exit-code contract reserves exit 2 for a
+    0/1/2/3/4/5 returns can run. But SERVER_MODE_SPEC 2.5 reserves exit 2 for a
     RETRYABLE server-side calculation failure, so a permanently malformed
     invocation was reported to a retry driver as worth retrying. A bad command
     line is invalid input -> exit 1, matching the other client-side input errors.

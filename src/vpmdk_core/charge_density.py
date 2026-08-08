@@ -88,7 +88,7 @@ _CHARGE_MODEL_CONFIG_TAGS = {
 # The DeePCDP option tags _charge_density_options_from_bcar reads
 # INDIVIDUALLY (not via a dict): kept as a set beside those reads so the
 # BCAR vocabulary harvest (_known_bcar_tags) cannot drift from the consumers
-# again; an earlier vocabulary scan omitted exactly these eight and falsely warned
+# again -- the R161 harvest missed exactly these eight and falsely warned
 # "not recognized" for a documented, fully-consumed configuration.
 _DEEPCDP_OPTION_TAGS = frozenset(
     {
@@ -412,7 +412,7 @@ def _charge_density_options_from_bcar(bcar_tags: Mapping[str, Any]) -> dict[str,
     # rejected later, at dispatch inside predict_charge_density -- after the
     # single point had already completed and written OUTCAR/CONTCAR. A typo like
     # CHARGE_MLP=CHARGE3NE therefore escaped as a plain ValueError and server mode
-    # reported calculation_error (exit 2), which the server-mode exit-code contract documents as
+    # reported calculation_error (exit 2), which SERVER_MODE_SPEC 2.5 documents as
     # RETRYABLE, so a retry driver resubmits a permanently broken BCAR forever.
     # _normalize_charge_backend_name is a pure alias lookup that never raises, so
     # the check has to be explicit. The dispatch-time raise stays as defense for
@@ -669,9 +669,17 @@ def _run_charge3net_backend(
     if num_basis is not None:
         num_basis = _coerce_int_option(num_basis, key="num_basis")
     if not model_path:
-        # A missing charge model is a permanent input error, not a retryable
-        # calculation failure. Classify it at the use site so injected
-        # predict_charge_density implementations remain supported.
+        # A permanently unconfigured charge backend (no CHARGE_MODEL anywhere)
+        # is decidable without executing anything, exactly like the backend
+        # SELECTOR typo fixed in _charge_density_options_from_bcar: as a plain
+        # RuntimeError, server mode reported calculation_error (exit 2), which
+        # SERVER_MODE_SPEC 2.5 documents as RETRYABLE, so a retry driver
+        # re-ran the FULL calculation (the ionic loop completes before this
+        # raise) on the same broken directory forever, while one-shot exited 1
+        # for the byte-identical input. WorkdirInputError classifies both
+        # paths as input_error / exit 1. Raising at the use-site (not by
+        # pre-resolving paths in the input phase) keeps monkeypatched
+        # predict_charge_density flows untouched -- the R124[3] blocker.
         raise _root().WorkdirInputError(
             "ChargE3Net model checkpoint not found. Set CHARGE_MODEL (or "
             "VPMDK_CHARGE_MODEL). When CHARGE_SOURCE_DIR is set, VPMDK also checks "

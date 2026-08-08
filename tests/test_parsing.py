@@ -732,6 +732,12 @@ def test_build_deepmd_calculator_infers_type_map(monkeypatch: pytest.MonkeyPatch
 
 
 def test_potcar_species_relabelling_works_with_real_pymatgen(tmp_path):
+    # R129 (P1): `poscar.site_symbols = ...` is a READ-ONLY property in real
+    # pymatgen, so the whole POSCAR/POTCAR species reconciliation -- including the
+    # documented "Using POTCAR order" warning -- raised AttributeError and was
+    # reported as invalid input (exit 1) for exactly the files it exists to repair.
+    # conftest's Poscar STUB exposes site_symbols as a plain attribute, so the suite
+    # could not see it; this test therefore runs against the real library.
     script = (
         "import sys, tempfile\n"
         "from pymatgen.io.vasp import Poscar\n"
@@ -763,6 +769,13 @@ def test_potcar_species_relabelling_works_with_real_pymatgen(tmp_path):
 
 
 def test_vasp4_poscar_without_potcar_is_rejected_not_computed_as_hydrogen(tmp_path):
+    # R130 (P1): with real pymatgen a VASP-4 POSCAR (no species line -- a legitimate
+    # VASP format) does NOT produce empty site_symbols: pymatgen fabricates
+    # ['H', ...] and only emits a BadPoscarWarning on stderr. VPMDK's own
+    # "no species names" branch was therefore unreachable, and a Si cell was
+    # silently computed as HYDROGEN, with CONTCAR rewritten to match. Real VASP
+    # takes the species from the POTCAR in this format, so without one the elements
+    # genuinely cannot be determined.
     vasp4 = (
         "Si2 vasp4\n1.0\n 2.7 2.7 0.0\n 0.0 2.7 2.7\n 2.7 0.0 2.7\n"
         "2\nDirect\n 0.0 0.0 0.0\n 0.25 0.25 0.25\n"
@@ -803,6 +816,10 @@ def test_vasp4_poscar_without_potcar_is_rejected_not_computed_as_hydrogen(tmp_pa
     assert "DECLARES True" in v5.stdout, v5.stdout + v5.stderr
     assert "ACCEPTED ['Si', 'Si']" in v5.stdout, v5.stdout + v5.stderr
 
+    # Self-audit follow-up: a POTCAR that EXISTS but yields no usable symbols
+    # (unreadable, or rejected by pymatgen's validation) is not a species source
+    # either -- without this the fabricated ['H', ...] names survived exactly as
+    # they did with no POTCAR at all.
     potcar = tmp_path / "POTCAR"
     potcar.write_text("this is not a valid POTCAR\n")
     script_with_potcar = script.replace(
@@ -859,6 +876,17 @@ def _minimal_potcar_entry(symbol: str) -> str:
 
 
 def test_vasp4_poscar_with_mismatching_potcar_species_count_is_rejected(tmp_path):
+    # R131: R130 closed the "no POTCAR" and "unparseable POTCAR" variants of the
+    # fabricated-hydrogen hole, but not the COUNT MISMATCH one. For a VASP-4
+    # POSCAR (no species line) _apply_species_from_potcar returned the input
+    # structure unchanged whenever the POTCAR's species count differed from the
+    # number of ion groups -- and that unchanged structure is pymatgen's
+    # fabricated ['H', ...]. In a NEB image directory, where pymatgen's implicit
+    # same-directory POTCAR lookup cannot reach the band's POTCAR one level up,
+    # a whole Cu band was therefore computed as hydrogen, CONTCARs were rewritten
+    # with species line "H", and the run exited 0 with "Calculation completed.".
+    # A POSCAR that DOES name its species keeps the lenient behavior: there the
+    # unchanged structure is still labelled with real elements.
     image = tmp_path / "00"
     image.mkdir()
     body = (
@@ -930,6 +958,14 @@ def test_vasp4_poscar_with_mismatching_potcar_species_count_is_rejected(tmp_path
 def test_poscar_format_is_decided_on_the_line_the_parser_sees(
     tmp_path, line6: str, declares: bool
 ):
+    # R131 fixed the same class for INCAR (VPMDK's own tokenizer disagreed with
+    # pymatgen's); R132 found it in the POSCAR classifier. pymatgen pushes every
+    # POSCAR line through clean_lines(), which TRUNCATES AT '#', so
+    # `` 2   # number of Si atoms`` reads as ``2`` -> VASP 4 -> fabricated
+    # ['H', ...] names. Reading the RAW line here made int('#') fail, reported
+    # "VASP 5", and SKIPPED every VASP-4 guard: the Si cell was computed as H2
+    # (-2.35 eV instead of -10.63 eV), exited 0, and wrote a CONTCAR with
+    # species line ``H``.
     from vpmdk_core.io.inputs import _poscar_declares_species
 
     path = tmp_path / f"POSCAR_{abs(hash(line6)) % 9973}"
@@ -1021,6 +1057,14 @@ def test_vasp4_poscar_with_a_commented_counts_line_is_not_computed_as_hydrogen(t
 
 
 def test_repeat_guard_sees_a_value_on_the_next_line(tmp_path):
+    # R193 (P2): pymatgen's \s*=\s* crosses the newline on the VALUE side,
+    # so `MAGMOM =` with the repeat token on its own line is exactly what
+    # proc_val expands -- and it detonated (~80 GB for 1e10) INSIDE
+    # Incar.from_file, before any guard built on the line-scoped raw reader
+    # could see the token. The raw-only guards now read a blank value's
+    # continuation line, the text pymatgen actually consumes; the swallow
+    # guard deliberately keeps the line-scoped read (a blank staying
+    # visibly blank is what makes the parser disagreement detectable).
     from vpmdk_core.settings import incar as incar_module
 
     path = tmp_path / "INCAR"
@@ -1051,6 +1095,14 @@ def test_repeat_guard_sees_a_value_on_the_next_line(tmp_path):
 
 
 def test_repeat_guard_sees_a_quoted_value_spanning_newlines(tmp_path):
+    # R194 (P2): the THIRD dimension of the same regex mismatch (after the
+    # key side, R170, and the blank unquoted value side, R193) -- pymatgen's
+    # QUOTED branch is re.DOTALL and crosses newlines, while the raw
+    # reader's quoted branch is line-scoped, so `MAGMOM = "1\n1e10*1.0"`
+    # reached proc_val's unbounded list expansion (~80 GB for 1e10, real RSS
+    # measured linear in the count) before the pre-parse cap could see the
+    # token, while the byte-equivalent unquoted spelling was cleanly
+    # rejected.
     from vpmdk_core.settings import incar as incar_module
 
     path = tmp_path / "INCAR"
@@ -1058,6 +1110,8 @@ def test_repeat_guard_sees_a_quoted_value_spanning_newlines(tmp_path):
     with pytest.raises(ValueError, match="repeat token|expands to"):
         incar_module._reject_huge_repeat_counts(str(path))
 
+    # Composed with the R193 blank-value continuation: the quote opens on
+    # the line AFTER the '='.
     path.write_text('MAGMOM =\n"1\n10000000000*1.0"\nNSW = 0\n')
     with pytest.raises(ValueError, match="repeat token|expands to"):
         incar_module._reject_huge_repeat_counts(str(path))
@@ -1077,6 +1131,12 @@ def test_repeat_guard_sees_a_quoted_value_spanning_newlines(tmp_path):
 
 
 def test_blank_value_continuation_stops_at_a_semicolon(tmp_path):
+    # R195 (P2, regression window of the R193 continuation): pymatgen's
+    # unquoted value pattern [^#!;\n]* stops at ';' and parses the rest of
+    # the line as its own assignments, but the continuation reader took the
+    # WHOLE next line -- so the legal multi-tag spelling
+    # 'TEBEG =\n300; NSW = 5' parsed fine in pymatgen yet was falsely
+    # rejected on the token '300;'.
     from vpmdk_core.settings import incar as incar_module
 
     path = tmp_path / "INCAR"
@@ -1090,7 +1150,7 @@ def test_blank_value_continuation_stops_at_a_semicolon(tmp_path):
     assert with_continuation["NSW"] == "5"
     # Full-stack acceptance needs the REAL parser (the conftest stub reads
     # line-wise, cannot parse the ';' multi-tag line, and its parse makes
-    # the swallow guard fire), so it runs in a subprocess.
+    # the swallow guard fire -- lesson xlviii), so it runs in a subprocess.
     script = (
         "import sys\n"
         "from vpmdk_core.settings import incar as m\n"
@@ -1127,6 +1187,12 @@ def test_blank_value_continuation_stops_at_a_semicolon(tmp_path):
 
 
 def test_quoted_continuation_value_closed_on_its_own_line_is_unwrapped(tmp_path):
+    # R197 (P2, regression window of the R194 quoted mirror): the quote
+    # rewrite applied only to an UNTERMINATED quote, so a continuation value
+    # CLOSED on its own line ('POTIM =' then '"2.0"') kept its quote
+    # characters (and any text after the closing quote) and the raw-only
+    # guards falsely rejected an INCAR pymatgen parses fine (quotes are NOT
+    # part of pymatgen's qval).
     from vpmdk_core.settings import incar as incar_module
 
     path = tmp_path / "INCAR"

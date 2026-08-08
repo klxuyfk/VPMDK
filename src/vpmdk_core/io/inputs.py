@@ -17,7 +17,7 @@ def _require_regular_input_file(path: str, label: str) -> None:
     opens waits for a writer), which wedged the resident worker permanently:
     status reported busy forever, queued jobs timed out, and even
     ``stop --force`` could not preempt the blocked open -- one pathological
-    request directory took down the server, defeating the request-isolation contract
+    request directory took down the server, defeating SERVER_MODE_SPEC 1.4
     and the 2.4 stop contract. The server's own pidfile/log paths already
     guard this with S_ISREG checks; the client-submitted input files were the
     unguarded half of the same surface. ``os.stat`` never blocks (no open),
@@ -46,7 +46,7 @@ def _reject_broken_input_link(path: str, label: str) -> None:
     entry exists (``os.path.lexists``), so this is a broken input, not an
     omitted one; the write side already distinguishes the two (a dangling
     OUTPUT symlink stays legal because ``open("w")`` creates the target --
-    the write-side behavior -- which is exactly why the READ side must not treat
+    the R141 decision -- which is exactly why the READ side must not treat
     the same shape as absence).
     """
 
@@ -230,7 +230,7 @@ def parse_key_value_file(path: str, *, warn_unknown_tags: bool = True) -> Dict[s
         data["MLP"] = data["NNP"]
     if "DEVICE" in data:
         # torch device strings are lowercase-only ('CPU' raises RuntimeError),
-        # while the server's backend-compatibility comparison already case-folds DEVICE --
+        # while the server's SPEC 3.4 comparison already case-folds DEVICE --
         # so a VASP-style uppercase 'DEVICE = CPU' was ACCEPTED and computed by
         # the server (exit 0) but crashed the one-shot CLI on the byte-identical
         # directory (exit 1), a 1.2 divergence keyed on letter case. Folding at
@@ -464,8 +464,8 @@ _MAX_PERIODIC_CELL_WIDTH = 1.0e6
 
 # Maximum cell VOLUME, in cubic Angstrom (1e9 = a 1000 A cube). The width cap
 # above bounds each AXIS, but the neighbour-search cost pymatgen/backends pay
-# is the BIN COUNT, which scales with the volume/cutoff^3 PRODUCT (the
-# axis-vs-resource distinction, on the input geometry itself): a 20000 A cube with
+# is the BIN COUNT, which scales with the volume/cutoff^3 PRODUCT (the R148
+# axis-vs-resource lesson, on the input geometry itself): a 20000 A cube with
 # 2 atoms -- 50x under the width ceiling -- died in find_points_in_spheres
 # asking for 152 GB (classified retryable exit 2), and a 4000 A cube wedged
 # the resident worker beyond 200 s at 28.5 GB RSS, taking status/stop down
@@ -501,7 +501,7 @@ def _reject_coincident_atoms(atoms) -> None:
     4096-atom supercell -- and where the allocation failed, the MemoryError
     was rewritten into an input error for a perfectly fine structure. Here
     every atom is bucketed by its wrapped SCALED coordinate at a resolution
-    of at least the threshold per axis (the width guard bounds every
+    of at least the threshold per axis (the R136 width guard bounds every
     perpendicular width to >= 0.5 A, so a pair within the 0.01 A threshold
     always lands in the same or an adjacent bucket, with modular wrap for
     the periodic boundary), and only same/neighbor-bucket candidates get an
@@ -798,8 +798,10 @@ def _apply_species_from_potcar(poscar, structure, symbols: List[str]):
     return relabelled
 
 
-# Bound the total POSCAR ion count before pymatgen allocates per-atom lists.
-# The limit remains above expected large MLIP workloads.
+# Ceiling for the total ion count on a POSCAR counts line. Large MLIP runs
+# are ~1e5-1e6 atoms; 1e7 is >10x beyond that, while a corrupted counts line
+# ('2000000000') used to make Poscar.from_file itself allocate tens of GB of
+# per-atom lists inside the resident server before any VPMDK validation ran.
 _MAX_POSCAR_ION_COUNT = 10_000_000
 
 
@@ -979,7 +981,7 @@ def _scan_poscar_species_counts(lines):
                 # silicon'): pymatgen keeps the junk tokens but its
                 # zip-to-counts drops them harmlessly and HEAD ran the file
                 # with the exactly correct composition -- counting them as
-                # species rejected working decks. Only
+                # species rejected working decks (lesson xlvi again). Only
                 # LEADING valid element symbols (with pymatgen's VASP-6
                 # hash/underscore normalization) are species; the first
                 # non-element token ends the species portion of the line.
@@ -1169,7 +1171,7 @@ def read_structure(poscar_path: str, potcar_path: str | None = None):
     # <workdir>/POTCAR) already covers every legitimate flow: VASP-5 match,
     # VASP-5 differ (warn + POTCAR order), VASP-4 + POTCAR (species from
     # POTCAR), VASP-4 without POTCAR (reject). The kwarg also removes the
-    # parser's sibling-open side effect entirely, avoiding a FIFO hazard.
+    # parser's sibling-open side effect entirely (the R153 FIFO hazard).
     try:
         poscar = Poscar.from_file(poscar_path, check_for_potcar=False)
     except TypeError:

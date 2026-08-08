@@ -112,9 +112,10 @@ _FORTRAN_EXPONENT_RE = re.compile(r"[dD](?=[+-]?\d)")
 _NUMERIC_RE = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
 
 # Tags that are REAL-valued in VASP but int-typed by pymatgen's generic
-# proc_val: 'SPRING = -5.5' (a legal VTST value) came back as -5. The original
-# fractional-literal guard then rejected the legal file, while the unguarded
-# path silently ran with the FLOORED spring. These tags are repaired from the raw text instead
+# proc_val: 'SPRING = -5.5' (a legal VTST value) came back as -5. The R142
+# fractional-literal guard then REJECTED the legal file (a SPEC 1.1
+# regression), and before that the committed tree silently ran with the
+# FLOORED spring. These tags are repaired from the raw text instead
 # (_repair_mistyped_real_tags) and exempted from the integer rules.
 _REAL_TAGS_PYMATGEN_INT_TYPES = frozenset({"SPRING"})
 
@@ -154,7 +155,7 @@ _INTEGER_SEMANTIC_INCAR_TAGS = frozenset(
 # Tags whose first value token is a scalar number in some reader -- pymatgen's
 # typed proc_val OR VPMDK's own _NUMERIC_RE-based thermostat/VTST parsing. A
 # corrupted token for one of these must be rejected from the RAW text: which
-# parser types it decides nothing. MAGMOM is excluded
+# parser types it decides nothing (the R130/R134 lesson). MAGMOM is excluded
 # (its 'N*value' mini-language legitimately fails a plain float()); bool tags
 # are excluded by construction.
 _SCALAR_NUMERIC_INCAR_TAGS = frozenset(
@@ -197,13 +198,13 @@ _SCALAR_NUMERIC_INCAR_TAGS = frozenset(
 # _reject_swallowed_incar_tags. Keeping this reader line-scoped is what makes the
 # disagreement visible; mirroring the newline-crossing would hide it, exactly as
 # it did when this reader was written.
-# The KEY-side whitespace is \s* like pymatgen's, because its \s*
+# R170: the KEY-side whitespace is \s* like pymatgen's, because its \s*
 # CROSSES a newline between the key and '=' -- an assignment spelled
 # 'NSW\n= 1e5' parses normally in pymatgen but was invisible to this reader,
 # so EVERY raw-text guard built on it (repeat caps, corrupted-token
 # rejection, the embedded-assignment rule, the SPRING repair) was bypassed
 # by moving the '=' to the next line. Only the VALUE-side whitespace stays
-# narrowed to [ \t] for the line-scoped reason above.
+# narrowed to [ \t] per the R133 rationale above.
 _INCAR_ASSIGNMENT_RE = re.compile(
     r"(?P<key>\w+)\s*=[ \t]*(?:\"(?P<qval>[^\"\n]*)\"|(?P<val>[^#!;\n]*))"
 )
@@ -247,7 +248,7 @@ def _raw_incar_assignment_list(
     blank unquoted value is substituted by the following non-blank line, the
     text pymatgen will actually feed to proc_val. The swallow guard MUST keep
     the default line-scoped read: a blank staying visibly blank is what makes
-    the parser disagreement detectable at all.
+    the parser disagreement detectable at all (the R133 rationale above).
     """
 
     with open(path, encoding="utf-8-sig", errors="surrogateescape") as handle:
@@ -388,7 +389,7 @@ def _reject_swallowed_incar_tags(incar, path: str) -> None:
 
     for index, (key, value) in enumerate(assignments):
         if key != "SYSTEM" and value and parsed_keys is not None:
-            # The causal condition: a tag
+            # The CAUSAL condition (lesson xlvi/l, refined in R165): a tag
             # name with '=' inside another tag's value is only harmful when
             # that tag is genuinely ABSENT from the parse -- the mere textual
             # presence also matches the standard VASP trailing-comment style
@@ -422,7 +423,8 @@ def _reject_swallowed_incar_tags(incar, path: str) -> None:
             # quote the alternation falls through to the plain-value branch
             # and the file parses exactly as written (SYSTEM = "run #3" --
             # whose closing quote the comment strip removes -- and a
-            # forgotten quote on the LAST tag both parse successfully). The direct evidence
+            # forgotten quote on the LAST tag both ran fine at HEAD, and
+            # rejecting them was a legacy regression). The direct evidence
             # of a swallow is a FOLLOWING raw tag missing from the parse --
             # which also catches the bool/list-typed swallowers
             # (LWAVE = ".FALSE. parses to the scalar False) that the
@@ -506,7 +508,8 @@ def _reject_truncated_integer_tags(incar, path: str) -> None:
         # A trailing comma is a legal Fortran list-directed value terminator:
         # VASP reads 'NSW = 3,' as 3 and so does pymatgen, so the comma is
         # stripped BEFORE judging the token -- rejecting it (as the first
-        # version of the corrupted-token branch below did) failed valid inputs.
+        # version of the corrupted-token branch below did) failed inputs that
+        # completed correctly at HEAD, a SPEC 1.1 regression.
         normalized = _FORTRAN_EXPONENT_RE.sub("E", token.rstrip(","), count=1)
         try:
             intended = float(normalized)
@@ -542,7 +545,8 @@ def _reject_truncated_integer_tags(incar, path: str) -> None:
         # FREE-TEXT tag: 'SYSTEM = 1D5 sample' is a title whose first token
         # happens to look like a Fortran exponent, and 'SYSTEM = Infinity
         # study' is a title, not a non-finite number. Applying the checks
-        # below to every key rejected valid INCARs. Only judge tags some reader treats as a
+        # below to every key rejected INCARs that ran correctly at HEAD (a
+        # SPEC 1.1 regression). Only judge tags some reader treats as a
         # number: the known scalar-numeric set, or a tag pymatgen itself
         # typed as one.
         parsed = incar.get(key) if hasattr(incar, "get") else None
@@ -618,10 +622,10 @@ def _repair_mistyped_real_tags(incar, path: str) -> None:
     """Restore the true float value of REAL tags pymatgen int-types.
 
     pymatgen's generic ``proc_val`` int-types SPRING, so ``SPRING = -5.5``
-    (legal in VASP/VTST) came back as -5 and could silently run with the FLOORED
-    spring ('spring=5' printed for a requested 5.5), while
-    the original guard rejected the legal file outright. The raw token holds
-    the true value; write it back into the
+    (legal in VASP/VTST) came back as -5 and the committed tree silently ran
+    with the FLOORED spring ('spring=5' printed for a requested 5.5), while
+    the R142 guard's first form rejected the legal file outright (a SPEC 1.1
+    regression). The raw token holds the true value; write it back into the
     mapping so every downstream reader sees what the user wrote.
     """
 
@@ -692,7 +696,7 @@ def _incar_tag_expands_repeats(key: str) -> bool:
     strings and unknown tags are never expanded. VPMDK's own expander reads
     MAGMOM. Judging every tag made the resource caps reject free-text titles
     such as ``SYSTEM = 1000001*study`` -- values no layer ever expands, which
-    are valid inputs.
+    ran fine at HEAD (cross-review finding).
     """
 
     upper = str(key).upper()
@@ -711,7 +715,7 @@ def _incar_tag_expands_repeats(key: str) -> bool:
 # split (whitespace, then commas) let '(2000000000*1.0)' and
 # '1000000*1.0x1000000*1.0' bypass every cap while the same value without
 # the junk character was rejected -- the guard must tokenize the way the
-# parser does, not the way the text looks.
+# parser does, not the way the text looks (cross-review/R169 finding).
 _PYMATGEN_NUM_OR_STR = r"-?\d+\.?\d*(?:[eE][-+]?\d+)?|[\.A-Z]+"
 _PYMATGEN_LIST_TOKEN_RE = re.compile(
     rf"({_PYMATGEN_NUM_OR_STR})\*?({_PYMATGEN_NUM_OR_STR})?\*?({_PYMATGEN_NUM_OR_STR})?"
@@ -1013,7 +1017,7 @@ def _normalize_mdalgo(requested: int) -> int:
 
     Normalizing here (rather than in the dynamics selector) makes the recorded
     metadata match the trajectory as well. It warns instead of rejecting,
-    exactly like _normalize_isif: the one-shot compatibility contract keeps inputs that
+    exactly like _normalize_isif: SERVER_MODE_SPEC §1.1 keeps inputs that
     currently complete completing.
     """
 
@@ -1092,8 +1096,8 @@ def _extract_thermostat_parameters(incar) -> Dict[str, float]:
             value = incar[key]
             # NHC_NCHAINS deliberately has NO special case: it was the only
             # INCAR scalar parsed with a bare int(float(value)), so the legal
-            # trailing comma ('5,' -- a Fortran terminator this parser must
-            # honour, and which every sibling reads through
+            # trailing comma ('5,' -- the Fortran terminator R138 established
+            # this parser must honour, and which every sibling reads through
             # the shared extractor) dropped the tag and the run silently
             # sampled the DEFAULT chain length. Integer-ness is enforced by
             # the raw-level fractional/truncated guards keyed on
@@ -1104,7 +1108,7 @@ def _extract_thermostat_parameters(incar) -> Dict[str, float]:
             else:
                 parsed = _parse_optional_float(value, key=key)
             if parsed is not None:
-                # The magnitude bound covered LANGEVIN_GAMMA only (via
+                # The R139 magnitude bound covered LANGEVIN_GAMMA only (via
                 # its own parser); SMASS and NHC_PERIOD were left unbounded
                 # and 1e300 raised a raw OverflowError from tdamp**2 inside
                 # ASE's thermostat -- one-shot exit 1 with a traceback, server
@@ -1126,7 +1130,7 @@ def _load_incar_settings(incar) -> IncarSettings:
     if "IBRION" not in incar and nsw > 1:
         # Real VASP's documented default for NSW>1 is IBRION=0 (MD); VPMDK's
         # absent-tag default of -1 runs a SINGLE POINT for the same file --
-        # silently. The default stays for one-shot compatibility; the divergence is disclosed
+        # silently. The default stays (SPEC 1.1); the divergence is disclosed
         # like LCLIMB's and ANDERSEN_PROB's.
         print(
             f"Warning: NSW={nsw} with IBRION omitted runs a SINGLE POINT in "

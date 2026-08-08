@@ -2,9 +2,9 @@
 
 Most vasprun/OUTCAR/CONTCAR assertions in this suite re-parse the files with
 ElementTree or string matching -- i.e. they mirror the writer instead of
-round-tripping through the reader on the other side. Past defects involving
-scstep, selective dynamics, and NEB tangents were divergences between what
-VPMDK writes and what the CONSUMERS of those files
+round-tripping through the reader on the other side. Several rounds of review
+findings (R131 scstep, R133 selective dynamics, R135 NEB tangent) were
+divergences between what VPMDK writes and what the CONSUMERS of those files
 (ase.io and pymatgen) actually accept, invisible to writer-mirroring tests.
 
 This module is the systematic net for that defect class: run the full

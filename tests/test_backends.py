@@ -377,6 +377,10 @@ def test_grace_policy_resolver_is_the_single_default_source(
 def test_grace_named_model_without_foundation_loader_raises_not_found(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    # A named GRACE foundation model requested while the TensorPotential
+    # foundation loader (grace_fm) is unavailable must raise FileNotFoundError,
+    # preserving the historical exception-type contract for callers/tests and
+    # exception-to-exit-code mappings rather than a generic RuntimeError.
     monkeypatch.setattr(vpmdk, "GRACE_MODEL_NAMES", [])
     monkeypatch.setattr(vpmdk, "TPCalculator", lambda *a, **k: object())
     monkeypatch.setattr(vpmdk, "grace_fm", None)
@@ -498,6 +502,9 @@ def test_shared_model_resolver_rejects_missing_path_shaped_models(
 def test_spec_resolver_backends_enumerate_available_names_for_unknown_model(
     spec_backend: str, spec_label: str, monkeypatch: pytest.MonkeyPatch
 ):
+    # Routing these backends through the shared resolver must keep the
+    # "Available: <names>" enumeration their builders used to raise, not degrade
+    # to a generic "unsupported" message.
     monkeypatch.setattr(vpmdk, "_USING_LEGACY_M3GNET", False)
 
     with pytest.raises(
@@ -1787,6 +1794,13 @@ def test_mattersim_physics_tag_rejects_kwargs_only_signature(
 def test_mattersim_physics_tag_accepts_one_verified_forwarding_hop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    # Upstream's MatterSimCalculator.from_checkpoint(load_path, *, device=..., **kwargs)
+    # FORWARDS **kwargs to __init__, which is where compute_stress/stress_weight
+    # are declared. Requiring the introspected callable itself to declare them
+    # hard-failed that documented, previously-working configuration. Accept exactly
+    # one hop -- and only when the forwarding target really declares the parameter,
+    # so a **kwargs with nowhere to land still raises rather than silently
+    # computing different physics.
     checkpoint = tmp_path / "m.pth"
     checkpoint.write_text("placeholder")
 
@@ -3758,6 +3772,11 @@ def test_fairchem_v1_predictor_delegates_unresolved_model_selector(
 
 
 def test_fairchem_prediction_without_energy_or_forces_raises_not_zero():
+    # R136 (P2): a prediction whose keys match none of the probed names used to
+    # normalize to energy=0.0 eV and forces=np.zeros((N,3)) -- a converged-
+    # looking OUTCAR (TOTEN = 0.00000000, all-zero TOTAL-FORCE) with exit 0
+    # whenever a fairchem release renamed its output keys. The same zero-fill
+    # pattern was already condemned and removed from _safe_get_forces in R131.
     import numpy as np
     from ase import Atoms
 
@@ -3785,6 +3804,13 @@ def test_fairchem_prediction_without_energy_or_forces_raises_not_zero():
 
 
 def test_fairchem_missing_stress_is_omitted_not_zero(monkeypatch: pytest.MonkeyPatch):
+    # R136 (P2): an S2EF-class model (energy+forces, no stress head) used to
+    # yield stress=np.zeros(6) inside the calculator's results dict, and the
+    # capability gate could not fire because FAIRCHEM_V1 declares stress=True
+    # -- so an ISIF=3 cell relaxation converged instantly against fabricated
+    # zero stress ('external pressure = -0.00 kB') with exit 0 and no warning.
+    # The stress must be ABSENT from results, so get_stress raises ASE's
+    # PropertyNotImplementedError (a loud calculation failure) instead.
     import numpy as np
     from ase import Atoms
     from ase.calculators.calculator import PropertyNotImplementedError
@@ -4045,6 +4071,15 @@ def test_deepmd_missing_model_raises(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_matgl_stress_unit_is_pinned_through_one_forwarding_hop(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    # R125 (P1): matgl >= 4 defaults stress_unit="GPa" while VPMDK, like ASE, reads
+    # atoms.get_stress() as eV/A^3, so every reported stress and pressure was off by
+    # 1/ase.units.GPa (~160.2x) -- a silently wrong OUTCAR, not a crash.
+    #
+    # The pin cannot be gated on the class DECLARING the parameter: matgl's legacy
+    # M3GNetCalculator takes **kwargs and forwards them to PESCalculator, which is
+    # where stress_unit lives, so a declares-only gate leaves GPa in place. It also
+    # cannot be passed unconditionally: an older fixed signature would reject or
+    # swallow it.
     class Declaring:
         def __init__(self, potential, *, device=None, stress_unit="GPa"):
             self.kwargs = {"device": device, "stress_unit": stress_unit}
@@ -4082,6 +4117,12 @@ def test_matgl_stress_unit_is_pinned_through_one_forwarding_hop(
 
 
 def test_matgl_fallback_keeps_the_stress_unit_pin(monkeypatch):
+    # Cross-review (R185 window, P1): when the calculator DECLARES
+    # stress_unit but rejects another keyword (e.g. an unsupported device),
+    # the TypeError retry dropped ALL kwargs -- including the verified
+    # stress_unit="eV/A3" pin -- and the calculator silently fell back to
+    # matgl's GPa default: every stress and pressure ~160.2x too large,
+    # with exit 0. The retry now drops only the other kwargs.
     import vpmdk
     from vpmdk_core.backends import m3gnet as m3gnet_module
 
@@ -4119,6 +4160,12 @@ def test_matgl_fallback_keeps_the_stress_unit_pin(monkeypatch):
 
 
 def test_model_reference_rejects_a_fifo_path(tmp_path):
+    # R186 (P2): MODEL was the one user-supplied input path with no
+    # non-regular check -- a FIFO at MODEL made the loader's open() block
+    # forever: a silent one-shot hang, and in server mode a daemon child
+    # blocked mid-load while HOLDING the endpoint's pidfile, refusing every
+    # later serve on that socket until the orphan was manually killed. The
+    # refusal is narrowed to FIFOs: directory-shaped checkpoints stay legal.
     import os
 
     fifo = tmp_path / "model.pkl"

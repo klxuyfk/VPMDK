@@ -59,5 +59,6 @@ If you are maintaining or extending the project:
 ## Scope
 
 The documentation in `docs/` is written against the implementation in
-`src/vpmdk_core/` and the regression tests in `tests/`. Keep behavior described
-here aligned with those executable contracts.
+`src/vpmdk_core/` and the regression tests in `tests/`. When behavior here
+differs from older free-form notes in the repository, treat the implementation
+and these `docs/` pages as authoritative.

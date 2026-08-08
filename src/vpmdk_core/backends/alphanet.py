@@ -72,7 +72,7 @@ def _infer_alphanet_config_path(
     that inferred value in the resident's effective configuration; otherwise a
     request that explicitly names the very same file the resident already uses is
     compared against ``server=None`` and rejected with exit 5, even though the
-    one-shot builder constructs a byte-identical calculator (the server-mode backend-compatibility contract
+    one-shot builder constructs a byte-identical calculator (SERVER_MODE_SPEC 3.4
     rejects only tags that DIFFER). Returns None when nothing can be inferred
     without side effects -- an unknown/ambiguous layout, or a named model whose
     cache is not populated yet -- leaving the tag simply unadvertised as before.
