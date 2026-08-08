@@ -11,6 +11,32 @@ tools expect a VASP-like calculation directory. Supported backends and their
 optional dependencies are listed in the
 [backend reference](docs/reference/backends.md).
 
+## Highlights
+
+- One interface across ML potential packages with different model-loading and
+  calculator conventions.
+- Both a Python API for `ase.Atoms` and a directory-based CLI for existing
+  VASP-oriented workflows.
+- Single-point calculations, structural and cell relaxation, molecular
+  dynamics, NEB, and optional charge-density prediction.
+- Familiar VASP-style inputs and outputs, including `INCAR`, `POSCAR`,
+  `OUTCAR`, `OSZICAR`, `CONTCAR`, and `vasprun.xml`.
+- An optional resident server that avoids reloading the same model between
+  short batch calculations.
+
+## Supported Backends
+
+Force-field integrations include `CHGNET`, `MATGL` / `M3GNET`, `MACE`,
+`MATTERSIM`, `MATLANTIS`, `EQNORM`, `MATRIS`, `ALPHANET`, `HIENET`, `NEQUIX`,
+`SEVENNET`, `FLASHTP`, `BAM`, `NEQUIP`, `ALLEGRO`, `ORB`, `UPET`, `TACE`,
+`EQUFLASH`, `EQUIFORMER_V3`, `FAIRCHEM` (v1 and v2 paths, including `ESEN`),
+`GRACE`, and `DEEPMD` (including DPA-family checkpoints).
+
+Optional charge-density integrations include ChargE3Net, DeepDFT, and
+DeepCDP. Actual availability depends on the packages and model files installed
+in your environment. See the [backend reference](docs/reference/backends.md)
+for model requirements, aliases, defaults, and backend-specific caveats.
+
 ## Installation
 
 ```bash
