@@ -149,9 +149,15 @@ vpmdk stop [--socket PATH] [--force] [--timeout SEC]
 ```
 
 Normal stop rejects new work and drains accepted work before removing the
-socket. `--force` rejects queued work and disconnects the active client, but
-Python threads and in-flight GPU kernels cannot be cancelled safely; teardown
-still waits for the active executor to return.
+socket. For the standalone `vpmdk serve` process, `--force` rejects queued work,
+disconnects the active client, removes the server endpoint, and terminates the
+dedicated process even if a calculation is still running. Output from that
+calculation may therefore be incomplete. Prefer a normal stop when possible.
+
+A `VPMDKServer` embedded directly in another Python application does not
+terminate its host process: by default, force stop rejects and disconnects work
+but waits for the active executor to return. Process-level force termination is
+enabled only by the standalone CLI entry point.
 
 ## GPU and Batch Use
 

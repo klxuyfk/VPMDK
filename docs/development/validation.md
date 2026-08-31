@@ -20,6 +20,23 @@ not a benchmark-quality comparison against reference DFT data.  Blocked entries
 record adapter behavior or missing public artifacts rather than successful
 calculator evaluation.
 
+## 2026-08-29 EquFlash / EquFlashV2 Validation
+
+The official EquFlash OAM and EquFlashV2 OAM checkpoints were exercised through
+the same VPMDK `EQUFLASH` backend on an NVIDIA TITAN V using Python 3.12.14,
+torch 2.9.1+cu126, equflash 0.0.2, and fairchem-core 1.3.0.
+
+- EquFlash V1: `EquFlash`, 28,741,188 parameters; five-step Si2 MD passed;
+  single-point energy -10.8378000259 eV and maximum force
+  2.9237764210e-08 eV/A
+- EquFlashV2: `EquFlashV2`, 44,890,492 parameters; five-step Si2 MD passed;
+  single-point energy -10.8424844742 eV and maximum force
+  6.5944732341e-08 eV/A
+- Both models ran on `cuda:0` and returned full 3x3 stress tensors.
+- EquFlashV2 also completed the five-step MD test on CPU. The V1 OAM model
+  loaded in CPU mode but could not evaluate because equflash 0.0.2 dispatches
+  `cuequivariance_ops::segmented_transpose` to a CUDA-only kernel.
+
 ## Server-Mode Validation Summary
 
 The v0.5.0 server work was validated with mocked lifecycle tests, real CHGNet
@@ -83,7 +100,7 @@ Stress was returned as a full 3x3 tensor in both runs.
 | `ORB` | Manual real-backend single point | torch 2.6.0+cu124, orb-models 0.5.5 | local `orb-v3-conservative-20-omat-20250404.ckpt` | passed | passed | CPU/CUDA numerical values differed strongly; runnable smoke only; numerical parity not asserted |
 | `UPET` | Manual real-backend single point | torch 2.6.0+cu124, upet 0.1.2 | local `pet-oam-xl-v1.0.0.ckpt` | passed | passed | CUDA uses model on GPU with metatomic/vesin neighbor-list construction forced to CPU by default |
 | `TACE` | Manual real-backend single point | torch 2.6.0+cu124, TACE 0.1.0 | upstream `TACE-v1-OMat24-M` cache | passed | passed | downloaded through TACE foundation model registry |
-| `EQUFLASH` | Metadata-backed checkpoint audit and builder smoke | torch 2.5.1+cu121, sevenn 0.12.1, flashTP_e3nn 0.1.0 | `equflash-29M-oam` public metadata; no released checkpoint | not applicable | blocked | checkpoint-dependent SevenNet + FlashTP adapter; named metadata-only model gives an explicit error until a local checkpoint is supplied |
+| `EQUFLASH` | Official-runtime real-backend single points and five-step MD integration tests | Python 3.12.14, torch 2.9.1+cu126, equflash 0.0.2, fairchem-core 1.3.0 | official EquFlash V1 and EquFlashV2 OAM checkpoints | V2 passed; V1 CUDA-only | passed | the same `GGNN.common.calculator.UCalculator` path selected `EquFlash` for V1 and `EquFlashV2` for V2 on `cuda:0`; V1's validated runtime has no CPU kernel for segmented transpose |
 | `FAIRCHEM_V1` | Manual real-backend single point | torch 2.4.1+cu121, fairchem-core 1.10.0 | local `schnet_200k.pt` | passed | passed | stress unavailable for this calculator; forces were zero for this Si2 smoke case |
 | `FAIRCHEM_V2` | Manual real-backend single point | torch 2.8.0+cu128, fairchem-core 2.13.0 | `uma-s-1`, `FAIRCHEM_TASK=omat` | passed | passed | VPMDK default uses `uma-s-1p1`, which is present in fairchem-core 2.13.0 and current 2.x registries |
 | `FAIRCHEM` | Manual real-backend single point | same as `FAIRCHEM_V2` | `uma-s-1`, `FAIRCHEM_TASK=omat` | passed | passed | alias path covered separately |

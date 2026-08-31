@@ -63,6 +63,7 @@ def _start_server(
     heartbeat_interval: float = 0.05,
     pidfile: Path | None = None,
     executor=None,
+    terminate_process_on_force: bool = False,
 ) -> tuple[VPMDKServer, threading.Thread]:
     server = VPMDKServer(
         str(socket_path),
@@ -73,6 +74,7 @@ def _start_server(
         heartbeat_interval=heartbeat_interval,
         pidfile=str(pidfile) if pidfile is not None else None,
         executor=executor,
+        terminate_process_on_force=terminate_process_on_force,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -1732,10 +1734,11 @@ def test_foreground_serve_releases_launch_directory(tmp_path: Path, monkeypatch)
     # break every subsequent job's os.getcwd() in _working_directory).
     launch = tmp_path / "scratch"
     launch.mkdir()
-    recorded: dict[str, str] = {}
+    recorded: dict[str, object] = {}
 
     def fake_serve_forever(self, *, ready_callback=None):
         recorded["cwd"] = os.getcwd()
+        recorded["terminate_process_on_force"] = self.terminate_process_on_force
 
     monkeypatch.setattr(server_module.VPMDKServer, "serve_forever", fake_serve_forever)
     monkeypatch.setattr(
@@ -1761,6 +1764,7 @@ def test_foreground_serve_releases_launch_directory(tmp_path: Path, monkeypatch)
     monkeypatch.chdir(launch)
     assert server_module.serve_cli(args) == 0
     assert recorded["cwd"] == "/", "foreground serve did not release its launch cwd"
+    assert recorded["terminate_process_on_force"] is True
 
 
 def test_default_matgl_model_is_not_the_removed_classic_name():
@@ -4089,7 +4093,7 @@ def test_upet_explicit_auto_matches_cuda_neighborlist_default(tmp_path: Path):
     )
 
 
-def test_equflash_request_conflicting_with_forced_flash_defaults_is_rejected(
+def test_equflash_identity_has_no_sevennet_flash_defaults(
     tmp_path: Path,
 ):
     (tmp_path / "equflash.ckpt").write_text("placeholder")
@@ -4098,12 +4102,15 @@ def test_equflash_request_conflicting_with_forced_flash_defaults_is_rejected(
         base_dir=str(tmp_path),
     )
 
-    with pytest.raises(BackendConfigurationMismatch, match="SEVENNET_ENABLE_FLASH"):
-        validate_request_backend(
-            resident,
-            {"SEVENNET_ENABLE_FLASH": "false"},
-            request_base_dir=str(tmp_path),
-        )
+    assert not any(
+        key.startswith("SEVENNET_")
+        for key in resident["effective_configuration"]
+    )
+    validate_request_backend(
+        resident,
+        {"SEVENNET_ENABLE_FLASH": "false"},
+        request_base_dir=str(tmp_path),
+    )
 
 
 @pytest.mark.parametrize(
@@ -7112,6 +7119,91 @@ def test_force_stop_waits_for_active_executor_before_teardown(tmp_path: Path):
     assert not queued_thread.is_alive()
     assert not server_thread.is_alive()
     assert not socket_path.exists()
+
+
+def test_dedicated_server_force_stop_abandons_active_worker(tmp_path: Path):
+    """CLI-owned servers must not join an uninterruptible calculation."""
+
+    server = VPMDKServer(
+        str(tmp_path / "server.sock"),
+        DummyCalculator(),
+        {"MLP": "CHGNET", "DEVICE": "cpu"},
+        backend_base_dir=str(tmp_path),
+        terminate_process_on_force=True,
+    )
+    join_timeouts: list[float | None] = []
+
+    class ActiveWorker:
+        @staticmethod
+        def is_alive() -> bool:
+            return True
+
+        @staticmethod
+        def join(timeout=None) -> None:
+            join_timeouts.append(timeout)
+
+    server._worker = ActiveWorker()
+    server._busy = True
+    server._force_requested.set()
+
+    server._await_worker_exit()
+
+    assert server._worker_abandoned is True
+    assert join_timeouts == [], "force stop blocked on the active worker"
+    server._cleanup()
+
+
+def test_dedicated_force_stop_removes_endpoint_before_executor_returns(
+    tmp_path: Path,
+):
+    """Exercise the socket-level force path, not only the join helper seam."""
+
+    socket_path = tmp_path / "server.sock"
+    execution_started = threading.Event()
+    release_execution = threading.Event()
+    execution_finished = threading.Event()
+
+    def executor(workdir: str, *, calculator) -> None:
+        execution_started.set()
+        assert release_execution.wait(3.0)
+        execution_finished.set()
+
+    server, server_thread = _start_server(
+        socket_path,
+        executor=executor,
+        terminate_process_on_force=True,
+    )
+    run_errors: list[BaseException] = []
+
+    def submit() -> None:
+        try:
+            VPMDKClient(str(socket_path)).run(str(tmp_path))
+        except BaseException as exc:  # pragma: no cover - assertion reports it
+            run_errors.append(exc)
+
+    run_thread = threading.Thread(target=submit)
+    run_thread.start()
+    assert execution_started.wait(1.0)
+
+    response = VPMDKClient(str(socket_path)).stop(force=True, timeout=2.0)
+    server_thread.join(timeout=1.0)
+
+    assert response["force"] is True
+    assert server._worker_abandoned is True
+    assert not server_thread.is_alive()
+    assert not socket_path.exists()
+    assert not execution_finished.is_set()
+    _wait_for(lambda: bool(run_errors))
+    assert isinstance(run_errors[0], ServerConnectionError)
+
+    # Let the stand-in executor leave so this test does not retain a daemon
+    # worker in the pytest process. Production serve_cli calls os._exit here.
+    release_execution.set()
+    assert server._worker is not None
+    server._worker.join(timeout=2.0)
+    run_thread.join(timeout=2.0)
+    assert execution_finished.is_set()
+    assert not run_thread.is_alive()
 
 
 def test_resident_calculator_is_reset_for_every_request(

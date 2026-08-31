@@ -15,7 +15,7 @@ Optional backends (skipped unless env vars are set):
   (set VPMDK_TEST_REAL_PYMATGEN=1 when using the real MatterSim package)
 - SevenNet: VPMDK_SEVENNET_MODEL, optional VPMDK_SEVENNET_MODAL / VPMDK_SEVENNET_FILE_TYPE
 - FlashTP: VPMDK_FLASHTP_MODEL, optional VPMDK_FLASHTP_MODAL
-- EquFlash: VPMDK_EQUFLASH_MODEL
+- EquFlash/EquFlashV2: VPMDK_EQUFLASH_MODEL, optional VPMDK_EQUFLASH_DEVICE
 - MatGL: VPMDK_MATGL_MODEL
 - Eqnorm: VPMDK_EQNORM_MODEL, optional VPMDK_EQNORM_VARIANT
 - MatRIS: VPMDK_MATRIS_MODEL, optional VPMDK_MATRIS_TASK
@@ -278,15 +278,19 @@ def test_md_flashtp_optional(tmp_path: Path, data_dir: Path) -> None:
 
 @pytest.mark.integration
 def test_md_equflash_optional(tmp_path: Path, data_dir: Path) -> None:
-    if vpmdk.SevenNetCalculator is None or not vpmdk._is_sevennet_flash_available():
-        pytest.skip("EquFlash requires sevenn plus flashTP_e3nn support.")
-    _require_cuda()
+    if vpmdk._get_equflash_calculator_cls() is None:
+        pytest.skip("The official EquFlash/GGNN calculator is not installed.")
+    device = os.environ.get("VPMDK_EQUFLASH_DEVICE", "cuda")
+    if device.startswith("cuda"):
+        _require_cuda()
     model_value = os.environ.get("VPMDK_EQUFLASH_MODEL")
     if not model_value:
-        pytest.skip("Set VPMDK_EQUFLASH_MODEL to run EquFlash integration.")
+        pytest.skip(
+            "Set VPMDK_EQUFLASH_MODEL to an EquFlash or EquFlashV2 checkpoint."
+        )
     if not Path(model_value).exists():
         pytest.fail(f"EquFlash model not found: {model_value}")
-    bcar = f"MLP=EQUFLASH\nMODEL={model_value}\nDEVICE=cuda\n"
+    bcar = f"MLP=EQUFLASH\nMODEL={model_value}\nDEVICE={device}\n"
     _write_inputs(tmp_path, data_dir, bcar)
     _run_vpmdk(tmp_path)
     _assert_outputs(tmp_path)

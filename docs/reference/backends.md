@@ -38,7 +38,7 @@ is also an error.
 | `ORB` | `orb-models` / `ORBCalculator` | optional local weights path plus optional ORB model key | `orb-v3-conservative-20-omat` | `ORB_MODEL`, `ORB_PRECISION`, `ORB_COMPILE` |
 | `UPET` | `upet` / `UPETCalculator` | required local checkpoint or named model | none | `UPET_VERSION`, `UPET_NON_CONSERVATIVE`, `UPET_NEIGHBORLIST_DEVICE` / `UPET_NL_DEVICE` |
 | `TACE` | `TACE` / `TACEAseCalc` | required local checkpoint or named foundation model | none | `TACE_DTYPE`, `TACE_SPIN_ON`, `TACE_NEIGHBORLIST_BACKEND`, `TACE_FIDELITY_IDX` / `TACE_LEVEL` |
-| `EQUFLASH` | `sevenn` + `flashTP_e3nn` checkpoint-dependent adapter | required local SevenNet/EquFlash checkpoint file | none | uses checkpoint mode and forces FlashTP (`CUEQ=false`, `FLASH=true`, `OEQ=false`); no public named checkpoint is currently validated |
+| `EQUFLASH` | official `equflash` / `GGNN.common.calculator.UCalculator` | required local EquFlash or EquFlashV2 checkpoint file | none | checkpoint architecture is selected by GGNN metadata; `DEVICE=cpu` requests GGNN CPU mode, but checkpoints that depend on CUDA-only operators (including the validated V1 OAM runtime) still require CUDA |
 | `EQUIFORMER_V3` | official `atomicarchitects/equiformer_v3` FAIRChem v1/OCP runtime / `OCPCalculator` | required local EquiformerV3 checkpoint | none | `EQUIFORMER_V3_MODULE`, `FAIRCHEM_CONFIG`, `DEVICE`; imports the EquiformerV3 registration module before using the FAIRChem v1 builder |
 | `FAIRCHEM` / `FAIRCHEM_V2` / `ESEN` | `fairchem-core` 2.x / `FAIRChemCalculator` | upstream checkpoint/model selector, including names, paths, and provider-resolved path-shaped identifiers | `uma-s-1p1` with `FAIRCHEM_TASK=omat` | `FAIRCHEM_TASK`, `FAIRCHEM_INFERENCE_SETTINGS`, `DEVICE`; unresolved selectors are forwarded exactly to `from_model_checkpoint` |
 | `FAIRCHEM_V1` | `fairchem-core==1.10.0` baseline or compatible OCP/FAIRChem v1 install / `OCPCalculator` or predictor | required checkpoint selector: existing local path or value resolved by OCP/config | none | `FAIRCHEM_CONFIG`, `FAIRCHEM_V1_PREDICTOR`, `DEVICE`; unresolved selectors are forwarded exactly and never replaced by a default |
@@ -57,7 +57,7 @@ entrypoint below.
 | DPA / DPA-2 / DPA-3 / DPA-4 / DPA4 / SeZM checkpoints | `DEEPMD` | DeePMD-kit `DP` ASE calculator | Set `MODEL` to the local DeepMD checkpoint. DPA-4 / SeZM checkpoints require a DeePMD-kit release that registers the `dpa4` / `SeZM` model type. |
 | UMA / FAIRChem v2 named models | `FAIRCHEM`, `FAIRCHEM_V2`, or `ESEN` | `fairchem-core` 2.x `FAIRChemCalculator` | `ESEN` is routed through the same builder as `FAIRCHEM_V2`; set `FAIRCHEM_TASK` when upstream requires it. |
 | Flash-accelerated SevenNet | `FLASHTP` | SevenNet calculator with FlashTP acceleration forced | Same model semantics as SevenNet, but FlashTP support must be visible to `sevenn`. |
-| EquFlash checkpoints | `EQUFLASH` | SevenNet + FlashTP checkpoint-dependent adapter | Requires a local compatible checkpoint; VPMDK does not validate a public named EquFlash checkpoint. |
+| EquFlash / EquFlashV2 checkpoints | `EQUFLASH` | official GGNN `UCalculator` | Set `MODEL` to a downloaded upstream `.pt` checkpoint. This is not the SevenNet `FLASHTP` runtime path. |
 | Allegro deployed/compiled models | `ALLEGRO` | NequIP `NequIPCalculator` | The runtime calculator class is shared with NequIP, but use `MLP=ALLEGRO` for Allegro artifacts. |
 | MatGL / M3GNet checkpoints | `MATGL` or `M3GNET` | MatGL or legacy M3GNet calculator | Both names route to the same VPMDK builder. |
 
@@ -154,11 +154,13 @@ it supports that concept.
   calculator requires it.
 - `FLASHTP` requires `sevenn` plus FlashTP support visible to the installed
   `SevenNetCalculator`.
-- `EQUFLASH` follows the same SevenNet + FlashTP runtime path but is a
-  checkpoint-dependent adapter, not a standalone public named-model path.
-  Public matbench-discovery metadata for `equflash-29M-oam` currently records
-  the checkpoint as unreleased, so `MODEL=equflash-29M-oam` is rejected with an
-  explicit message unless a local checkpoint path is supplied.
+- `EQUFLASH` requires the official package exposing
+  `GGNN.common.calculator.UCalculator`. Both EquFlash and EquFlashV2 use this
+  entrypoint; GGNN selects the architecture from checkpoint metadata. Download
+  an upstream checkpoint such as `equflash_oam.pt` or `equflashv2_oam.pt` and
+  set `MODEL` to its local path. The validated EquFlash V1 OAM checkpoint uses
+  CUDA-only `cuequivariance` operators; CPU support therefore depends on the
+  checkpoint and upstream runtime, while both V1 and V2 are validated on CUDA.
 - `UPET` defaults to building neighbor lists on CPU when the model is on CUDA.
   Set `UPET_NEIGHBORLIST_DEVICE=model` to run neighbor-list construction on the
   model device when the local `metatomic`/`vesin` stack supports it.

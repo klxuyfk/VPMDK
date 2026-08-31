@@ -475,36 +475,38 @@ def _build_upet_calculator(bcar_tags: Dict[str, str]):
     return _UPETNeighborListDeviceProxy(calculator, neighborlist_device)
 
 
-def _is_equflash_unreleased_named_model(model_value: str | None) -> bool:
-    if not model_value:
-        return False
-    normalized = model_value.strip().casefold().replace("_", "-")
-    return normalized in {"equflash-29m-oam", "equflash"}
+def _get_equflash_calculator_cls() -> Any | None:
+    """Return the official GGNN EquFlash ASE calculator when installed."""
+
+    root = _root()
+    try:
+        module = root.importlib.import_module("GGNN.common.calculator")
+    except Exception:
+        return None
+    return getattr(module, "UCalculator", None)
 
 
 def _build_equflash_calculator(bcar_tags: Dict[str, str]):
-    """Create the EquFlash ASE calculator configured from BCAR tags."""
+    """Create an EquFlash/EquFlashV2 calculator with the official GGNN runtime."""
 
     root = _root()
-    if root.SevenNetCalculator is None or not root._is_sevennet_flash_available():
+    calculator_cls = root._get_equflash_calculator_cls()
+    if calculator_cls is None:
         raise RuntimeError(
-            "EquFlash requires sevenn plus flashTP_e3nn support. Install FlashTP and "
-            "ensure CUDA is visible."
+            "EquFlash calculator not available. Install the official EquFlash/GGNN "
+            "package that exposes GGNN.common.calculator.UCalculator."
         )
 
-    model_value = bcar_tags.get("MODEL")
-    if _is_equflash_unreleased_named_model(model_value):
-        raise ValueError(
-            "EquFlash named model 'equflash-29M-oam' has public metadata but no "
-            "released checkpoint. Set MODEL to a local SevenNet/EquFlash checkpoint."
-        )
-    model_reference = root._resolve_backend_model_reference("EQUFLASH", model_value)
-
-    tags = dict(bcar_tags)
-    tags["MODEL"] = str(model_reference.value)
-    tags.setdefault("DEVICE", "cuda")
-    tags.setdefault("SEVENNET_FILE_TYPE", "checkpoint")
-    return root._build_sevennet_family_calculator(tags, force_flash=True)
+    model_reference = root._resolve_backend_model_reference(
+        "EQUFLASH", bcar_tags.get("MODEL")
+    )
+    device = root._resolve_device(bcar_tags.get("DEVICE")) or "cpu"
+    kwargs: Dict[str, object] = {"checkpoint_path": str(model_reference.value)}
+    if root._callable_supports_parameter(calculator_cls, "cpu"):
+        kwargs["cpu"] = str(device).strip().lower().startswith("cpu")
+    if root._callable_supports_parameter(calculator_cls, "device"):
+        kwargs["device"] = device
+    return calculator_cls(**kwargs)
 
 
 def _build_tace_calculator(bcar_tags: Dict[str, str]):

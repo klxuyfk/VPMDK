@@ -212,10 +212,30 @@ Guidance:
   from the FlashTP source tree with `CUDA_ARCH_LIST=70` and CUDA 12.6 headers
   visible via `CUDA_HOME`
 
-`MLP=EQUFLASH` uses the same SevenNet + FlashTP runtime path, but requires a
-local EquFlash-compatible checkpoint. Treat it as a checkpoint-dependent
-adapter: the public `equflash-29M-oam` metadata records the checkpoint as
-unreleased, so it is not a downloadable named model.
+`MLP=EQUFLASH` uses the official EquFlash/GGNN runtime, not
+`SevenNetCalculator`. Install the package that exposes
+`GGNN.common.calculator.UCalculator`, download an upstream EquFlash or
+EquFlashV2 checkpoint, and set `MODEL` to that local `.pt` file. The upstream
+package currently requires Python 3.12 and a tightly pinned PyTorch/CUDA stack,
+so a dedicated environment is recommended.
+
+The following package combination was validated on CUDA 12.6. PyTorch must be
+installed from its CUDA wheel index, and the matching PyG extension wheels must
+be installed before `equflash`:
+
+```bash
+python -m pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cu126
+python -m pip install \
+  torch_scatter==2.1.2+pt29cu126 torch_sparse==0.6.18+pt29cu126 \
+  --find-links https://data.pyg.org/whl/torch-2.9.1+cu126.html
+python -m pip install equflash==0.0.2
+```
+
+```text
+MLP=EQUFLASH
+MODEL=/path/to/equflashv2_oam.pt
+DEVICE=cuda
+```
 
 ## ORB
 
