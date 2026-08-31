@@ -501,10 +501,32 @@ def _build_equflash_calculator(bcar_tags: Dict[str, str]):
         "EQUFLASH", bcar_tags.get("MODEL")
     )
     device = root._resolve_device(bcar_tags.get("DEVICE")) or "cpu"
+    normalized_device = str(device).strip().lower()
+    device_is_declared = root._callable_declares_parameter(
+        calculator_cls, "device"
+    )
+    # equflash 0.0.2 exposes only ``cpu``. With cpu=False its Trainer selects
+    # CUDA from the checkpoint's local_rank (normally logical GPU 0), so merely
+    # accepting DEVICE=cuda:1 would advertise one GPU while silently using
+    # another. Fail before loading the large checkpoint unless the installed
+    # runtime explicitly supports device selection. Users of the current
+    # runtime can still map a physical GPU to logical GPU 0 with
+    # CUDA_VISIBLE_DEVICES and request DEVICE=cuda.
+    if (
+        not device_is_declared
+        and not normalized_device.startswith("cpu")
+        and normalized_device not in {"cuda", "cuda:0"}
+    ):
+        raise ValueError(
+            "The installed EquFlash UCalculator cannot select "
+            f"DEVICE={device!s}. Use DEVICE=cuda or DEVICE=cuda:0, isolate the "
+            "target GPU with CUDA_VISIBLE_DEVICES, or install an EquFlash runtime "
+            "that explicitly supports a device argument."
+        )
     kwargs: Dict[str, object] = {"checkpoint_path": str(model_reference.value)}
     if root._callable_supports_parameter(calculator_cls, "cpu"):
-        kwargs["cpu"] = str(device).strip().lower().startswith("cpu")
-    if root._callable_supports_parameter(calculator_cls, "device"):
+        kwargs["cpu"] = normalized_device.startswith("cpu")
+    if device_is_declared:
         kwargs["device"] = device
     return calculator_cls(**kwargs)
 

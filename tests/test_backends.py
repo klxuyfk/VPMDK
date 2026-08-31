@@ -3640,6 +3640,56 @@ def test_equflash_forwards_device_when_ucalculator_supports_it(
     }
 
 
+@pytest.mark.parametrize("device", ["cuda:1", "cuda:7", "mps"])
+def test_equflash_rejects_unselectable_device_for_current_ucalculator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    device: str,
+):
+    model_path = tmp_path / "equflashv2_oam.pt"
+    model_path.write_text("dummy")
+    constructed = False
+
+    class CurrentUCalculator:
+        def __init__(self, checkpoint_path, cpu=True):
+            nonlocal constructed
+            constructed = True
+
+    monkeypatch.setattr(
+        vpmdk, "_get_equflash_calculator_cls", lambda: CurrentUCalculator
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=rf"cannot select DEVICE={device}",
+    ):
+        vpmdk._build_equflash_calculator(
+            {"MODEL": str(model_path), "DEVICE": device}
+        )
+
+    assert constructed is False, "invalid device reached checkpoint construction"
+
+
+def test_equflash_does_not_treat_kwargs_as_device_selection_support(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "equflashv2_oam.pt"
+    model_path.write_text("dummy")
+
+    class KwargsOnlyUCalculator:
+        def __init__(self, checkpoint_path, cpu=True, **kwargs):
+            raise AssertionError("unsupported indexed device reached constructor")
+
+    monkeypatch.setattr(
+        vpmdk, "_get_equflash_calculator_cls", lambda: KwargsOnlyUCalculator
+    )
+
+    with pytest.raises(ValueError, match="cannot select DEVICE=cuda:1"):
+        vpmdk._build_equflash_calculator(
+            {"MODEL": str(model_path), "DEVICE": "cuda:1"}
+        )
+
+
 def test_equflash_requires_official_ggnn_runtime(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(vpmdk, "_get_equflash_calculator_cls", lambda: None)
 

@@ -161,6 +161,9 @@ it supports that concept.
   set `MODEL` to its local path. The validated EquFlash V1 OAM checkpoint uses
   CUDA-only `cuequivariance` operators; CPU support therefore depends on the
   checkpoint and upstream runtime, while both V1 and V2 are validated on CUDA.
+  EquFlash 0.0.2 cannot select a nonzero logical CUDA index, so VPMDK rejects
+  `DEVICE=cuda:N` for `N != 0`; use `CUDA_VISIBLE_DEVICES=N` with `DEVICE=cuda`
+  to map the desired physical GPU to logical GPU 0.
 - `UPET` defaults to building neighbor lists on CPU when the model is on CUDA.
   Set `UPET_NEIGHBORLIST_DEVICE=model` to run neighbor-list construction on the
   model device when the local `metatomic`/`vesin` stack supports it.

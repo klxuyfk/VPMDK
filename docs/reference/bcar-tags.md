@@ -197,7 +197,10 @@ EquFlash or EquFlashV2 checkpoint and select the device with `DEVICE`. The
 checkpoint metadata selects the architecture through the official
 `GGNN.common.calculator.UCalculator` runtime. CPU execution is
 checkpoint/runtime-dependent; the validated V1 OAM checkpoint requires CUDA
-because its `cuequivariance` operators have no CPU kernel.
+because its `cuequivariance` operators have no CPU kernel. EquFlash 0.0.2 also
+cannot select a nonzero logical CUDA index: use `CUDA_VISIBLE_DEVICES=N` with
+`DEVICE=cuda`, rather than `DEVICE=cuda:N`. VPMDK rejects the latter instead of
+silently using the wrong GPU.
 
 ### UPET
 

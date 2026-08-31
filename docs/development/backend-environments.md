@@ -237,6 +237,18 @@ MODEL=/path/to/equflashv2_oam.pt
 DEVICE=cuda
 ```
 
+EquFlash 0.0.2 does not expose a `device` argument. It can select CPU versus
+CUDA, but cannot select a nonzero logical CUDA index. To use a particular GPU,
+map it to logical GPU 0 for the VPMDK process and keep `DEVICE=cuda`:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 vpmdk --dir ./calc_dir
+```
+
+VPMDK rejects `DEVICE=cuda:1` (and other nonzero indices) with this runtime
+instead of silently running on `cuda:0`. A future `UCalculator` that explicitly
+declares a `device` argument receives the requested index directly.
+
 ## ORB
 
 `orb-models` can resolve pretrained weights by model key, but local checkpoints
