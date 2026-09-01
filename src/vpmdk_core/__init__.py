@@ -493,6 +493,7 @@ from .backends.misc import (
     _build_orb_calculator,
     _build_tace_calculator,
     _build_upet_calculator,
+    _get_equflash_calculator_cls,
     _normalize_upet_neighborlist_device,
     _list_matlantis_calc_modes,
     _resolve_grace_foundation_model,

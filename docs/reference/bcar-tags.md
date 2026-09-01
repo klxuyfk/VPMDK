@@ -182,7 +182,7 @@ otherwise named selectors fail with an explicit compatibility error.
 - `NEQUIX_COMPILE`
 - `NEQUIX_CAPACITY_MULTIPLIER`
 
-### SevenNet / FlashTP / EquFlash
+### SevenNet / FlashTP
 
 - `SEVENNET_FILE_TYPE`
 - `SEVENNET_MODAL`
@@ -190,8 +190,17 @@ otherwise named selectors fail with an explicit compatibility error.
 - `SEVENNET_ENABLE_FLASH`
 - `SEVENNET_ENABLE_OEQ`
 
-EquFlash uses checkpoint mode with FlashTP forced on and CUEQ/OEQ forced off;
-explicit repetitions of those effective values are accepted in server mode.
+### EquFlash / EquFlashV2
+
+EquFlash has no backend-specific BCAR tags. Set `MODEL` to a local GGNN
+EquFlash or EquFlashV2 checkpoint and select the device with `DEVICE`. The
+checkpoint metadata selects the architecture through the official
+`GGNN.common.calculator.UCalculator` runtime. CPU execution is
+checkpoint/runtime-dependent; the validated V1 OAM checkpoint requires CUDA
+because its `cuequivariance` operators have no CPU kernel. EquFlash 0.0.2 also
+cannot select a nonzero logical CUDA index: use `CUDA_VISIBLE_DEVICES=N` with
+`DEVICE=cuda`, rather than `DEVICE=cuda:N`. VPMDK rejects the latter instead of
+silently using the wrong GPU.
 
 ### UPET
 

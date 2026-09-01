@@ -84,7 +84,9 @@ Common packages:
 - `orb-models` for `MLP=ORB`
 - `upet` for `MLP=UPET`
 - `TACE` for `MLP=TACE`
-- `sevenn` plus `flashTP_e3nn` and a local EquFlash-compatible checkpoint for `MLP=EQUFLASH`
+- the official `equflash` package, which exposes
+  `GGNN.common.calculator.UCalculator`, plus a local EquFlash or EquFlashV2
+  checkpoint for `MLP=EQUFLASH`
 - `fairchem-core==1.10.0` for EquiformerV2 / eqV2 checkpoints through
   `MLP=FAIRCHEM_V1`
 - the official `atomicarchitects/equiformer_v3` code plus its bundled FAIRChem

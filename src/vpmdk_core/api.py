@@ -134,9 +134,7 @@ def _backend_available(name: str) -> bool:
         ),
         "UPET": lambda: root.UPETCalculator is not None,
         "TACE": lambda: root.TACEAseCalc is not None,
-        "EQUFLASH": lambda: (
-            root.SevenNetCalculator is not None and root._is_sevennet_flash_available()
-        ),
+        "EQUFLASH": lambda: root._get_equflash_calculator_cls() is not None,
         "EQUIFORMER_V3": lambda: root._is_equiformer_v3_available(),
         "FAIRCHEM": lambda: root.FAIRChemCalculator is not None,
         "FAIRCHEM_V2": lambda: root.FAIRChemCalculator is not None,

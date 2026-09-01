@@ -3554,43 +3554,165 @@ def test_upet_missing_checkpoint_raises(tmp_path: Path, monkeypatch: pytest.Monk
         vpmdk._build_upet_calculator({"MODEL": str(missing_path)})
 
 
-def test_equflash_uses_flashtp_sevennet_builder(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_get_equflash_calculator_cls_uses_official_ggnn_module(monkeypatch):
+    calculator_cls = object()
+    imported: list[str] = []
+
+    def fake_import_module(module_name):
+        imported.append(module_name)
+        return SimpleNamespace(UCalculator=calculator_cls)
+
+    monkeypatch.setattr(
+        backend_misc,
+        "_root",
+        lambda: SimpleNamespace(
+            importlib=SimpleNamespace(import_module=fake_import_module)
+        ),
+    )
+
+    assert backend_misc._get_equflash_calculator_cls() is calculator_cls
+    assert imported == ["GGNN.common.calculator"]
+
+
+@pytest.mark.parametrize(
+    ("device", "expected_cpu"),
+    [("cpu", True), ("cuda:0", False)],
+)
+@pytest.mark.parametrize("model_filename", ["equflash_oam.pt", "equflashv2_oam.pt"])
+def test_equflash_uses_official_ggnn_ucalculator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    device: str,
+    expected_cpu: bool,
+    model_filename: str,
 ):
-    model_path = tmp_path / "equflash.pth"
+    model_path = tmp_path / model_filename
     model_path.write_text("dummy")
     seen: dict[str, object] = {}
 
-    def fake_builder(tags, *, force_flash=False):
-        seen["tags"] = tags
-        seen["force_flash"] = force_flash
-        return "equflash"
+    class FakeUCalculator:
+        def __init__(self, checkpoint_path, cpu=True):
+            seen["checkpoint_path"] = checkpoint_path
+            seen["cpu"] = cpu
 
-    monkeypatch.setattr(vpmdk, "SevenNetCalculator", object)
-    monkeypatch.setattr(vpmdk, "_is_sevennet_flash_available", lambda: True)
-    monkeypatch.setattr(vpmdk, "_build_sevennet_family_calculator", fake_builder)
-
-    calc = vpmdk._build_equflash_calculator(
-        {"MODEL": str(model_path), "DEVICE": "cuda:0"}
+    monkeypatch.setattr(
+        vpmdk, "_get_equflash_calculator_cls", lambda: FakeUCalculator
     )
 
-    assert calc == "equflash"
+    calc = vpmdk._build_equflash_calculator(
+        {"MODEL": str(model_path), "DEVICE": device}
+    )
+
+    assert isinstance(calc, FakeUCalculator)
     assert seen == {
-        "tags": {
-            "MODEL": str(model_path),
-            "DEVICE": "cuda:0",
-            "SEVENNET_FILE_TYPE": "checkpoint",
-        },
-        "force_flash": True,
+        "checkpoint_path": str(model_path),
+        "cpu": expected_cpu,
     }
 
 
-def test_equflash_named_checkpoint_is_unreleased(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(vpmdk, "SevenNetCalculator", object)
-    monkeypatch.setattr(vpmdk, "_is_sevennet_flash_available", lambda: True)
+def test_equflash_forwards_device_when_ucalculator_supports_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "equflashv2_omat.pt"
+    model_path.write_text("dummy")
+    seen: dict[str, object] = {}
 
-    with pytest.raises(ValueError, match="no released checkpoint"):
-        vpmdk._build_equflash_calculator({"MODEL": "equflash-29M-oam"})
+    class FakeUCalculator:
+        def __init__(self, checkpoint_path, cpu=True, device=None):
+            seen.update(
+                checkpoint_path=checkpoint_path,
+                cpu=cpu,
+                device=device,
+            )
+
+    monkeypatch.setattr(
+        vpmdk, "_get_equflash_calculator_cls", lambda: FakeUCalculator
+    )
+
+    vpmdk._build_equflash_calculator(
+        {"MODEL": str(model_path), "DEVICE": "cuda:1"}
+    )
+
+    assert seen == {
+        "checkpoint_path": str(model_path),
+        "cpu": False,
+        "device": "cuda:1",
+    }
+
+
+@pytest.mark.parametrize("device", ["cuda:1", "cuda:7", "mps"])
+def test_equflash_rejects_unselectable_device_for_current_ucalculator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    device: str,
+):
+    model_path = tmp_path / "equflashv2_oam.pt"
+    model_path.write_text("dummy")
+    constructed = False
+
+    class CurrentUCalculator:
+        def __init__(self, checkpoint_path, cpu=True):
+            nonlocal constructed
+            constructed = True
+
+    monkeypatch.setattr(
+        vpmdk, "_get_equflash_calculator_cls", lambda: CurrentUCalculator
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=rf"cannot select DEVICE={device}",
+    ):
+        vpmdk._build_equflash_calculator(
+            {"MODEL": str(model_path), "DEVICE": device}
+        )
+
+    assert constructed is False, "invalid device reached checkpoint construction"
+
+
+def test_equflash_does_not_treat_kwargs_as_device_selection_support(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "equflashv2_oam.pt"
+    model_path.write_text("dummy")
+
+    class KwargsOnlyUCalculator:
+        def __init__(self, checkpoint_path, cpu=True, **kwargs):
+            raise AssertionError("unsupported indexed device reached constructor")
+
+    monkeypatch.setattr(
+        vpmdk, "_get_equflash_calculator_cls", lambda: KwargsOnlyUCalculator
+    )
+
+    with pytest.raises(ValueError, match="cannot select DEVICE=cuda:1"):
+        vpmdk._build_equflash_calculator(
+            {"MODEL": str(model_path), "DEVICE": "cuda:1"}
+        )
+
+
+def test_equflash_requires_official_ggnn_runtime(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(vpmdk, "_get_equflash_calculator_cls", lambda: None)
+
+    with pytest.raises(RuntimeError, match="GGNN.common.calculator.UCalculator"):
+        vpmdk._build_equflash_calculator({"MODEL": "equflashv2_oam.pt"})
+
+
+def test_equflash_requires_checkpoint(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(vpmdk, "_get_equflash_calculator_cls", lambda: object)
+
+    with pytest.raises(ValueError, match="EQUFLASH requires MODEL"):
+        vpmdk._build_equflash_calculator({})
+
+
+def test_equflash_rejects_missing_checkpoint_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(vpmdk, "_get_equflash_calculator_cls", lambda: object)
+
+    with pytest.raises(FileNotFoundError, match="EQUFLASH MODEL path not found"):
+        vpmdk._build_equflash_calculator(
+            {"MODEL": str(tmp_path / "missing-equflashv2.pt")}
+        )
 
 
 def test_fairchem_default_uses_validated_uma_model_and_task(

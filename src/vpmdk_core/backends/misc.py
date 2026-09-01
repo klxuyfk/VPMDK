@@ -475,36 +475,60 @@ def _build_upet_calculator(bcar_tags: Dict[str, str]):
     return _UPETNeighborListDeviceProxy(calculator, neighborlist_device)
 
 
-def _is_equflash_unreleased_named_model(model_value: str | None) -> bool:
-    if not model_value:
-        return False
-    normalized = model_value.strip().casefold().replace("_", "-")
-    return normalized in {"equflash-29m-oam", "equflash"}
+def _get_equflash_calculator_cls() -> Any | None:
+    """Return the official GGNN EquFlash ASE calculator when installed."""
+
+    root = _root()
+    try:
+        module = root.importlib.import_module("GGNN.common.calculator")
+    except Exception:
+        return None
+    return getattr(module, "UCalculator", None)
 
 
 def _build_equflash_calculator(bcar_tags: Dict[str, str]):
-    """Create the EquFlash ASE calculator configured from BCAR tags."""
+    """Create an EquFlash/EquFlashV2 calculator with the official GGNN runtime."""
 
     root = _root()
-    if root.SevenNetCalculator is None or not root._is_sevennet_flash_available():
+    calculator_cls = root._get_equflash_calculator_cls()
+    if calculator_cls is None:
         raise RuntimeError(
-            "EquFlash requires sevenn plus flashTP_e3nn support. Install FlashTP and "
-            "ensure CUDA is visible."
+            "EquFlash calculator not available. Install the official EquFlash/GGNN "
+            "package that exposes GGNN.common.calculator.UCalculator."
         )
 
-    model_value = bcar_tags.get("MODEL")
-    if _is_equflash_unreleased_named_model(model_value):
+    model_reference = root._resolve_backend_model_reference(
+        "EQUFLASH", bcar_tags.get("MODEL")
+    )
+    device = root._resolve_device(bcar_tags.get("DEVICE")) or "cpu"
+    normalized_device = str(device).strip().lower()
+    device_is_declared = root._callable_declares_parameter(
+        calculator_cls, "device"
+    )
+    # equflash 0.0.2 exposes only ``cpu``. With cpu=False its Trainer selects
+    # CUDA from the checkpoint's local_rank (normally logical GPU 0), so merely
+    # accepting DEVICE=cuda:1 would advertise one GPU while silently using
+    # another. Fail before loading the large checkpoint unless the installed
+    # runtime explicitly supports device selection. Users of the current
+    # runtime can still map a physical GPU to logical GPU 0 with
+    # CUDA_VISIBLE_DEVICES and request DEVICE=cuda.
+    if (
+        not device_is_declared
+        and not normalized_device.startswith("cpu")
+        and normalized_device not in {"cuda", "cuda:0"}
+    ):
         raise ValueError(
-            "EquFlash named model 'equflash-29M-oam' has public metadata but no "
-            "released checkpoint. Set MODEL to a local SevenNet/EquFlash checkpoint."
+            "The installed EquFlash UCalculator cannot select "
+            f"DEVICE={device!s}. Use DEVICE=cuda or DEVICE=cuda:0, isolate the "
+            "target GPU with CUDA_VISIBLE_DEVICES, or install an EquFlash runtime "
+            "that explicitly supports a device argument."
         )
-    model_reference = root._resolve_backend_model_reference("EQUFLASH", model_value)
-
-    tags = dict(bcar_tags)
-    tags["MODEL"] = str(model_reference.value)
-    tags.setdefault("DEVICE", "cuda")
-    tags.setdefault("SEVENNET_FILE_TYPE", "checkpoint")
-    return root._build_sevennet_family_calculator(tags, force_flash=True)
+    kwargs: Dict[str, object] = {"checkpoint_path": str(model_reference.value)}
+    if root._callable_supports_parameter(calculator_cls, "cpu"):
+        kwargs["cpu"] = normalized_device.startswith("cpu")
+    if device_is_declared:
+        kwargs["device"] = device
+    return calculator_cls(**kwargs)
 
 
 def _build_tace_calculator(bcar_tags: Dict[str, str]):

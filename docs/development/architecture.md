@@ -90,7 +90,9 @@ The main invariants are:
 - request settings and output state are isolated between calculations
 - explicit request construction settings must match the resident calculator
 - client timeout or disconnect does not cancel accepted work
-- graceful shutdown drains accepted work; force shutdown rejects queued work
+- graceful shutdown drains accepted work; CLI force shutdown rejects queued work
+  and terminates the dedicated server process, while embedded servers preserve
+  the host process and wait for an active executor
 - socket and pidfile cleanup verifies ownership before removing paths
 
 `vpmdk_client` provides the standard-library-only client path so orchestration

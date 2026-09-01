@@ -1098,7 +1098,7 @@ BACKEND_CONFIGURATION_TAGS = frozenset(
 # Deliberately EXCLUDED (kept and still compared, i.e. fail-closed) because their
 # tags are shared across a builder family or read via delegation, where dropping
 # one could hide a tag the resident builder actually consumes:
-#   - SEVENNET_ (SevenNet + FlashTP + EQUFLASH's sevennet_family delegation)
+#   - SEVENNET_ (shared by SevenNet and FlashTP)
 #   - FAIRCHEM_ / EQUIFORMER_V3_ (fairchem module: FAIRCHEM/V2/ESEN/EQUIFORMER_V3)
 #   - GRAPH_CONVERTER* (CHGNet/MatRIS + nequip_family, read via delegation)
 #   - the non-prefixed Matlantis aliases MODEL_VERSION / PRIORITY / CALC_MODE
@@ -1283,7 +1283,6 @@ _BACKEND_CONFIGURATION_DEFAULTS: dict[str, dict[str, Any]] = {
     },
     "SEVENNET": {"SEVENNET_FILE_TYPE": "checkpoint"},
     "FLASHTP": _FORCED_FLASH_CONFIGURATION_DEFAULTS,
-    "EQUFLASH": _FORCED_FLASH_CONFIGURATION_DEFAULTS,
     "FAIRCHEM": {"FAIRCHEM_INFERENCE_SETTINGS": "default"},
     "FAIRCHEM_V2": {"FAIRCHEM_INFERENCE_SETTINGS": "default"},
     "ESEN": {"FAIRCHEM_INFERENCE_SETTINGS": "default"},
@@ -1312,7 +1311,7 @@ def _canonical_mlp_identity(mlp: str) -> str:
 
 # Backends whose builders resolve a present-but-blank DEVICE to CPU via the
 # `_resolve_device(...) or "cpu"` idiom (alphanet.py, eqnorm.py, hienet.py,
-# sevennet_family.py -- the last shared by SevenNet/FlashTP/EquFlash). For these,
+# sevennet_family.py -- shared by SevenNet and FlashTP). For these,
 # `_resolve_device("")` returns "" and the trailing `or "cpu"` makes the device
 # variable itself "cpu" BEFORE it reaches the calculator, so a blank-DEVICE
 # resident actually runs on CPU and must ADVERTISE "cpu" -- otherwise it reports
@@ -1887,9 +1886,9 @@ def backend_identity(tags: Mapping[str, Any], *, base_dir: str) -> dict[str, Any
 # to) a builder. A request tag from a family the resident is NOT a member of is
 # ignored -- the resident's builder never reads it, exactly as one-shot does.
 # Verified empirically from the backend builders + delegations (grep):
-#   SEVENNET_* : sevennet_family (SEVENNET, FLASHTP) AND misc's EQUFLASH, which
-#                delegates via _build_sevennet_family_calculator. HIENET has its
-#                own builder and does NOT read SEVENNET_*, so it is excluded.
+#   SEVENNET_* : sevennet_family (SEVENNET, FLASHTP). EquFlash uses the official
+#                GGNN UCalculator and does NOT read these tags. HIENET has its own
+#                builder and is also excluded.
 #   FAIRCHEM_*/EQUIFORMER_V3_* : the fairchem module (FAIRCHEM/FAIRCHEM_V2/ESEN/
 #                EQUIFORMER_V3/FAIRCHEM_V1).
 #   PRIORITY/MODEL_VERSION/CALC_MODE : the non-prefixed Matlantis aliases.
@@ -1899,9 +1898,8 @@ def backend_identity(tags: Mapping[str, Any], *, base_dir: str) -> dict[str, Any
 # GRAPH_CONVERTER override is a genuine config difference, not a foreign tag.
 _SEVENNET_FAMILY_IDENTITIES = frozenset(
     # SEVENNET_* are all read by the shared _build_sevennet_family_calculator, so
-    # SevenNet, FlashTP AND EquFlash (which delegates to it) consume every one --
-    # not disjoint, so a single family set is correct.
-    _canonical_mlp_identity(m) for m in ("SEVENNET", "FLASHTP", "EQUFLASH")
+    # SevenNet and FlashTP consume every one; a single family set is correct.
+    _canonical_mlp_identity(m) for m in ("SEVENNET", "FLASHTP")
 )
 _FAIRCHEM_FAMILY_IDENTITIES = frozenset(
     _canonical_mlp_identity(m)
@@ -2844,6 +2842,7 @@ class VPMDKServer:
         log_file: str | None = None,
         log_file_named: bool = False,
         executor: Callable[..., None] | None = None,
+        terminate_process_on_force: bool = False,
     ):
         if not math.isfinite(idle_timeout) or idle_timeout < 0:
             raise ValueError("idle timeout must be a finite non-negative number")
@@ -2909,6 +2908,12 @@ class VPMDKServer:
         self.heartbeat_interval = float(heartbeat_interval)
         self.pidfile = pidfile
         self.executor = executor
+        # A Python thread that is executing backend/native code cannot be killed
+        # safely. The standalone CLI can nevertheless honour ``stop --force``
+        # by cleaning up its endpoint and terminating its dedicated process.
+        # Library/embedded servers default to False so a request can never kill
+        # an unrelated host application.
+        self.terminate_process_on_force = terminate_process_on_force
 
         self._queue: queue.Queue[_RunJob] = queue.Queue()
         # Reentrant so a signal delivered while the main thread owns the lock
@@ -3924,7 +3929,7 @@ class VPMDKServer:
                 pass
 
     def _await_worker_exit(self) -> None:
-        """Wait for the worker, staying responsive to a repeated stop signal.
+        """Wait for the worker unless dedicated-process force stop may preempt it.
 
         An unconditional join() made the server DEAF once the accept loop had
         exited: _should_exit is the only place that drains the signal flags, and
@@ -3936,11 +3941,16 @@ class VPMDKServer:
         and pidfile behind, violating the documented shutdown contract, with
         the model still holding VRAM.
 
-        So poll the join and watch for a NEW delivery, completing the escalation
-        ladder: first signal = graceful, second = force, third = stop waiting for
-        the in-flight executor. Abandoning the wait is safe here because the
-        worker thread is a daemon: teardown continues, the socket and pidfile ARE
-        removed, and the process exits promptly instead of hanging.
+        Standalone CLI servers also use this path for ``stop --force``. They own
+        a dedicated process, so abandoning the daemon worker is safe: teardown
+        removes the socket and pidfile, then serve_cli exits without interpreter
+        finalization. Embedded servers do not enable that behaviour and continue
+        waiting for their executor, because terminating the host process would be
+        an unacceptable library side effect.
+
+        Otherwise poll the join and watch for a NEW delivery, completing the
+        signal escalation ladder: first signal = graceful, second = force, third
+        = stop waiting for the in-flight executor.
         """
 
         worker = self._worker
@@ -3954,6 +3964,20 @@ class VPMDKServer:
             return
         deliveries_at_entry = self._signal_deliveries
         while True:
+            with self._state_lock:
+                calculation_active = self._busy
+            if (
+                self.terminate_process_on_force
+                and self._force_requested.is_set()
+                and calculation_active
+                and is_alive()
+            ):
+                self.logger.warning(
+                    "Force stop: terminating the dedicated server process while "
+                    "the in-flight calculation is still running."
+                )
+                self._worker_abandoned = True
+                return
             worker.join(timeout=0.2)
             if not is_alive():
                 return
@@ -4100,10 +4124,10 @@ class VPMDKServer:
             # `stop` client cannot mistake this for completed shutdown.
             self._close_listener()
             if self._worker is not None:
-                # Python threads and in-flight GPU kernels cannot be cancelled
-                # safely. Do not remove the socket or report embedded teardown
-                # until the active executor has actually returned -- unless the
-                # operator asks again (see _await_worker_exit).
+                # Embedded servers wait until the active executor returns. The
+                # standalone CLI instead abandons the daemon worker after force
+                # stop, cleans up its endpoint, and terminates the dedicated
+                # process (see _await_worker_exit and serve_cli.finish).
                 self._await_worker_exit()
             # The worker has exited, so anything still queued will NEVER run. Reject
             # it now (after the join, so the queue is stable and a job cannot be
@@ -4538,8 +4562,9 @@ def _serve_cli_inner(args) -> int:
     server_ref: list[VPMDKServer] = []
 
     def finish(code: int) -> int:
-        # A worker abandoned by the third shutdown signal is still executing native
-        # backend code as a daemon thread. Returning normally lets CPython finalize
+        # A worker abandoned by CLI ``stop --force`` or the third shutdown signal
+        # is still executing native backend code as a daemon thread. Returning
+        # normally lets CPython finalize
         # the interpreter underneath it, C++ `std::terminate` fires ("terminate
         # called without an active exception") and the process dies of SIGABRT -- so
         # a textbook-correct teardown (warning logged, socket unlinked, handlers
@@ -4656,6 +4681,10 @@ def _serve_cli_inner(args) -> int:
             pidfile=pidfile_path(socket_path),
             log_file=None if args.daemon else log_file,
             log_file_named=args.log_file is not None,
+            # This entry point owns the whole process. Unlike a library-created
+            # embedded server, it can therefore make ``stop --force`` terminate
+            # an uninterruptible executor and release VRAM promptly.
+            terminate_process_on_force=True,
         )
         if preflight_log_fd is not None:
             # The FileHandler now holds its own writer on the log path, so a

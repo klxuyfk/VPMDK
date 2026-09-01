@@ -221,6 +221,20 @@ def test_list_backends_marks_flashtp_unavailable_without_flash_support(
     assert specs["FLASHTP"].available is False
 
 
+def test_list_backends_checks_equflash_runtime_independently_of_sevennet(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(vpmdk, "SevenNetCalculator", None)
+    monkeypatch.setattr(vpmdk, "_is_sevennet_flash_available", lambda: False)
+    monkeypatch.setattr(vpmdk, "_get_equflash_calculator_cls", lambda: object)
+
+    specs = {spec.name: spec for spec in vpmdk.list_backends()}
+
+    assert specs["SEVENNET"].available is False
+    assert specs["FLASHTP"].available is False
+    assert specs["EQUFLASH"].available is True
+
+
 @pytest.mark.parametrize("name", ["MATGL", "M3GNET"])
 def test_list_backends_does_not_report_matgl_default_for_legacy_m3gnet(
     monkeypatch: pytest.MonkeyPatch, name: str
