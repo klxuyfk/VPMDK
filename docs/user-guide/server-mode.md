@@ -159,6 +159,12 @@ terminate its host process: by default, force stop rejects and disconnects work
 but waits for the active executor to return. Process-level force termination is
 enabled only by the standalone CLI entry point.
 
+On Linux, an embedded server using the default executor isolates its filesystem
+context with `CLONE_FS`, so a calculation's temporary working-directory change
+does not move other host threads. If that facility is unavailable, run the
+server as the dedicated `vpmdk serve` process or supply a custom executor that
+does not depend on process-wide working-directory changes.
+
 ## GPU and Batch Use
 
 Give each server a private socket and a stable device view:

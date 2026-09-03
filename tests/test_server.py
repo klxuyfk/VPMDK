@@ -206,6 +206,155 @@ def test_server_lifecycle_status_and_cleanup(tmp_path: Path):
     assert not thread.is_alive()
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="Linux CLONE_FS isolation is unavailable",
+)
+def test_embedded_default_server_keeps_host_working_directory_stable(
+    tmp_path: Path,
+    prepare_inputs,
+    monkeypatch,
+):
+    socket_path = tmp_path / "server.sock"
+    active_workdir = tmp_path / "active"
+    relative_workdir = tmp_path / "relative"
+    active_workdir.mkdir()
+    relative_workdir.mkdir()
+    prepare_inputs(active_workdir, incar_overrides={"NSW": "0"})
+    prepare_inputs(relative_workdir, incar_overrides={"NSW": "0"})
+    first_started = threading.Event()
+    release_first = threading.Event()
+    executed_from: list[str] = []
+
+    def run_single_point(*args, **kwargs):
+        executed_from.append(os.getcwd())
+        if len(executed_from) == 1:
+            first_started.set()
+            assert release_first.wait(2.0)
+
+    monkeypatch.setattr(vpmdk, "run_single_point", run_single_point)
+    monkeypatch.chdir(relative_workdir)
+    host_cwd = os.getcwd()
+    _, server_thread = _start_server(socket_path)
+    active_errors: list[BaseException] = []
+    relative_errors: list[BaseException] = []
+
+    def submit_active() -> None:
+        try:
+            VPMDKClient(str(socket_path)).run(str(active_workdir))
+        except BaseException as exc:  # pragma: no cover - assertions report details
+            active_errors.append(exc)
+
+    def submit_relative() -> None:
+        try:
+            VPMDKClient(str(socket_path)).run(".")
+        except BaseException as exc:  # pragma: no cover - assertions report details
+            relative_errors.append(exc)
+
+    active_thread = threading.Thread(target=submit_active)
+    relative_thread = threading.Thread(target=submit_relative)
+    active_thread.start()
+    try:
+        assert first_started.wait(1.0)
+        assert os.getcwd() == host_cwd
+        relative_thread.start()
+        release_first.set()
+        active_thread.join(timeout=3.0)
+        relative_thread.join(timeout=3.0)
+    finally:
+        release_first.set()
+        _stop_server(socket_path, server_thread)
+
+    assert active_errors == []
+    assert relative_errors == []
+    assert executed_from == [str(active_workdir), str(relative_workdir)]
+    assert os.getcwd() == host_cwd
+
+
+def test_embedded_default_server_rejects_missing_clone_fs_isolation(
+    tmp_path: Path,
+    monkeypatch,
+):
+    server = VPMDKServer(
+        str(tmp_path / "server.sock"),
+        DummyCalculator(),
+        {"MLP": "CHGNET", "DEVICE": "cpu"},
+        backend_base_dir=str(tmp_path),
+    )
+    monkeypatch.setattr(server_module, "_unshare_clone_fs", lambda: False)
+    try:
+        with pytest.raises(RuntimeError, match="requires Linux CLONE_FS isolation"):
+            server._isolate_server_filesystem_context()
+    finally:
+        server._cleanup()
+
+
+def test_embedded_default_server_preserves_clone_fs_failure_cause(
+    tmp_path: Path,
+    monkeypatch,
+):
+    server = VPMDKServer(
+        str(tmp_path / "server.sock"),
+        DummyCalculator(),
+        {"MLP": "CHGNET", "DEVICE": "cpu"},
+        backend_base_dir=str(tmp_path),
+    )
+    denied = OSError(errno.EPERM, "operation not permitted")
+
+    def refuse_isolation() -> bool:
+        raise denied
+
+    monkeypatch.setattr(server_module, "_unshare_clone_fs", refuse_isolation)
+    try:
+        with pytest.raises(RuntimeError, match="cannot isolate") as error:
+            server._isolate_server_filesystem_context()
+        assert error.value.__cause__ is denied
+    finally:
+        server._cleanup()
+
+
+@pytest.mark.parametrize(
+    ("executor", "terminate_process_on_force"),
+    [
+        (lambda *args, **kwargs: None, False),
+        (None, True),
+    ],
+)
+def test_clone_fs_unavailable_allows_dedicated_or_custom_executor(
+    tmp_path: Path,
+    monkeypatch,
+    executor,
+    terminate_process_on_force: bool,
+):
+    server = VPMDKServer(
+        str(tmp_path / "server.sock"),
+        DummyCalculator(),
+        {"MLP": "CHGNET", "DEVICE": "cpu"},
+        backend_base_dir=str(tmp_path),
+        executor=executor,
+        terminate_process_on_force=terminate_process_on_force,
+    )
+    monkeypatch.setattr(server_module, "_unshare_clone_fs", lambda: False)
+    try:
+        server._isolate_server_filesystem_context()
+    finally:
+        server._cleanup()
+
+
+def test_unshare_clone_fs_uses_the_native_os_api(monkeypatch):
+    calls: list[int] = []
+    monkeypatch.setattr(
+        server_module.os,
+        "unshare",
+        lambda flags: calls.append(flags),
+        raising=False,
+    )
+    monkeypatch.setattr(server_module.os, "CLONE_FS", 1234, raising=False)
+
+    assert server_module._unshare_clone_fs() is True
+    assert calls == [1234]
+
+
 def test_server_passes_client_cwd_and_one_bcar_snapshot(
     tmp_path: Path, monkeypatch
 ):
