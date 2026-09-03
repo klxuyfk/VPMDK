@@ -58,10 +58,44 @@ REQUEST_READ_TIMEOUT = 5.0
 # stalled reader never turns a successful calculation into a reported failure,
 # while still bounding a client that stops reading altogether.
 EVENT_SEND_TIMEOUT = 900.0
+# Stable Linux UAPI value from <linux/sched.h>. Python exposes os.CLONE_FS only
+# alongside os.unshare (3.12+), while VPMDK also supports Python 3.10 and 3.11.
+_LINUX_CLONE_FS = 0x00000200
 
 
 def _root():
     return sys.modules["vpmdk_core"]
+
+
+def _unshare_clone_fs() -> bool:
+    """Give the calling Linux thread a private filesystem context.
+
+    Return ``False`` when the platform has no usable ``unshare`` API. Propagate
+    ``OSError`` when the API exists but the kernel refuses the operation.
+    """
+
+    unshare = getattr(os, "unshare", None)
+    clone_fs = getattr(os, "CLONE_FS", None)
+    if callable(unshare) and clone_fs is not None:
+        unshare(clone_fs)
+        return True
+    if not sys.platform.startswith("linux"):
+        return False
+
+    # os.unshare was added in Python 3.12. Call the same libc interface on the
+    # older supported Python releases without adding a runtime dependency.
+    import ctypes
+
+    try:
+        libc_unshare = ctypes.CDLL(None, use_errno=True).unshare
+    except (AttributeError, OSError):
+        return False
+    libc_unshare.argtypes = [ctypes.c_int]
+    libc_unshare.restype = ctypes.c_int
+    if libc_unshare(_LINUX_CLONE_FS) != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number))
+    return True
 
 
 @functools.lru_cache(maxsize=1)
@@ -3008,6 +3042,44 @@ class VPMDKServer:
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
         self.logger.addHandler(handler)
 
+    def _isolate_server_filesystem_context(self) -> None:
+        """Keep server-side ``chdir`` calls out of an embedding host's threads.
+
+        VPMDK's VASP-compatible execution helpers intentionally use relative
+        output paths while a calculation directory is current. On Linux,
+        ``CLONE_FS`` gives the serving thread (and the worker/handler threads it
+        subsequently creates) a private cwd without moving the embedding
+        process's other threads.
+
+        A dedicated CLI server remains safe when ``CLONE_FS`` is unavailable
+        because it owns its process. An embedded server using the default
+        executor is rejected in that case; a custom executor is permitted
+        because it can implement a cwd-independent execution strategy.
+        """
+
+        try:
+            if _unshare_clone_fs():
+                return
+        except OSError as exc:
+            if self.executor is None and not self.terminate_process_on_force:
+                raise RuntimeError(
+                    "Embedded VPMDK server cannot isolate its working directory; "
+                    "run it in a dedicated process or provide a cwd-independent "
+                    "executor."
+                ) from exc
+            self.logger.warning(
+                "Unable to isolate the server working directory; continuing in "
+                "the dedicated server process or with the custom executor: %s",
+                exc,
+            )
+            return
+
+        if self.executor is None and not self.terminate_process_on_force:
+            raise RuntimeError(
+                "Embedded VPMDK server requires Linux CLONE_FS isolation, a "
+                "dedicated process, or a cwd-independent custom executor."
+            )
+
     def status(self) -> dict[str, Any]:
         # Snapshot only the mutable, lock-guarded fields under the same enqueue->
         # state lock order the worker uses, so a snapshot cannot slip into the
@@ -4030,6 +4102,7 @@ class VPMDKServer:
     def serve_forever(self, *, ready_callback: Callable[[], None] | None = None) -> None:
         """Bind after calculator construction, serve requests, and clean up."""
         try:
+            self._isolate_server_filesystem_context()
             self._bind()
             worker = threading.Thread(target=self._worker_loop, daemon=True)
             # Publish _worker only after a successful start(): if start() raises

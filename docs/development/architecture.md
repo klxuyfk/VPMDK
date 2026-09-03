@@ -76,6 +76,13 @@ and enqueue work. This keeps calculation-related process globals confined to
 the one execution thread while allowing `status` and `stop` to respond during a
 long calculation.
 
+Before it creates the worker and handler threads, a Linux serving thread
+unshares its `CLONE_FS` context. The server threads therefore share a private
+cwd and umask context, so `run_workdir()` can temporarily change directory
+without moving an embedding application's other threads. If this facility is
+unavailable, the default executor is supported only in the dedicated CLI
+process; embedded applications must provide a cwd-independent custom executor.
+
 ### Resident Server
 
 Server mode constructs one calculator at startup and passes it to the same
