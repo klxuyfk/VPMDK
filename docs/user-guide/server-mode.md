@@ -54,6 +54,22 @@ poll `vpmdk status` rather than treating process creation as readiness.
 To run calculations in parallel, start independent servers with different
 sockets and enough CPU/GPU memory.
 
+### Matlantis
+
+`MLP=MATLANTIS` is safe in server mode because one server executes requests
+serially. A PFP `ASECalculator` must not be called concurrently, so parallel
+Matlantis work requires independent servers (and therefore independent
+Estimator/Calculator pairs), not concurrent calls through one server.
+
+The resident path avoids repeated Estimator construction and model-metadata
+requests; it does not move PFP inference into the VPMDK process. The benefit is
+therefore most visible for batches of short calculations and becomes a smaller
+fraction of runtime for long relaxation or MD jobs. On a Matlantis VM with
+`pfp-api-client 2.5.1`, six small Si single points were 1.64x faster in one
+serial resident including its one-time construction (0.293 s versus 0.482 s
+when constructing six calculators). Treat this as a host-specific smoke
+measurement, not a performance guarantee.
+
 ### Randomness
 
 Each request starts from the server's saved NumPy random state. Identical

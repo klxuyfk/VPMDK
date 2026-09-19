@@ -13,6 +13,7 @@ Additional explicit backends:
 Optional backends (skipped unless env vars are set):
 - MatterSim: optional VPMDK_MATTERSIM_MODEL / VPMDK_MATTERSIM_DEVICE
   (set VPMDK_TEST_REAL_PYMATGEN=1 when using the real MatterSim package)
+- Matlantis: set VPMDK_TEST_MATLANTIS=1 inside a Matlantis VM
 - SevenNet: VPMDK_SEVENNET_MODEL, optional VPMDK_SEVENNET_MODAL / VPMDK_SEVENNET_FILE_TYPE
 - FlashTP: VPMDK_FLASHTP_MODEL, optional VPMDK_FLASHTP_MODAL
 - EquFlash/EquFlashV2: VPMDK_EQUFLASH_MODEL, optional VPMDK_EQUFLASH_DEVICE
@@ -41,6 +42,7 @@ import time
 from pathlib import Path
 
 import pytest
+from ase.io import read as ase_read
 
 import vpmdk
 from vpmdk_core.client import ServerConnectionError, VPMDKClient
@@ -91,6 +93,13 @@ def _require_chgnet() -> None:
     if os.environ.get("VPMDK_REQUIRE_CHGNET_SMOKE") == "1":
         pytest.fail(message)
     pytest.skip(message)
+
+
+def _require_matlantis() -> None:
+    if os.environ.get("VPMDK_TEST_MATLANTIS") != "1":
+        pytest.skip("Set VPMDK_TEST_MATLANTIS=1 inside a Matlantis VM.")
+    if vpmdk.MatlantisEstimator is None or vpmdk.MatlantisASECalculator is None:
+        pytest.fail("pfp-api-client is not installed or could not be imported.")
 
 
 def _write_inputs(
@@ -223,6 +232,133 @@ def test_server_chgnet_reuses_model_and_matches_one_shot(
         ).read_bytes()
         assert (directory / "OUTCAR").read_bytes().split(marker, 1)[0] == one_shot_outcar
 
+
+@pytest.mark.integration
+@pytest.mark.backend_smoke
+def test_md_matlantis_smoke(tmp_path: Path, data_dir: Path) -> None:
+    """Run VPMDK's real one-step MD path against the pinned PFP defaults."""
+
+    _require_matlantis()
+    bcar = (
+        "MLP=MATLANTIS\n"
+        f"MATLANTIS_MODEL_VERSION={vpmdk.DEFAULT_MATLANTIS_MODEL_VERSION}\n"
+        f"MATLANTIS_CALC_MODE={vpmdk.DEFAULT_MATLANTIS_CALC_MODE}\n"
+        "MATLANTIS_MAX_RETRIES=15\n"
+    )
+    _write_inputs(tmp_path, data_dir, bcar, incar_text=INCAR_MD_SMOKE)
+    _run_vpmdk(tmp_path)
+    _assert_outputs(tmp_path)
+
+
+@pytest.mark.integration
+@pytest.mark.backend_smoke
+def test_relax_matlantis_smoke(tmp_path: Path, data_dir: Path) -> None:
+    """Run a short force-based relaxation through the real PFP calculator."""
+
+    _require_matlantis()
+    bcar = (
+        "MLP=MATLANTIS\n"
+        f"MATLANTIS_MODEL_VERSION={vpmdk.DEFAULT_MATLANTIS_MODEL_VERSION}\n"
+        f"MATLANTIS_CALC_MODE={vpmdk.DEFAULT_MATLANTIS_CALC_MODE}\n"
+        "MATLANTIS_MAX_RETRIES=15\n"
+    )
+    incar = "IBRION = 2\nNSW = 2\nEDIFFG = -0.05\nISIF = 2\n"
+    _write_inputs(tmp_path, data_dir, bcar, incar_text=incar)
+    _run_vpmdk(tmp_path)
+    for name in ("CONTCAR", "OUTCAR", "OSZICAR", "vasprun.xml"):
+        path = tmp_path / name
+        assert path.exists() and path.stat().st_size > 0
+
+
+@pytest.mark.integration
+@pytest.mark.backend_smoke
+def test_server_matlantis_reuses_estimator_and_matches_one_shot(
+    tmp_path: Path,
+    data_dir: Path,
+    monkeypatch,
+) -> None:
+    """A serial resident may safely reuse one PFP calculator across jobs."""
+
+    _require_matlantis()
+    startup = tmp_path / "startup"
+    one_shot = tmp_path / "one-shot"
+    server_dirs = [tmp_path / "server-1", tmp_path / "server-2"]
+    bcar = (
+        "MLP=MATLANTIS\n"
+        f"MATLANTIS_MODEL_VERSION={vpmdk.DEFAULT_MATLANTIS_MODEL_VERSION}\n"
+        f"MATLANTIS_CALC_MODE={vpmdk.DEFAULT_MATLANTIS_CALC_MODE}\n"
+        "MATLANTIS_MAX_RETRIES=15\n"
+    )
+    incar = "IBRION = -1\nNSW = 0\nISIF = 2\n"
+    _write_inputs(startup, data_dir, bcar, incar_text=incar)
+    _write_inputs(one_shot, data_dir, bcar, incar_text=incar)
+    for directory in server_dirs:
+        # Omitting BCAR construction tags exercises documented inheritance.
+        _write_inputs(directory, data_dir, "", incar_text=incar)
+
+    estimators: list[object] = []
+    original_estimator = vpmdk.MatlantisEstimator
+
+    def build_estimator(*args, **kwargs):
+        estimator = original_estimator(*args, **kwargs)
+        estimators.append(estimator)
+        return estimator
+
+    monkeypatch.setattr(vpmdk, "MatlantisEstimator", build_estimator)
+    calculator, tags, base_dir = _load_backend_for_server(str(startup), None)
+    assert len(estimators) == 1
+
+    socket_path = tmp_path / "matlantis.sock"
+    server = VPMDKServer(
+        str(socket_path), calculator, tags, backend_base_dir=base_dir
+    )
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    client = VPMDKClient(str(socket_path))
+    deadline = time.monotonic() + 30.0
+    while True:
+        try:
+            client.status()
+            break
+        except ServerConnectionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.02)
+
+    try:
+        for directory in server_dirs:
+            client.run(str(directory), timeout=120.0)
+        assert client.status()["jobs_completed"] == 2
+        assert len(estimators) == 1
+    finally:
+        client.stop(timeout=30.0)
+        server_thread.join(timeout=30.0)
+
+    _run_vpmdk(one_shot)
+    assert len(estimators) == 2
+
+    def oszicar_energy(directory: Path) -> float:
+        line = (directory / "OSZICAR").read_text().splitlines()[-1]
+        return float(line.split("F=", 1)[1].split()[0])
+
+    reference_energy = oszicar_energy(one_shot)
+    reference_atoms = ase_read(one_shot / "CONTCAR")
+    for directory in server_dirs:
+        for name in ("CONTCAR", "OUTCAR", "OSZICAR", "vasprun.xml"):
+            path = directory / name
+            assert path.exists() and path.stat().st_size > 0
+        # Separate PFP requests can differ at sub-micro-eV scale. Server mode
+        # must preserve the physical result, not byte-identical float text.
+        assert oszicar_energy(directory) == pytest.approx(
+            reference_energy, abs=1e-5
+        )
+        result_atoms = ase_read(directory / "CONTCAR")
+        assert result_atoms.get_positions() == pytest.approx(
+            reference_atoms.get_positions(), abs=1e-10
+        )
+        assert result_atoms.cell.array == pytest.approx(
+            reference_atoms.cell.array, abs=1e-10
+        )
 
 
 @pytest.mark.integration

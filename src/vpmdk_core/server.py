@@ -1074,6 +1074,7 @@ BACKEND_CONFIGURATION_TAGS = frozenset(
         "PRIORITY",
         "MATLANTIS_CALC_MODE",
         "CALC_MODE",
+        "MATLANTIS_MAX_RETRIES",
         "ORB_MODEL",
         "ORB_PRECISION",
         "ORB_COMPILE",
@@ -1188,6 +1189,7 @@ _BOOLEAN_CONFIGURATION_TAGS = frozenset(
 _INTEGER_CONFIGURATION_TAGS = frozenset(
     {
         "MATLANTIS_PRIORITY",
+        "MATLANTIS_MAX_RETRIES",
         "TACE_FIDELITY_IDX",
         "GRACE_PAD_ATOMS_NUMBER",
         "GRACE_MAX_RECOMPILATION",
@@ -1300,9 +1302,13 @@ _FORCED_FLASH_CONFIGURATION_DEFAULTS = {
 }
 _BACKEND_CONFIGURATION_DEFAULTS: dict[str, dict[str, Any]] = {
     "MATLANTIS": {
-        "MATLANTIS_MODEL_VERSION": "v8.0.0",
-        "MATLANTIS_PRIORITY": 50,
-        "MATLANTIS_CALC_MODE": "PBE",
+        # Kept explicit at module import time to avoid a circular import through
+        # ``vpmdk_core``. The calc-mode default is model-dependent and is added
+        # by _effective_configuration. A regression test ties these values to
+        # the exported constants.
+        "MATLANTIS_MODEL_VERSION": "v9.0.0",
+        "MATLANTIS_PRIORITY": 100,
+        "MATLANTIS_MAX_RETRIES": 10,
     },
     "ORB": {"ORB_PRECISION": "float32-high"},
     "EQNORM": {"EQNORM_COMPILE": False},
@@ -1750,6 +1756,20 @@ def _effective_configuration(
     root = _root()
     normalized = {str(key).upper(): value for key, value in tags.items()}
     defaults = dict(_BACKEND_CONFIGURATION_DEFAULTS.get(mlp, {}))
+    if explicit_configuration is None:
+        explicit_configuration = _canonical_configuration(
+            normalized, base_dir=base_dir, mlp=mlp, device=device
+        )
+    if mlp == "MATLANTIS" and "MATLANTIS_CALC_MODE" not in explicit_configuration:
+        model_version = str(
+            explicit_configuration.get(
+                "MATLANTIS_MODEL_VERSION",
+                defaults["MATLANTIS_MODEL_VERSION"],
+            )
+        )
+        calc_mode = root._default_matlantis_calc_mode_for_model(model_version)
+        if calc_mode is not None:
+            defaults["MATLANTIS_CALC_MODE"] = calc_mode
     if mlp == "ORB":
         defaults["ORB_MODEL"] = root.DEFAULT_ORB_MODEL
     if mlp == "ALPHANET" and not str(normalized.get("ALPHANET_CONFIG", "")).strip():
@@ -1825,10 +1845,6 @@ def _effective_configuration(
         )
         for tag, value in defaults.items()
     }
-    if explicit_configuration is None:
-        explicit_configuration = _canonical_configuration(
-            normalized, base_dir=base_dir, mlp=mlp, device=device
-        )
     effective.update(explicit_configuration)
     effective["MLP"] = mlp
     effective["DEVICE"] = device

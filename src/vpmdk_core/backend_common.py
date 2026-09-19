@@ -203,7 +203,7 @@ _BACKEND_MODEL_POLICIES: Mapping[str, BackendModelPolicy] = {
     ),
     # Matlantis MODEL values are version strings, never filesystem paths.
     "MATLANTIS": BackendModelPolicy(
-        default_value="v8.0.0",
+        default_attribute="DEFAULT_MATLANTIS_MODEL_VERSION",
         allow_local=False,
         allow_named=True,
     ),

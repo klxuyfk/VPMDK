@@ -14,6 +14,19 @@ def _root():
     return sys.modules["vpmdk_core"]
 
 
+def _thermalize_momenta(atoms, temperature: float) -> None:
+    """Initialize velocities with the current ASE API and an old-ASE fallback."""
+
+    velocitydistribution = _root().velocitydistribution
+    thermalize = getattr(velocitydistribution, "thermalize_momenta", None)
+    if callable(thermalize):
+        thermalize(atoms, temperature_K=temperature)
+        return
+    velocitydistribution.MaxwellBoltzmannDistribution(
+        atoms, temperature_K=temperature
+    )
+
+
 def _rescale_velocities(atoms, target_temperature: float) -> None:
     """Scale velocities so that kinetic temperature approaches target."""
 
@@ -29,31 +42,23 @@ def _rescale_velocities(atoms, target_temperature: float) -> None:
 
     ndof = getattr(atoms, "get_number_of_degrees_of_freedom", lambda: 0)()
     if ndof <= 0:
-        root.velocitydistribution.MaxwellBoltzmannDistribution(
-            atoms, temperature_K=target_temperature
-        )
+        root._thermalize_momenta(atoms, target_temperature)
         return
 
     kinetic_energy = atoms.get_kinetic_energy()
     if kinetic_energy <= 0:
-        root.velocitydistribution.MaxwellBoltzmannDistribution(
-            atoms, temperature_K=target_temperature
-        )
+        root._thermalize_momenta(atoms, target_temperature)
         return
 
     current_temperature = 2.0 * kinetic_energy / (ndof * root.units.kB)
     if current_temperature <= 0:
-        root.velocitydistribution.MaxwellBoltzmannDistribution(
-            atoms, temperature_K=target_temperature
-        )
+        root._thermalize_momenta(atoms, target_temperature)
         return
 
     scaling = (target_temperature / current_temperature) ** 0.5
     velocities = atoms.get_velocities()
     if velocities is None:
-        root.velocitydistribution.MaxwellBoltzmannDistribution(
-            atoms, temperature_K=target_temperature
-        )
+        root._thermalize_momenta(atoms, target_temperature)
         return
     atoms.set_velocities(velocities * scaling)
 

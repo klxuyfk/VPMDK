@@ -20,6 +20,27 @@ not a benchmark-quality comparison against reference DFT data.  Blocked entries
 record adapter behavior or missing public artifacts rather than successful
 calculator evaluation.
 
+## 2026-09-19 Matlantis Validation
+
+- Environment: Matlantis VM, Python 3.13.8, ASE 3.29.0, and
+  `pfp-api-client 2.5.1`.
+- PFP service metadata exposed stable `v9.0.0` plus experimental v10 alpha
+  deployments; VPMDK pins stable `v9.0.0` with `R2SCAN` for reproducibility.
+- A legacy-selection smoke test completed a Si single point with PFP `v7.0.0`
+  and no explicit calc mode (`-9.101191427963512 eV`), confirming that VPMDK
+  leaves nondefault model versions on their compatible upstream mode default.
+- The Si2 smoke structure completed a one-step NVE MD run and a two-step-limit
+  force relaxation through the VASP-style work-directory path.
+- A resident Matlantis server completed two inherited-configuration requests
+  with one Estimator/Calculator pair; a separate one-shot calculation agreed
+  within `1e-5 eV`. Independent PFP requests showed sub-micro-eV variation, so
+  the integration test uses numerical tolerances rather than byte equality.
+- Six slightly different Si single points took 0.482 s when constructing a new
+  Estimator each time and 0.293 s with one serial resident including its
+  one-time construction (1.64x for this small host-specific sample).
+- Run the three opt-in real-service tests with
+  `VPMDK_TEST_MATLANTIS=1 pytest -m integration -k matlantis` inside Matlantis.
+
 ## 2026-08-29 EquFlash / EquFlashV2 Validation
 
 The official EquFlash OAM and EquFlashV2 OAM checkpoints were exercised through
@@ -107,7 +128,7 @@ Stress was returned as a full 3x3 tensor in both runs.
 | `ESEN` | Manual real-backend single point | same as `FAIRCHEM_V2` | `uma-s-1`, `FAIRCHEM_TASK=omat` | passed | passed | alias path covered separately; OC25 ESEN checkpoints require gated HF access |
 | `GRACE` | Real single point, MD integration, and resident-server smoke | tensorflow 2.19.1 / 2.20.0, tensorpotential 0.5.7 / 0.6.0 | local `GRACE-2L-MP-r6`; named `GRACE-FS-OAM` | passed | passed | 0.6.0 registry-fallback and server identity passed on CPU; earlier CUDA run used `XLA_FLAGS=--xla_gpu_cuda_data_dir=...` |
 | `DEEPMD` | Manual real-backend single point plus resident smoke | torch 2.8.0+cu128 / deepmd-kit 3.1.2; resident retest with deepmd-kit 3.2.0b0 | local `DPA-3.1-3M.pt`, `DEEPMD_HEAD=Omat24` | passed | passed | required `LD_LIBRARY_PATH` to include the DeepMD environment library directory; resident CPU smoke passed with the explicit model type map |
-| `MATLANTIS` | External partner validation only | Matlantis cloud | external notebook | not run | not run | intentionally excluded from this author-run sweep |
+| `MATLANTIS` | Real single point, relaxation, MD, and resident-server smoke | Python 3.13.8, ASE 3.29.0, pfp-api-client 2.5.1 | PFP v9.0.0 / R2SCAN | passed | not applicable | validated in a Matlantis VM on 2026-09-19; service inference is remote |
 
 ### Smoke Result Values
 
