@@ -128,12 +128,19 @@ server mode), not as a retryable calculation failure.
 
 ### Matlantis
 
-- `MATLANTIS_MODEL_VERSION`
+- `MATLANTIS_MODEL_VERSION` (default: pinned stable `v9.0.0`)
 - `MODEL_VERSION`
-- `MATLANTIS_PRIORITY`
+- `MATLANTIS_PRIORITY` (default: `100`; valid range: 1-100)
 - `PRIORITY`
-- `MATLANTIS_CALC_MODE`
+- `MATLANTIS_CALC_MODE` (default: `R2SCAN` with the default `v9.0.0`
+  model; when another model version is selected, its upstream default is used)
 - `CALC_MODE`
+- `MATLANTIS_MAX_RETRIES` (default: `10`; non-negative integer)
+
+Model version and calculation mode are explicit defaults so a future upstream
+`latest` deployment does not silently change results. Use one calculation mode
+for every energy difference. Dispersion-dominated systems (adsorption, liquids,
+molecular crystals, and layered materials) generally need a `*_PLUS_D3` mode.
 
 ### ORB
 

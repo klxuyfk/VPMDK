@@ -27,7 +27,7 @@ def _list_matlantis_calc_modes() -> str:
 
 
 def _resolve_matlantis_calc_mode(name):
-    """Return ``EstimatorCalcMode`` or passthrough string for Matlantis calc mode."""
+    """Return a validated ``EstimatorCalcMode`` for a Matlantis calc mode."""
 
     root = _root()
     if root.EstimatorCalcMode is None:
@@ -56,7 +56,24 @@ def _resolve_matlantis_calc_mode(name):
         return root.EstimatorCalcMode(normalized)  # type: ignore[call-arg]
     except Exception:
         pass
-    return text
+    available = _list_matlantis_calc_modes()
+    suffix = f" Available: {available}." if available else ""
+    raise ValueError(f"Unsupported MATLANTIS_CALC_MODE {text!r}.{suffix}")
+
+
+def _default_matlantis_calc_mode_for_model(model_version: str) -> str | None:
+    """Return the VPMDK-owned default mode for a selected PFP model.
+
+    VPMDK pins R2SCAN together with its default v9 model.  Other model
+    versions have their own upstream defaults (and v7 and earlier do not
+    support R2SCAN), so leave their mode unspecified unless the user selected
+    one explicitly.
+    """
+
+    root = _root()
+    if str(model_version) == root.DEFAULT_MATLANTIS_MODEL_VERSION:
+        return root.DEFAULT_MATLANTIS_CALC_MODE
+    return None
 
 
 def _build_matlantis_calculator(bcar_tags: Dict[str, str]):
@@ -76,15 +93,38 @@ def _build_matlantis_calculator(bcar_tags: Dict[str, str]):
     )
     model_version = str(model_reference.value)
     priority_raw = bcar_tags.get("MATLANTIS_PRIORITY") or bcar_tags.get("PRIORITY")
-    priority = 50 if priority_raw is None else root._coerce_int_tag(priority_raw, "MATLANTIS_PRIORITY")
-    calc_mode_value = bcar_tags.get("MATLANTIS_CALC_MODE") or bcar_tags.get("CALC_MODE")
-    calc_mode = _resolve_matlantis_calc_mode(calc_mode_value or "PBE")
+    priority = (
+        root.DEFAULT_MATLANTIS_PRIORITY
+        if priority_raw is None
+        else root._coerce_int_tag(priority_raw, "MATLANTIS_PRIORITY")
+    )
+    if not 1 <= priority <= 100:
+        raise ValueError("MATLANTIS_PRIORITY must be within 1-100")
+
+    max_retries_raw = bcar_tags.get("MATLANTIS_MAX_RETRIES")
+    max_retries = (
+        root.DEFAULT_MATLANTIS_MAX_RETRIES
+        if max_retries_raw is None or not str(max_retries_raw).strip()
+        else root._coerce_int_tag(max_retries_raw, "MATLANTIS_MAX_RETRIES")
+    )
+    if max_retries < 0:
+        raise ValueError("MATLANTIS_MAX_RETRIES must be >= 0")
+
+    calc_mode_value = (
+        bcar_tags.get("MATLANTIS_CALC_MODE")
+        or bcar_tags.get("CALC_MODE")
+        or _default_matlantis_calc_mode_for_model(model_version)
+    )
 
     estimator_kwargs: Dict[str, Any] = {
         "model_version": model_version,
         "priority": priority,
-        "calc_mode": calc_mode,
+        "max_retries": max_retries,
     }
+    if calc_mode_value is not None:
+        estimator_kwargs["calc_mode"] = _resolve_matlantis_calc_mode(
+            calc_mode_value
+        )
 
     return root.MatlantisASECalculator(root.MatlantisEstimator(**estimator_kwargs))
 

@@ -9,6 +9,30 @@ import vpmdk
 from tests.conftest import DummyCalculator
 
 
+def test_thermalize_momenta_falls_back_for_ase_before_329(load_atoms, monkeypatch):
+    atoms = load_atoms()
+    calls = []
+
+    monkeypatch.delattr(
+        vpmdk.velocitydistribution, "thermalize_momenta", raising=False
+    )
+
+    def fake_maxwell(atoms_arg, *, temperature_K):
+        calls.append((atoms_arg, temperature_K))
+
+    monkeypatch.setattr(
+        vpmdk.velocitydistribution,
+        "MaxwellBoltzmannDistribution",
+        fake_maxwell,
+    )
+
+    vpmdk._thermalize_momenta(atoms, 321.0)
+
+    assert len(calls) == 1
+    assert calls[0][0] is atoms
+    assert calls[0][1] == 321.0
+
+
 def test_run_md_executes_multiple_steps(tmp_path, load_atoms):
     atoms = load_atoms()
 
@@ -38,8 +62,8 @@ def test_run_md_executes_multiple_steps(tmp_path, load_atoms):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(vpmdk, "_select_md_dynamics", fake_selector)
     monkeypatch.setattr(
-        vpmdk.velocitydistribution,
-        "MaxwellBoltzmannDistribution",
+        vpmdk,
+        "_thermalize_momenta",
         lambda *a, **k: None,
     )
     monkeypatch.setattr(vpmdk, "_write_xdatcar_step", lambda filename, atoms, step: xdat_steps.append(step))
@@ -108,8 +132,8 @@ def test_run_md_writes_lammps_dump_on_interval(tmp_path, load_atoms):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(vpmdk, "_select_md_dynamics", fake_selector)
     monkeypatch.setattr(
-        vpmdk.velocitydistribution,
-        "MaxwellBoltzmannDistribution",
+        vpmdk,
+        "_thermalize_momenta",
         lambda *a, **k: None,
     )
     monkeypatch.setattr(vpmdk, "_write_xdatcar_step", lambda filename, atoms, step: None)
@@ -151,8 +175,8 @@ def test_run_md_uses_local_incar_pseudo_scf_settings_when_enabled(tmp_path, load
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(vpmdk, "_select_md_dynamics", fake_selector)
     monkeypatch.setattr(
-        vpmdk.velocitydistribution,
-        "MaxwellBoltzmannDistribution",
+        vpmdk,
+        "_thermalize_momenta",
         lambda *a, **k: None,
     )
     try:
@@ -713,7 +737,6 @@ def test_non_finite_energy_reports_the_divergence_not_an_unpack_error():
 def test_thermostat_energy_is_reported_so_the_total_is_conserved():
     from ase.build import bulk
     from ase.calculators.emt import EMT
-    from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
 
     from vpmdk_core.compat import vasp as vasp_compat_models
     from vpmdk_core import execution as execution_module
@@ -745,7 +768,7 @@ def test_thermostat_energy_is_reported_so_the_total_is_conserved():
     # The Nose-Hoover split must reproduce ASE's own public sum exactly.
     atoms = bulk("Cu", "fcc", a=3.6, cubic=True) * (2, 2, 1)
     atoms.calc = EMT()
-    MaxwellBoltzmannDistribution(atoms, temperature_K=600.0)
+    vpmdk._thermalize_momenta(atoms, 600.0)
     dyn, _ = vpmdk._select_md_dynamics(
         atoms,
         mdalgo=2,
@@ -784,11 +807,10 @@ def test_md_potim_guard_matches_what_ase_actually_breaks_on(
 ):
     from ase.build import bulk
     from ase.calculators.emt import EMT
-    from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
 
     atoms = bulk("Cu", "fcc", a=3.6, cubic=True)
     atoms.calc = EMT()
-    MaxwellBoltzmannDistribution(atoms, temperature_K=300.0)
+    vpmdk._thermalize_momenta(atoms, 300.0)
 
     def build():
         return vpmdk._select_md_dynamics(
@@ -968,12 +990,11 @@ def test_temperature_ramp_updaters_do_not_rescale_velocities(load_atoms, monkeyp
 def test_nose_hoover_chain_ramp_retargets_without_touching_momenta(load_atoms):
     from ase.build import bulk
     from ase.calculators.emt import EMT
-    from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
 
     atoms = bulk("Cu", "fcc", a=3.6, cubic=True)
     atoms.calc = EMT()
     np.random.seed(5)
-    MaxwellBoltzmannDistribution(atoms, temperature_K=300.0)
+    vpmdk._thermalize_momenta(atoms, 300.0)
     dyn, updater = vpmdk._select_md_dynamics(
         atoms,
         mdalgo=2,
@@ -1034,12 +1055,11 @@ def test_nose_hoover_chain_rejects_constrained_atoms(load_atoms, monkeypatch):
 def test_lammps_dump_velocities_are_metal_units(tmp_path, load_atoms):
     import ase.io
     from ase import units as ase_units
-    from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
 
     from vpmdk_core.io import trajectories as trajectories_module
 
     atoms = load_atoms()
-    MaxwellBoltzmannDistribution(atoms, temperature_K=600.0)
+    vpmdk._thermalize_momenta(atoms, 600.0)
     source_velocities = atoms.get_velocities()
     assert float(np.abs(source_velocities).max()) > 0.0
 
@@ -1123,7 +1143,6 @@ def test_single_atom_langevin_is_an_input_error(load_atoms, monkeypatch):
 def test_lammps_dump_records_species_via_element_column(tmp_path):
     import ase.io
     from ase import Atoms
-    from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
 
     from vpmdk_core.io import trajectories as trajectories_module
 
@@ -1133,7 +1152,7 @@ def test_lammps_dump_records_species_via_element_column(tmp_path):
         cell=[4.0, 4.0, 4.0],
         pbc=True,
     )
-    MaxwellBoltzmannDistribution(atoms, temperature_K=300.0)
+    vpmdk._thermalize_momenta(atoms, 300.0)
 
     path = tmp_path / "lammps.lammpstrj"
     trajectories_module._write_lammps_trajectory_step(str(path), atoms, 0)
@@ -1166,9 +1185,7 @@ def test_md_divergence_guard_stops_before_the_force_call(load_atoms, tmp_path, m
         velocities[0] = [0.1, 0.1, 0.1]
         target.set_velocities(velocities)
 
-    monkeypatch.setattr(
-        vpmdk.velocitydistribution, "MaxwellBoltzmannDistribution", fake_maxwell
-    )
+    monkeypatch.setattr(vpmdk, "_thermalize_momenta", fake_maxwell)
 
     with pytest.raises(RuntimeError, match="diverged"):
         vpmdk.run_md(
@@ -1204,9 +1221,7 @@ def test_md_divergence_guard_bounds_each_axis(tmp_path, monkeypatch):
         velocities[0] = [2.0e4, 0.0, 0.0]  # x only: ~2e9 A in one 1e6 fs step
         target.set_velocities(velocities)
 
-    monkeypatch.setattr(
-        vpmdk.velocitydistribution, "MaxwellBoltzmannDistribution", fake_maxwell
-    )
+    monkeypatch.setattr(vpmdk, "_thermalize_momenta", fake_maxwell)
 
     with pytest.raises(RuntimeError, match="diverged"):
         vpmdk.run_md(
@@ -1261,9 +1276,7 @@ def test_md_divergence_guard_bounds_a_single_axis_divergence(tmp_path, monkeypat
         velocities[0] = [2.0e3, 0.0, 0.0]
         target.set_velocities(velocities)
 
-    monkeypatch.setattr(
-        vpmdk.velocitydistribution, "MaxwellBoltzmannDistribution", fake_maxwell
-    )
+    monkeypatch.setattr(vpmdk, "_thermalize_momenta", fake_maxwell)
 
     with pytest.raises(RuntimeError, match="per.?axis"):
         vpmdk.run_md(

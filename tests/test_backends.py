@@ -29,7 +29,9 @@ _EXPECTED_BACKEND_MODEL_POLICY = {
     "MACE": _P(local_only=True),
     "MATTERSIM": _P(allow_named=True),
     "MATLANTIS": _P(
-        default_value="v8.0.0", allow_local=False, allow_named=True
+        default_attribute="DEFAULT_MATLANTIS_MODEL_VERSION",
+        allow_local=False,
+        allow_named=True,
     ),
     "EQNORM": _P(
         default_attribute="DEFAULT_EQNORM_MODEL", named_resolver="eqnorm"
@@ -112,7 +114,7 @@ def test_backend_model_policy_matrix_covers_every_builtin_backend():
         ("FAIRCHEM", vpmdk.DEFAULT_FAIRCHEM_MODEL),
         ("FAIRCHEM_V2", vpmdk.DEFAULT_FAIRCHEM_MODEL),
         ("ESEN", vpmdk.DEFAULT_FAIRCHEM_MODEL),
-        ("MATLANTIS", "v8.0.0"),
+        ("MATLANTIS", vpmdk.DEFAULT_MATLANTIS_MODEL_VERSION),
     ],
 )
 def test_shared_model_resolver_classifies_backend_defaults(
@@ -656,7 +658,7 @@ def test_matlantis_forwards_version_even_when_same_named_path_exists(
     seen: dict[str, object] = {}
 
     class CalcMode:
-        PBE = "PBE-mode"
+        R2SCAN = "R2SCAN-mode"
 
     def estimator(**kwargs):
         seen.update(kwargs)
@@ -676,9 +678,71 @@ def test_matlantis_forwards_version_even_when_same_named_path_exists(
     assert calculator == ("calculator", "estimator")
     assert seen == {
         "model_version": "v8.0.0",
-        "priority": 50,
-        "calc_mode": "PBE-mode",
+        "priority": vpmdk.DEFAULT_MATLANTIS_PRIORITY,
+        "max_retries": vpmdk.DEFAULT_MATLANTIS_MAX_RETRIES,
     }
+
+
+@pytest.mark.parametrize(
+    ("tags", "expected_version", "expected_mode"),
+    [
+        ({}, "v9.0.0", "R2SCAN-mode"),
+        ({"MODEL": "v9.0.0"}, "v9.0.0", "R2SCAN-mode"),
+        ({"MODEL": "v7.0.0"}, "v7.0.0", None),
+        (
+            {"MODEL": "v7.0.0", "MATLANTIS_CALC_MODE": "pbe"},
+            "v7.0.0",
+            "PBE-mode",
+        ),
+    ],
+)
+def test_matlantis_calc_mode_default_depends_on_selected_model(
+    tags, expected_version, expected_mode, monkeypatch: pytest.MonkeyPatch
+):
+    seen: dict[str, object] = {}
+
+    class CalcMode:
+        PBE = "PBE-mode"
+        R2SCAN = "R2SCAN-mode"
+
+    monkeypatch.setattr(vpmdk, "EstimatorCalcMode", CalcMode)
+    monkeypatch.setattr(
+        vpmdk, "MatlantisEstimator", lambda **kwargs: seen.update(kwargs) or object()
+    )
+    monkeypatch.setattr(vpmdk, "MatlantisASECalculator", lambda value: value)
+
+    vpmdk._build_matlantis_calculator(tags)
+
+    assert seen["model_version"] == expected_version
+    if expected_mode is None:
+        assert "calc_mode" not in seen
+    else:
+        assert seen["calc_mode"] == expected_mode
+
+
+def test_matlantis_forwards_retry_override_and_rejects_invalid_ranges(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    seen: dict[str, object] = {}
+
+    class CalcMode:
+        R2SCAN = "R2SCAN-mode"
+
+    monkeypatch.setattr(vpmdk, "EstimatorCalcMode", CalcMode)
+    monkeypatch.setattr(
+        vpmdk, "MatlantisEstimator", lambda **kwargs: seen.update(kwargs) or object()
+    )
+    monkeypatch.setattr(vpmdk, "MatlantisASECalculator", lambda value: value)
+
+    vpmdk._build_matlantis_calculator({"MATLANTIS_MAX_RETRIES": "15"})
+    assert seen["max_retries"] == 15
+
+    with pytest.raises(ValueError, match="PRIORITY must be within 1-100"):
+        vpmdk._build_matlantis_calculator({"MATLANTIS_PRIORITY": "0"})
+    with pytest.raises(ValueError, match="MAX_RETRIES must be >= 0"):
+        vpmdk._build_matlantis_calculator({"MATLANTIS_MAX_RETRIES": "-1"})
+    with pytest.raises(ValueError, match="Unsupported MATLANTIS_CALC_MODE"):
+        vpmdk._build_matlantis_calculator({"MATLANTIS_CALC_MODE": "not-a-mode"})
 
 
 @pytest.mark.parametrize(

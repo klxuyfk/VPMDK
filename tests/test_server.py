@@ -1931,6 +1931,38 @@ def test_default_matgl_model_is_not_the_removed_classic_name():
     }
 
 
+def test_matlantis_defaults_are_pinned_to_current_stable_pfp():
+    assert vpmdk.DEFAULT_MATLANTIS_MODEL_VERSION == "v9.0.0"
+    assert vpmdk.DEFAULT_MATLANTIS_CALC_MODE == "R2SCAN"
+    assert vpmdk.DEFAULT_MATLANTIS_PRIORITY == 100
+    assert vpmdk.DEFAULT_MATLANTIS_MAX_RETRIES == 10
+
+    identity = backend_identity({"MLP": "MATLANTIS"}, base_dir=".")
+    assert identity["effective_configuration"] == {
+        "MATLANTIS_MODEL_VERSION": "v9.0.0",
+        "MATLANTIS_PRIORITY": 100,
+        "MATLANTIS_CALC_MODE": "R2SCAN",
+        "MATLANTIS_MAX_RETRIES": 10,
+        "MLP": "MATLANTIS",
+        "DEVICE": "cpu",
+    }
+
+
+def test_matlantis_nondefault_model_keeps_its_upstream_calc_mode_default():
+    identity = backend_identity(
+        {"MLP": "MATLANTIS", "MATLANTIS_MODEL_VERSION": "v7.0.0"},
+        base_dir=".",
+    )
+
+    assert identity["effective_configuration"] == {
+        "MATLANTIS_MODEL_VERSION": "v7.0.0",
+        "MATLANTIS_PRIORITY": 100,
+        "MATLANTIS_MAX_RETRIES": 10,
+        "MLP": "MATLANTIS",
+        "DEVICE": "cpu",
+    }
+
+
 @pytest.mark.parametrize(
     ("mlp", "startup_tag", "request_tag", "value"),
     [
@@ -2104,9 +2136,12 @@ def test_named_model_like_missing_checkpoint_is_rejected_as_a_path(tmp_path: Pat
         (
             "MATLANTIS",
             {
-                "MODEL_VERSION": "v8.0.0",
-                "PRIORITY": "50.0",
-                "CALC_MODE": "pbe",
+                "MODEL_VERSION": vpmdk.DEFAULT_MATLANTIS_MODEL_VERSION,
+                "PRIORITY": str(vpmdk.DEFAULT_MATLANTIS_PRIORITY),
+                "CALC_MODE": vpmdk.DEFAULT_MATLANTIS_CALC_MODE.lower(),
+                "MATLANTIS_MAX_RETRIES": str(
+                    vpmdk.DEFAULT_MATLANTIS_MAX_RETRIES
+                ),
             },
         ),
         (

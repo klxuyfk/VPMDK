@@ -270,6 +270,14 @@ except Exception:
     BAMCalculator = None  # type: ignore
 
 DEFAULT_ORB_MODEL = "orb-v3-conservative-20-omat"
+# Pin Matlantis' current stable defaults instead of delegating to ``latest``.
+# The explicit values make results reproducible when the service deploys a new
+# model and keep server-mode identity reporting aligned with the calculator we
+# actually construct.
+DEFAULT_MATLANTIS_MODEL_VERSION = "v9.0.0"
+DEFAULT_MATLANTIS_CALC_MODE = "R2SCAN"
+DEFAULT_MATLANTIS_PRIORITY = 100
+DEFAULT_MATLANTIS_MAX_RETRIES = 10
 # The classic "M3GNet-MP-2021.2.8-PES" name was removed from current matgl
 # (4.x) -- matgl.load_model() raises "Bad ... model name" for it -- so a default
 # (no-MODEL) MatGL/M3GNet run could not be built. Use the modern PBE M3GNet PES
@@ -493,6 +501,7 @@ from .backends.misc import (
     _build_orb_calculator,
     _build_tace_calculator,
     _build_upet_calculator,
+    _default_matlantis_calc_mode_for_model,
     _get_equflash_calculator_cls,
     _normalize_upet_neighborlist_device,
     _list_matlantis_calc_modes,
@@ -639,6 +648,7 @@ from .runtime.md import (
     _rescale_velocities,
     _select_md_dynamics,
     _set_nose_hoover_chain_temperature,
+    _thermalize_momenta,
     _warn_md_is_fixed_cell,
     run_md,
 )

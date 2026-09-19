@@ -363,8 +363,8 @@ def test_public_md_maps_thermostat_name(monkeypatch: pytest.MonkeyPatch, load_at
 
     monkeypatch.setattr(vpmdk, "_select_md_dynamics", fake_selector)
     monkeypatch.setattr(
-        vpmdk.velocitydistribution,
-        "MaxwellBoltzmannDistribution",
+        vpmdk,
+        "_thermalize_momenta",
         lambda *a, **k: None,
     )
 
@@ -390,8 +390,8 @@ def test_public_md_steps_zero_behaves_like_single_point(monkeypatch: pytest.Monk
     atoms.set_velocities([[1.0, 2.0, 3.0] for _ in range(len(atoms))])
 
     monkeypatch.setattr(
-        vpmdk.velocitydistribution,
-        "MaxwellBoltzmannDistribution",
+        vpmdk,
+        "_thermalize_momenta",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not resample velocities")),
     )
     monkeypatch.setattr(
@@ -425,8 +425,8 @@ def test_public_md_steps_zero_vasp_compat_does_not_write_xdatcar(
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
-        vpmdk.velocitydistribution,
-        "MaxwellBoltzmannDistribution",
+        vpmdk,
+        "_thermalize_momenta",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not resample velocities")),
     )
     monkeypatch.setattr(
@@ -510,8 +510,8 @@ def test_public_md_vasp_compat_respects_write_xdatcar(
         lambda *args, **kwargs: (DummyDynamics(), lambda temp: None),
     )
     monkeypatch.setattr(
-        vpmdk.velocitydistribution,
-        "MaxwellBoltzmannDistribution",
+        vpmdk,
+        "_thermalize_momenta",
         lambda *a, **k: None,
     )
     try:

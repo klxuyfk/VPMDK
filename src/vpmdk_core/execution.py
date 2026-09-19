@@ -413,10 +413,7 @@ def execute_md(
         else:
             atoms.set_velocities(velocities * 0.0)
     else:
-        root.velocitydistribution.MaxwellBoltzmannDistribution(
-            atoms,
-            temperature_K=config.temperature,
-        )
+        root._thermalize_momenta(atoms, config.temperature)
 
     # Wrapped only for the dynamics run and restored before the result is
     # built: _build_result publishes atoms.calc as result.calculator, and a

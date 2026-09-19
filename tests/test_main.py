@@ -355,6 +355,7 @@ def test_single_point_energy_for_all_potentials(
 
     class DummyEstimatorMode:
         CRYSTAL = "CRYSTAL"
+        R2SCAN = "R2SCAN"
 
         @classmethod
         def __getitem__(cls, key):
@@ -1649,8 +1650,8 @@ def test_main_md_writes_outputs_into_selected_run_dir(tmp_path: Path, prepare_in
     monkeypatch.setattr(vpmdk, "_build_calculator_from_tags", lambda *_, **__: DummyCalculator())
     monkeypatch.setattr(vpmdk, "_select_md_dynamics", fake_selector)
     monkeypatch.setattr(
-        vpmdk.velocitydistribution,
-        "MaxwellBoltzmannDistribution",
+        vpmdk,
+        "_thermalize_momenta",
         lambda *a, **k: None,
     )
     monkeypatch.setattr(sys, "argv", ["vpmdk.py", "--dir", str(run_dir)])
@@ -2003,7 +2004,9 @@ def test_bcar_selector_errors_classify_the_same_in_flat_and_neb_dirs(tmp_path):
             vpmdk.run_workdir(str(directory))
 
 
-def test_bcar_backend_selector_errors_are_input_not_a_traceback(tmp_path, capsys):
+def test_bcar_backend_selector_errors_are_input_not_a_traceback(
+    tmp_path, capsys, monkeypatch
+):
     # _build_calculator_from_tags was the only BCAR consumer in run_workdir not
     # routed through the input-error layer, so the MOST COMMON BCAR mistake still
     # dumped a raw multi-frame traceback while every sibling parse printed one
@@ -2033,6 +2036,7 @@ def test_bcar_backend_selector_errors_are_input_not_a_traceback(tmp_path, capsys
         assert expected in message  # the specific cause is preserved
 
     # A backend whose package is absent stays an environment error.
+    monkeypatch.setattr(vpmdk, "MatlantisEstimator", None)
     with pytest.raises(RuntimeError) as excinfo:
         vpmdk.run_workdir(workdir("MLP = MATLANTIS\n"))
     assert not isinstance(excinfo.value, vpmdk.WorkdirInputError)
