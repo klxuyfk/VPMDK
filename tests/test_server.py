@@ -2213,6 +2213,23 @@ def test_explicit_backend_defaults_match_omitted_startup_values(
     )
 
 
+def test_prophet_explicit_defaults_match_omitted_startup_values(tmp_path: Path):
+    model_path = tmp_path / "prophet.pt"
+    model_path.write_text("placeholder")
+    base_tags = {"MLP": "PROPHET", "MODEL": str(model_path), "DEVICE": "cpu"}
+    resident = backend_identity(base_tags, base_dir=str(tmp_path))
+
+    validate_request_backend(
+        resident,
+        {
+            **base_tags,
+            "PROPHET_USE_KERNEL": "false",
+            "PROPHET_USE_COMPILE": "off",
+        },
+        request_base_dir=str(tmp_path),
+    )
+
+
 def test_sevennet_enabled_accelerator_records_implied_false_flags(tmp_path: Path):
     # Enabling one SevenNet accelerator forces the other two off in the builder,
     # so the resident's effective configuration must record those implied False

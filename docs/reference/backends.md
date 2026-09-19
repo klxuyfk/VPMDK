@@ -23,6 +23,7 @@ is also an error.
 | `CHGNET` | `chgnet` / `CHGNetCalculator` | local checkpoint path or upstream named/default model | upstream default loader | `DEVICE`, CHGNet graph-converter tags |
 | `MATGL` / `M3GNET` | `matgl` or legacy `m3gnet` / `M3GNetCalculator` or `PESCalculator` | modern MatGL registry name, model directory, or checkpoint path; legacy explicit models must be local files | MatGL `M3GNet-MP-2021.2.8-PES`, or the legacy calculator default | `DEVICE`; explicit MatGL registry names are loaded verbatim; explicit legacy files never fall back to the default when loading fails |
 | `MACE` | `mace-torch` / `MACECalculator` | local model path | upstream default calculator behavior when `MODEL` is omitted | `DEVICE`; an explicit missing/non-path `MODEL` is rejected rather than replaced with the default |
+| `PROPHET` | `prophet-mlip` / `KairosCalculator` | required local checkpoint, such as `prophet-oame-mbd.pt` | none | `DEVICE`, `PROPHET_USE_KERNEL`, `PROPHET_USE_COMPILE`; VPMDK defaults both options to false, selecting Prophet's portable e3nn path; kernels require a CUDA device and the upstream `kernel` extra |
 | `MATTERSIM` | `mattersim` / `MatterSimCalculator` | optional existing local checkpoint or non-path `from_checkpoint` preset such as `mattersim-v1.0.0-5M` | calculator default | `DEVICE`, `MATTERSIM_COMPUTE_STRESS`, `MATTERSIM_STRESS_WEIGHT`; missing path-shaped values fail immediately; explicit presets require `from_checkpoint` or the legacy `load_path` API and are never replaced by the default |
 | `MATLANTIS` | `pfp-api-client` / estimator service | opaque model version string or optional model name | `v9.0.0` with `R2SCAN` | `MATLANTIS_MODEL_VERSION`, `MATLANTIS_PRIORITY`, `MATLANTIS_CALC_MODE`, `MATLANTIS_MAX_RETRIES`; nondefault model versions use their own upstream calc-mode default unless a mode is explicit; same-named local files do not change version resolution |
 | `EQNORM` | `eqnorm` / `EqnormCalculator` | local checkpoint or named model | `eqnorm-mptrj` | `EQNORM_VARIANT`, `EQNORM_COMPILE`; named models cached in `~/.cache/eqnorm` |
@@ -173,3 +174,6 @@ it supports that concept.
 - `ALPHANET` local checkpoints need a matching JSON config, either explicit or
   inferred from the checkpoint directory.
 - `DEEPMD` local checkpoints are mandatory; there is no built-in named default.
+- `PROPHET` requires a local checkpoint. `PROPHET_USE_KERNEL=0` is the portable
+  default and works on CPU or CUDA. Set `PROPHET_USE_KERNEL=1` only with a CUDA
+  `DEVICE` and a `prophet-mlip[kernel]` installation.

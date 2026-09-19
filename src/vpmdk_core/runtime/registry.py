@@ -23,6 +23,7 @@ _CALCULATOR_BUILDERS: Dict[str, str] = {
     "MATGL": "_build_m3gnet_calculator",
     "M3GNET": "_build_m3gnet_calculator",
     "MACE": "_build_mace_calculator",
+    "PROPHET": "_build_prophet_calculator",
     "MATTERSIM": "_build_mattersim_calculator",
     "EQNORM": "_build_eqnorm_calculator",
     "MATRIS": "_build_matris_calculator",

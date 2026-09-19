@@ -105,6 +105,18 @@ DEVICE=cuda
 MD writes the usual compatibility files plus `XDATCAR`. If you also set
 `WRITE_LAMMPS_TRAJ=1`, VPMDK writes `lammps.lammpstrj`.
 
+For a Prophet checkpoint, use:
+
+```text
+MLP=PROPHET
+MODEL=/path/to/prophet-oame-mbd.pt
+DEVICE=cuda
+PROPHET_USE_KERNEL=0
+```
+
+The portable e3nn path is the default. The optional kernel path requires a
+CUDA device and a `prophet-mlip[kernel]` installation.
+
 ## 6. Write CHGCAR
 
 `WRITE_CHGCAR=1` triggers a separate charge-density prediction after the final

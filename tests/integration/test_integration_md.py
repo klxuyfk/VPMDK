@@ -9,6 +9,8 @@ CI smoke:
 
 Additional explicit backends:
 - MACE (set VPMDK_MACE_MODEL, optional VPMDK_MACE_DEVICE)
+- Prophet: VPMDK_PROPHET_MODEL, optional VPMDK_PROPHET_DEVICE /
+  VPMDK_PROPHET_USE_KERNEL / VPMDK_PROPHET_USE_COMPILE
 
 Optional backends (skipped unless env vars are set):
 - MatterSim: optional VPMDK_MATTERSIM_MODEL / VPMDK_MATTERSIM_DEVICE
@@ -468,6 +470,31 @@ def test_md_mace_required(tmp_path: Path, data_dir: Path) -> None:
         pytest.fail(f"MACE model not found: {model_path}")
     bcar = f"MLP=MACE\nMODEL={model_path}\nDEVICE={device}\n"
     _write_inputs(tmp_path, data_dir, bcar)
+    _run_vpmdk(tmp_path)
+    _assert_outputs(tmp_path)
+
+
+@pytest.mark.integration
+def test_md_prophet_optional(tmp_path: Path, data_dir: Path) -> None:
+    if not _module_available("prophet"):
+        pytest.skip("prophet-mlip is not installed.")
+    model_path = os.environ.get("VPMDK_PROPHET_MODEL")
+    if not model_path:
+        pytest.skip("Set VPMDK_PROPHET_MODEL to run Prophet integration.")
+    if not Path(model_path).exists():
+        pytest.fail(f"Prophet model not found: {model_path}")
+
+    device = os.environ.get("VPMDK_PROPHET_DEVICE", "cpu")
+    if device.startswith("cuda"):
+        _require_cuda()
+    use_kernel = os.environ.get("VPMDK_PROPHET_USE_KERNEL", "0")
+    use_compile = os.environ.get("VPMDK_PROPHET_USE_COMPILE", "0")
+    bcar = (
+        f"MLP=PROPHET\nMODEL={model_path}\nDEVICE={device}\n"
+        f"PROPHET_USE_KERNEL={use_kernel}\n"
+        f"PROPHET_USE_COMPILE={use_compile}\n"
+    )
+    _write_inputs(tmp_path, data_dir, bcar, incar_text=INCAR_MD_SMOKE)
     _run_vpmdk(tmp_path)
     _assert_outputs(tmp_path)
 

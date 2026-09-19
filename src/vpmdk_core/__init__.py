@@ -3,7 +3,7 @@
 The utility consumes VASP-style inputs (POSCAR, INCAR, POTCAR, BCAR) and
 executes single-point, relaxation, or molecular dynamics runs with the selected
 neural-network potential. Multiple ASE calculators are supported (CHGNet,
-M3GNet/MatGL, MACE, MatterSim, Matlantis, Eqnorm, MatRIS, AlphaNet, HIENet,
+M3GNet/MatGL, MACE, Prophet, MatterSim, Matlantis, Eqnorm, MatRIS, AlphaNet, HIENet,
 Nequix, SevenNet, FlashTP, EquFlash, UPET, TACE, EquiformerV3) and the expected
 VASP outputs such as CONTCAR and OUTCAR-style energy logs are produced.
 """
@@ -78,6 +78,11 @@ try:
     from mace.calculators import MACECalculator
 except Exception:
     MACECalculator = None  # type: ignore
+
+try:
+    from prophet import KairosCalculator as ProphetCalculator
+except Exception:
+    ProphetCalculator = None  # type: ignore
 
 try:
     from mattersim.forcefield import MatterSimCalculator
@@ -521,6 +526,7 @@ from .backends.nequip_family import (
     _override_model_graph_converter_algorithm,
     _resolve_graph_converter_algorithm,
 )
+from .backends.prophet import _build_prophet_calculator
 from .backends.sevennet_family import (
     _build_flashtp_calculator,
     _build_sevennet_calculator,
