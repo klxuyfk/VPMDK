@@ -219,6 +219,7 @@ def test_construct_ase_neb_uses_proxies_instead_of_generic_kwargs(monkeypatch):
         "MATGL",
         "M3GNET",
         "MACE",
+        "PROPHET",
         "MATTERSIM",
         "MATLANTIS",
         "EQNORM",
@@ -257,10 +258,13 @@ def test_single_point_energy_for_all_potentials(
         "EQUFLASH",
         "EQUIFORMER_V3",
         "BAM",
+        "PROPHET",
     }:
         model_name = (
             "BAM-MP-core.pkl"
             if potential == "BAM"
+            else "prophet.pt"
+            if potential == "PROPHET"
             else "pet-oam-xl-v1.0.0.ckpt"
             if potential == "UPET"
             else (
@@ -305,6 +309,9 @@ def test_single_point_energy_for_all_potentials(
         lambda tags: factory(vpmdk._resolve_mlp_tag(tags, default="MATGL")),
     )
     monkeypatch.setattr(vpmdk, "MACECalculator", lambda *a, **k: factory("MACE"))
+    monkeypatch.setattr(
+        vpmdk, "ProphetCalculator", lambda *a, **k: factory("PROPHET")
+    )
     monkeypatch.setattr(vpmdk, "MatterSimCalculator", lambda *a, **k: factory("MATTERSIM"))
     monkeypatch.setattr(vpmdk, "MatlantisEstimator", lambda *a, **k: object())
     monkeypatch.setattr(vpmdk, "MatlantisASECalculator", lambda *a, **k: factory("MATLANTIS"))

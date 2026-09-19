@@ -205,8 +205,21 @@ def test_list_backends_exposes_known_entries():
 
     assert "CHGNET" in names
     assert "MACE" in names
+    assert "PROPHET" in names
     assert "FAIRCHEM" in names
     assert "EQUIFORMER_V3" in names
+
+
+def test_list_backends_reports_prophet_runtime_availability(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(vpmdk, "ProphetCalculator", None)
+    specs = {spec.name: spec for spec in vpmdk.list_backends()}
+    assert specs["PROPHET"].available is False
+
+    monkeypatch.setattr(vpmdk, "ProphetCalculator", object())
+    specs = {spec.name: spec for spec in vpmdk.list_backends()}
+    assert specs["PROPHET"].available is True
 
 
 def test_list_backends_marks_flashtp_unavailable_without_flash_support(

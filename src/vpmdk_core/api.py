@@ -61,6 +61,7 @@ _BASE_CAPABILITIES: dict[str, BackendCapabilities] = {
     "MATGL": BackendCapabilities(spin=False),
     "M3GNET": BackendCapabilities(spin=False),
     "MACE": BackendCapabilities(spin=True, fine_tune=True),
+    "PROPHET": BackendCapabilities(),
     "MATTERSIM": BackendCapabilities(),
     "MATLANTIS": BackendCapabilities(uncertainty=False),
     "EQNORM": BackendCapabilities(fine_tune=True),
@@ -114,6 +115,7 @@ def _backend_available(name: str) -> bool:
         "MATGL": lambda: root.M3GNetCalculator is not None,
         "M3GNET": lambda: root.M3GNetCalculator is not None,
         "MACE": lambda: root.MACECalculator is not None,
+        "PROPHET": lambda: root.ProphetCalculator is not None,
         "MATTERSIM": lambda: root.MatterSimCalculator is not None,
         "MATLANTIS": lambda: (
             root.MatlantisEstimator is not None

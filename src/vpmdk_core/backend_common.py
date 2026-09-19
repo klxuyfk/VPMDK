@@ -108,6 +108,7 @@ _BACKEND_MODEL_POLICIES: Mapping[str, BackendModelPolicy] = {
     # Local checkpoint only. An explicit missing value is always an error;
     # omission is allowed only where the upstream calculator has a default.
     "MACE": BackendModelPolicy(local_only=True),
+    "PROPHET": BackendModelPolicy(required=True, local_only=True),
     # ORB weights_path accepts a local checkpoint or a remote URI (the bundled
     # defaults are https/s3 URLs that orb-models downloads via cached_path). A
     # missing local path (no scheme) still errors early; a scheme-qualified URI

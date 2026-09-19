@@ -1107,6 +1107,8 @@ BACKEND_CONFIGURATION_TAGS = frozenset(
         "TACE_NEIGHBORLIST_BACKEND",
         "TACE_FIDELITY_IDX",
         "TACE_LEVEL",
+        "PROPHET_USE_KERNEL",
+        "PROPHET_USE_COMPILE",
         "FAIRCHEM_TASK",
         "FAIRCHEM_INFERENCE_SETTINGS",
         "FAIRCHEM_CONFIG",
@@ -1143,6 +1145,7 @@ _EXCLUSIVE_BACKEND_TAG_PREFIXES = {
     "MATLANTIS_": "MATLANTIS",
     "UPET_": "UPET",
     "TACE_": "TACE",
+    "PROPHET_": "PROPHET",
     "GRACE_": "GRACE",
     "DEEPMD_": "DEEPMD",
     "EQNORM_": "EQNORM",
@@ -1184,6 +1187,8 @@ _BOOLEAN_CONFIGURATION_TAGS = frozenset(
         "UPET_NON_CONSERVATIVE",
         "TACE_SPIN_ON",
         "FAIRCHEM_V1_PREDICTOR",
+        "PROPHET_USE_KERNEL",
+        "PROPHET_USE_COMPILE",
     }
 )
 _INTEGER_CONFIGURATION_TAGS = frozenset(
@@ -1328,6 +1333,10 @@ _BACKEND_CONFIGURATION_DEFAULTS: dict[str, dict[str, Any]] = {
     "ESEN": {"FAIRCHEM_INFERENCE_SETTINGS": "default"},
     "FAIRCHEM_V1": {"FAIRCHEM_V1_PREDICTOR": False},
     "EQUIFORMER_V3": {"FAIRCHEM_V1_PREDICTOR": False},
+    "PROPHET": {
+        "PROPHET_USE_KERNEL": False,
+        "PROPHET_USE_COMPILE": False,
+    },
 }
 
 # MODEL is resolved through _normalize_model_identity, never through

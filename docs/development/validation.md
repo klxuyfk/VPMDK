@@ -20,6 +20,20 @@ not a benchmark-quality comparison against reference DFT data.  Blocked entries
 record adapter behavior or missing public artifacts rather than successful
 calculator evaluation.
 
+## 2026-09-19 Prophet Validation
+
+- Environment: Python 3.13.5, ASE 3.29.0, torch 2.8.0+cu128, e3nn 0.6.0,
+  torch-geometric 2.8.0.post1, and official `prophet-mlip` 0.1.0 at commit
+  `869d567e2abfa1dacd6d0b326bc99a8019fa68b2`.
+- Checkpoint: official `prophet-oame-mbd.pt`; `PROPHET_USE_KERNEL=0` selected
+  the portable e3nn path.
+- The Si2 smoke structure completed single-point calculations and one-step NVE
+  MD through the VASP-style work-directory path on both CPU and an NVIDIA
+  TITAN V. The MD runs produced nonempty `CONTCAR`, `OUTCAR`, and `XDATCAR`.
+- Single-point energy was -10.8567724228 eV on CPU and -10.8567733765 eV on
+  CUDA; maximum absolute force was 3.230198e-07 and 3.385358e-07 eV/A,
+  respectively. Both paths returned stress.
+
 ## 2026-09-19 Matlantis Validation
 
 - Environment: Matlantis VM, Python 3.13.8, ASE 3.29.0, and

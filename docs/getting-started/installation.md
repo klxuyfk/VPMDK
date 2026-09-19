@@ -71,6 +71,10 @@ Common packages:
 
 - `chgnet` for `MLP=CHGNET`
 - `mace-torch` for `MLP=MACE`
+- `prophet-mlip` for `MLP=PROPHET`; install from the official repository with
+  `pip install "prophet-mlip @ git+https://github.com/kairosmaterial/prophet.git"`
+  (or use `prophet-mlip[kernel]` for the optional CUDA tensor-product kernels);
+  the upstream package requires Python 3.11 or newer
 - `matgl` or legacy `m3gnet` for `MLP=MATGL` / `M3GNET`
 - `sevenn` for `MLP=SEVENNET`
 - `sevenn` plus `flashTP_e3nn` for `MLP=FLASHTP`

@@ -180,6 +180,21 @@ otherwise named selectors fail with an explicit compatibility error.
 
 - `HIENET_FILE_TYPE`
 
+### Prophet
+
+- `PROPHET_USE_KERNEL` (default: `0`; requires a CUDA `DEVICE` and the upstream
+  `kernel` extra when enabled)
+- `PROPHET_USE_COMPILE` (default: `0`)
+
+`MODEL` must point to a local Prophet checkpoint. For example:
+
+```text
+MLP=PROPHET
+MODEL=/path/to/prophet-oame-mbd.pt
+DEVICE=cuda
+PROPHET_USE_KERNEL=0
+```
+
 ### Nequix
 
 - `NEQUIX_BACKEND`

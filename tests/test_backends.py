@@ -27,6 +27,7 @@ _EXPECTED_BACKEND_MODEL_POLICY = {
         delegate_registry_ids=True,
     ),
     "MACE": _P(local_only=True),
+    "PROPHET": _P(required=True, local_only=True),
     "MATTERSIM": _P(allow_named=True),
     "MATLANTIS": _P(
         default_attribute="DEFAULT_MATLANTIS_MODEL_VERSION",
@@ -144,6 +145,7 @@ def test_shared_model_resolver_classifies_backend_defaults(
         "UPET",
         "TACE",
         "FAIRCHEM_V1",
+        "PROPHET",
     ],
 )
 def test_shared_model_resolver_requires_model_for_required_backends(backend: str):
@@ -156,6 +158,7 @@ def test_shared_model_resolver_requires_model_for_required_backends(backend: str
     [
         "CHGNET",
         "MACE",
+        "PROPHET",
         "ORB",
         "MATGL",
         "M3GNET",
@@ -204,6 +207,7 @@ def test_shared_model_resolver_classifies_existing_local_models(
     "backend",
     [
         "MACE",
+        "PROPHET",
         "ORB",
         "NEQUIP",
         "ALLEGRO",
@@ -461,6 +465,7 @@ def test_matgl_delegates_slash_registry_id_but_rejects_path_typo(
         "MATGL",
         "M3GNET",
         "MACE",
+        "PROPHET",
         "MATTERSIM",
         "EQNORM",
         "MATRIS",
@@ -918,6 +923,112 @@ def test_mace_existing_explicit_model_is_forwarded(
 
     assert result == "calculator"
     assert seen == {"model": str(model_path), "kwargs": {"device": "cuda"}}
+
+
+def test_prophet_existing_model_and_options_are_forwarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "prophet.pt"
+    model_path.write_text("placeholder")
+    seen: dict[str, object] = {}
+
+    def calculator(**kwargs):
+        seen.update(kwargs)
+        return "calculator"
+
+    monkeypatch.setattr(vpmdk, "ProphetCalculator", calculator)
+
+    result = vpmdk._build_prophet_calculator(
+        {
+            "MODEL": str(model_path),
+            "DEVICE": "cuda:0",
+            "PROPHET_USE_KERNEL": "yes",
+            "PROPHET_USE_COMPILE": "1",
+        }
+    )
+
+    assert result == "calculator"
+    assert seen == {
+        "model_path": str(model_path),
+        "use_kernel": True,
+        "use_compile": True,
+        "device": "cuda:0",
+    }
+
+
+def test_prophet_defaults_to_portable_e3nn_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "prophet.pt"
+    model_path.write_text("placeholder")
+    seen: dict[str, object] = {}
+
+    def calculator(**kwargs):
+        seen.update(kwargs)
+        return "calculator"
+
+    monkeypatch.setattr(vpmdk, "ProphetCalculator", calculator)
+
+    vpmdk._build_prophet_calculator(
+        {"MODEL": str(model_path), "DEVICE": "cpu"}
+    )
+
+    assert seen["use_kernel"] is False
+    assert seen["use_compile"] is False
+    assert seen["device"] == "cpu"
+
+
+def test_prophet_blank_device_uses_autodetection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "prophet.pt"
+    model_path.write_text("placeholder")
+    resolved: list[object] = []
+    seen: dict[str, object] = {}
+
+    def resolve_device(value):
+        resolved.append(value)
+        return "cuda"
+
+    def calculator(**kwargs):
+        seen.update(kwargs)
+        return "calculator"
+
+    monkeypatch.setattr(vpmdk, "_resolve_device", resolve_device)
+    monkeypatch.setattr(vpmdk, "ProphetCalculator", calculator)
+
+    vpmdk._build_prophet_calculator(
+        {"MODEL": str(model_path), "DEVICE": ""}
+    )
+
+    assert resolved == [None]
+    assert seen["device"] == "cuda"
+
+
+def test_prophet_kernel_requires_cuda_device(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_path = tmp_path / "prophet.pt"
+    model_path.write_text("placeholder")
+    monkeypatch.setattr(vpmdk, "ProphetCalculator", object())
+
+    with pytest.raises(ValueError, match="PROPHET_USE_KERNEL requires a CUDA DEVICE"):
+        vpmdk._build_prophet_calculator(
+            {
+                "MODEL": str(model_path),
+                "DEVICE": "cpu",
+                "PROPHET_USE_KERNEL": "1",
+            }
+        )
+
+
+def test_prophet_reports_missing_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    model_path = tmp_path / "prophet.pt"
+    model_path.write_text("placeholder")
+    monkeypatch.setattr(vpmdk, "ProphetCalculator", None)
+
+    with pytest.raises(RuntimeError, match="Install prophet-mlip"):
+        vpmdk._build_prophet_calculator({"MODEL": str(model_path)})
 
 
 @pytest.mark.parametrize("selection", ["default", "local"])

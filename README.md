@@ -26,7 +26,7 @@ optional dependencies are listed in the
 
 ## Supported Backends
 
-Force-field integrations include `CHGNET`, `MATGL` / `M3GNET`, `MACE`,
+Force-field integrations include `CHGNET`, `MATGL` / `M3GNET`, `MACE`, `PROPHET`,
 `MATTERSIM`, `MATLANTIS`, `EQNORM`, `MATRIS`, `ALPHANET`, `HIENET`, `NEQUIX`,
 `SEVENNET`, `FLASHTP`, `BAM`, `NEQUIP`, `ALLEGRO`, `ORB`, `UPET`, `TACE`,
 `EQUFLASH`, `EQUIFORMER_V3`, `FAIRCHEM` (v1 and v2 paths, including `ESEN`),
