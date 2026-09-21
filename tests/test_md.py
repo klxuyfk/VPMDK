@@ -102,6 +102,130 @@ def test_run_md_executes_multiple_steps(tmp_path, load_atoms):
     assert (tmp_path / "vasprun.xml").exists()
 
 
+def test_md_wrap_preserves_equivalent_periodic_calculator_results(
+    tmp_path, monkeypatch
+):
+    from ase.build import bulk
+    from ase.calculators.calculator import Calculator, all_changes
+
+    class CountingCalculator(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def calculate(
+            self,
+            atoms=None,
+            properties=("energy",),
+            system_changes=all_changes,
+        ):
+            super().calculate(atoms, properties, system_changes)
+            self.calls += 1
+            self.results = {
+                "energy": 0.0,
+                "forces": np.zeros((len(atoms), 3)),
+                "stress": np.zeros(6),
+            }
+
+    def initialize_crossing_velocity(atoms, temperature):
+        velocities = np.zeros((len(atoms), 3))
+        velocities[0, 0] = -0.1
+        atoms.set_velocities(velocities)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "_thermalize_momenta", initialize_crossing_velocity)
+    monkeypatch.setattr(vpmdk, "MatlantisASECalculator", CountingCalculator)
+    atoms = bulk("Si", cubic=True)
+    calculator = CountingCalculator()
+
+    vpmdk.md(
+        atoms,
+        calculator=calculator,
+        config=vpmdk.MDConfig(
+            steps=1,
+            temperature=300.0,
+            timestep_fs=1.0,
+        ),
+    )
+
+    # Velocity Verlet needs the initial and final force evaluations.  Wrapping
+    # the boundary-crossing atom must not add a third evaluation of the same
+    # periodic final configuration just to read its energy.
+    assert calculator.calls == 2
+    scaled = atoms.get_scaled_positions(wrap=False)
+    assert np.all(scaled[:, atoms.get_pbc()] >= 0.0)
+    assert np.all(scaled[:, atoms.get_pbc()] < 1.0)
+
+
+def test_md_wrap_recalculates_absolute_coordinate_calculator(
+    tmp_path, monkeypatch
+):
+    from ase import Atoms
+    from ase.calculators.calculator import Calculator, all_changes
+
+    class MockMatlantisCalculator(Calculator):
+        pass
+
+    class AbsoluteCoordinateCalculator(MockMatlantisCalculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def calculate(
+            self,
+            atoms=None,
+            properties=("energy",),
+            system_changes=all_changes,
+        ):
+            super().calculate(atoms, properties, system_changes)
+            self.calls += 1
+            positions = np.asarray(atoms.get_positions(), dtype=float)
+            self.results = {
+                "energy": float(np.square(positions).sum()),
+                "forces": -2.0 * positions,
+                "stress": np.zeros(6),
+            }
+
+    def initialize_crossing_velocity(atoms, temperature):
+        atoms.set_velocities([[-0.1, 0.0, 0.0]])
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "_thermalize_momenta", initialize_crossing_velocity)
+    monkeypatch.setattr(vpmdk, "MatlantisASECalculator", MockMatlantisCalculator)
+    atoms = Atoms(
+        "H",
+        positions=[[0.001, 0.0, 0.0]],
+        cell=[10.0, 10.0, 10.0],
+        pbc=True,
+    )
+    calculator = AbsoluteCoordinateCalculator()
+
+    result = vpmdk.md(
+        atoms,
+        calculator=calculator,
+        config=vpmdk.MDConfig(
+            steps=1,
+            temperature=300.0,
+            timestep_fs=1.0,
+        ),
+    )
+
+    # Even a subclass of the official calculator type may add a position-
+    # dependent field.  Initial and final forces use the unwrapped trajectory
+    # coordinates, then wrapping must trigger a third calculation because this
+    # potential depends on absolute positions rather than periodic images.
+    assert calculator.calls == 3
+    assert 0.0 <= atoms.positions[0, 0] < atoms.cell.lengths()[0]
+    assert result.potential_energy == pytest.approx(
+        float(np.square(atoms.positions).sum())
+    )
+    assert result.forces == pytest.approx(-2.0 * atoms.positions)
+
+
 def test_get_lammps_interval_rejects_nonpositive():
     with pytest.raises(ValueError, match="at least 1"):
         vpmdk._get_lammps_trajectory_interval({"LAMMPS_TRAJ_INTERVAL": "0"})

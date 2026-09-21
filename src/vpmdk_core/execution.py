@@ -41,6 +41,73 @@ def _build_result(atoms, calculator, potential_energy: float) -> CalculationResu
     )
 
 
+def _wrap_atoms_preserving_calculator_cache(atoms) -> None:
+    """Wrap periodic positions, preserving only a known-invariant ASE result.
+
+    ASE calculators remember a copy of the coordinates used for their latest
+    result and compare that copy with ``atoms`` on every property read.  A
+    periodic wrap changes Cartesian coordinates by lattice vectors, so the
+    exact comparison normally triggers another backend calculation.  For the
+    official Matlantis calculator, whose PFP result is periodic-image
+    invariant, move its cached coordinate snapshot by the same translations.
+
+    Other calculators keep the conservative behavior unless they explicitly
+    opt in with ``_vpmdk_periodic_translation_invariant = True``.  This matters
+    for otherwise valid custom calculators with absolute-coordinate external
+    fields: their energy and forces really do change when positions are
+    wrapped, so reusing their pre-wrap result would be incorrect.
+    """
+
+    calculator = getattr(atoms, "calc", None)
+    before_positions = np.asarray(atoms.get_positions(), dtype=float).copy()
+    atoms.wrap()
+    after_positions = np.asarray(atoms.get_positions(), dtype=float)
+    if np.array_equal(before_positions, after_positions) or calculator is None:
+        return
+
+    # MD temporarily installs VPMDK's divergence guard around the user's
+    # calculator.  Unwrap that one known internal layer before deciding whether
+    # the underlying implementation guarantees periodic-image invariance.
+    invariant_calculator = getattr(
+        calculator, "_vpmdk_inner_calculator", calculator
+    )
+    invariance_marker = "_vpmdk_periodic_translation_invariant"
+    try:
+        instance_opt_in = vars(invariant_calculator).get(invariance_marker) is True
+    except TypeError:
+        instance_opt_in = False
+    explicitly_invariant = (
+        instance_opt_in
+        or type(invariant_calculator).__dict__.get(invariance_marker) is True
+    )
+    matlantis_calculator_type = getattr(_root(), "MatlantisASECalculator", None)
+    is_official_matlantis = (
+        isinstance(matlantis_calculator_type, type)
+        and type(invariant_calculator) is matlantis_calculator_type
+    )
+    if not (explicitly_invariant or is_official_matlantis):
+        return
+
+    try:
+        cached_atoms = calculator.atoms
+        check_state = calculator.check_state
+    except (AttributeError, TypeError):
+        return
+    if cached_atoms is None or cached_atoms is atoms or not callable(check_state):
+        return
+
+    before_atoms = atoms.copy()
+    before_atoms.positions[:] = before_positions
+    try:
+        if check_state(before_atoms):
+            return
+        cached_atoms.positions[:] = after_positions
+    except (AttributeError, TypeError, ValueError):
+        # A nonstandard calculator owns its cache representation.  Recomputing
+        # is slower but safe, while guessing how to mutate it is not.
+        return
+
+
 def execute_single_point(
     atoms,
     calculator,
@@ -356,7 +423,7 @@ def execute_md(
         )
         if observer is not None:
             observer.on_step(atoms, fallback_step, context)
-        atoms.wrap()
+        _wrap_atoms_preserving_calculator_cache(atoms)
         common = _build_result(atoms, calculator, potential_energy)
         result = MDResult(
             atoms=common.atoms,
@@ -433,7 +500,7 @@ def execute_md(
 
         for step_index in range(1, config.steps + 1):
             dyn.run(1)
-            atoms.wrap()
+            _wrap_atoms_preserving_calculator_cache(atoms)
             potential_energy = float(atoms.get_potential_energy())
             kinetic_energy = root._extract_numeric_attribute(atoms, ("get_kinetic_energy",))
             thermostat_potential, thermostat_kinetic = root._thermostat_energy_terms(dyn)
@@ -472,7 +539,7 @@ def execute_md(
         if observer is not None:
             observer.on_step(atoms, fallback_step, context)
 
-    atoms.wrap()
+    _wrap_atoms_preserving_calculator_cache(atoms)
     common = _build_result(atoms, calculator, recorded_steps[-1].potential_energy)
     result = MDResult(
         atoms=common.atoms,
