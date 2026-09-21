@@ -102,6 +102,62 @@ def test_run_md_executes_multiple_steps(tmp_path, load_atoms):
     assert (tmp_path / "vasprun.xml").exists()
 
 
+def test_md_wrap_preserves_equivalent_periodic_calculator_results(
+    tmp_path, monkeypatch
+):
+    from ase.build import bulk
+    from ase.calculators.calculator import Calculator, all_changes
+
+    class CountingCalculator(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def calculate(
+            self,
+            atoms=None,
+            properties=("energy",),
+            system_changes=all_changes,
+        ):
+            super().calculate(atoms, properties, system_changes)
+            self.calls += 1
+            self.results = {
+                "energy": 0.0,
+                "forces": np.zeros((len(atoms), 3)),
+                "stress": np.zeros(6),
+            }
+
+    def initialize_crossing_velocity(atoms, temperature):
+        velocities = np.zeros((len(atoms), 3))
+        velocities[0, 0] = -0.1
+        atoms.set_velocities(velocities)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vpmdk, "_thermalize_momenta", initialize_crossing_velocity)
+    atoms = bulk("Si", cubic=True)
+    calculator = CountingCalculator()
+
+    vpmdk.md(
+        atoms,
+        calculator=calculator,
+        config=vpmdk.MDConfig(
+            steps=1,
+            temperature=300.0,
+            timestep_fs=1.0,
+        ),
+    )
+
+    # Velocity Verlet needs the initial and final force evaluations.  Wrapping
+    # the boundary-crossing atom must not add a third evaluation of the same
+    # periodic final configuration just to read its energy.
+    assert calculator.calls == 2
+    scaled = atoms.get_scaled_positions(wrap=False)
+    assert np.all(scaled[:, atoms.get_pbc()] >= 0.0)
+    assert np.all(scaled[:, atoms.get_pbc()] < 1.0)
+
+
 def test_get_lammps_interval_rejects_nonpositive():
     with pytest.raises(ValueError, match="at least 1"):
         vpmdk._get_lammps_trajectory_interval({"LAMMPS_TRAJ_INTERVAL": "0"})

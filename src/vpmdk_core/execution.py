@@ -41,6 +41,48 @@ def _build_result(atoms, calculator, potential_energy: float) -> CalculationResu
     )
 
 
+def _wrap_atoms_preserving_calculator_cache(atoms) -> None:
+    """Wrap periodic positions without invalidating an equivalent ASE result.
+
+    ASE calculators remember a copy of the coordinates used for their latest
+    result and compare that copy with ``atoms`` on every property read.  A
+    periodic wrap changes Cartesian coordinates by lattice vectors, so the
+    exact comparison normally triggers another backend calculation even though
+    energy, forces, and stress are unchanged.  When the calculator confirms
+    that its cached state matches the pre-wrap atoms, move only that cached
+    coordinate snapshot by the same periodic translations.
+
+    Calculators without the standard ASE state interface keep the conservative
+    behavior: their cache is left untouched and they may recalculate.
+    """
+
+    calculator = getattr(atoms, "calc", None)
+    before_positions = np.asarray(atoms.get_positions(), dtype=float).copy()
+    atoms.wrap()
+    after_positions = np.asarray(atoms.get_positions(), dtype=float)
+    if np.array_equal(before_positions, after_positions) or calculator is None:
+        return
+
+    try:
+        cached_atoms = calculator.atoms
+        check_state = calculator.check_state
+    except (AttributeError, TypeError):
+        return
+    if cached_atoms is None or cached_atoms is atoms or not callable(check_state):
+        return
+
+    before_atoms = atoms.copy()
+    before_atoms.positions[:] = before_positions
+    try:
+        if check_state(before_atoms):
+            return
+        cached_atoms.positions[:] = after_positions
+    except (AttributeError, TypeError, ValueError):
+        # A nonstandard calculator owns its cache representation.  Recomputing
+        # is slower but safe, while guessing how to mutate it is not.
+        return
+
+
 def execute_single_point(
     atoms,
     calculator,
@@ -356,7 +398,7 @@ def execute_md(
         )
         if observer is not None:
             observer.on_step(atoms, fallback_step, context)
-        atoms.wrap()
+        _wrap_atoms_preserving_calculator_cache(atoms)
         common = _build_result(atoms, calculator, potential_energy)
         result = MDResult(
             atoms=common.atoms,
@@ -433,7 +475,7 @@ def execute_md(
 
         for step_index in range(1, config.steps + 1):
             dyn.run(1)
-            atoms.wrap()
+            _wrap_atoms_preserving_calculator_cache(atoms)
             potential_energy = float(atoms.get_potential_energy())
             kinetic_energy = root._extract_numeric_attribute(atoms, ("get_kinetic_energy",))
             thermostat_potential, thermostat_kinetic = root._thermostat_energy_terms(dyn)
@@ -472,7 +514,7 @@ def execute_md(
         if observer is not None:
             observer.on_step(atoms, fallback_step, context)
 
-    atoms.wrap()
+    _wrap_atoms_preserving_calculator_cache(atoms)
     common = _build_result(atoms, calculator, recorded_steps[-1].potential_energy)
     result = MDResult(
         atoms=common.atoms,

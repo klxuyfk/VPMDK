@@ -43,6 +43,10 @@ calculator evaluation.
 - A legacy-selection smoke test completed a Si single point with PFP `v7.0.0`
   and no explicit calc mode (`-9.101191427963512 eV`), confirming that VPMDK
   leaves nondefault model versions on their compatible upstream mode default.
+- A boundary-crossing one-step NVE smoke test counted two PFP calculator
+  evaluations (the required initial and final forces) while retaining wrapped
+  final coordinates; reading the final energy after `Atoms.wrap()` no longer
+  issues a third, physically duplicate request.
 - The Si2 smoke structure completed a one-step NVE MD run and a two-step-limit
   force relaxation through the VASP-style work-directory path.
 - A resident Matlantis server completed two inherited-configuration requests
