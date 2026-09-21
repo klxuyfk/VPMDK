@@ -42,18 +42,20 @@ def _build_result(atoms, calculator, potential_energy: float) -> CalculationResu
 
 
 def _wrap_atoms_preserving_calculator_cache(atoms) -> None:
-    """Wrap periodic positions without invalidating an equivalent ASE result.
+    """Wrap periodic positions, preserving only a known-invariant ASE result.
 
     ASE calculators remember a copy of the coordinates used for their latest
     result and compare that copy with ``atoms`` on every property read.  A
     periodic wrap changes Cartesian coordinates by lattice vectors, so the
-    exact comparison normally triggers another backend calculation even though
-    energy, forces, and stress are unchanged.  When the calculator confirms
-    that its cached state matches the pre-wrap atoms, move only that cached
-    coordinate snapshot by the same periodic translations.
+    exact comparison normally triggers another backend calculation.  For the
+    official Matlantis calculator, whose PFP result is periodic-image
+    invariant, move its cached coordinate snapshot by the same translations.
 
-    Calculators without the standard ASE state interface keep the conservative
-    behavior: their cache is left untouched and they may recalculate.
+    Other calculators keep the conservative behavior unless they explicitly
+    opt in with ``_vpmdk_periodic_translation_invariant = True``.  This matters
+    for otherwise valid custom calculators with absolute-coordinate external
+    fields: their energy and forces really do change when positions are
+    wrapped, so reusing their pre-wrap result would be incorrect.
     """
 
     calculator = getattr(atoms, "calc", None)
@@ -61,6 +63,29 @@ def _wrap_atoms_preserving_calculator_cache(atoms) -> None:
     atoms.wrap()
     after_positions = np.asarray(atoms.get_positions(), dtype=float)
     if np.array_equal(before_positions, after_positions) or calculator is None:
+        return
+
+    # MD temporarily installs VPMDK's divergence guard around the user's
+    # calculator.  Unwrap that one known internal layer before deciding whether
+    # the underlying implementation guarantees periodic-image invariance.
+    invariant_calculator = getattr(
+        calculator, "_vpmdk_inner_calculator", calculator
+    )
+    invariance_marker = "_vpmdk_periodic_translation_invariant"
+    try:
+        instance_opt_in = vars(invariant_calculator).get(invariance_marker) is True
+    except TypeError:
+        instance_opt_in = False
+    explicitly_invariant = (
+        instance_opt_in
+        or type(invariant_calculator).__dict__.get(invariance_marker) is True
+    )
+    matlantis_calculator_type = getattr(_root(), "MatlantisASECalculator", None)
+    is_official_matlantis = (
+        isinstance(matlantis_calculator_type, type)
+        and type(invariant_calculator) is matlantis_calculator_type
+    )
+    if not (explicitly_invariant or is_official_matlantis):
         return
 
     try:
