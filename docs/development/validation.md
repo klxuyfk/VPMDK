@@ -20,6 +20,62 @@ not a benchmark-quality comparison against reference DFT data.  Blocked entries
 record adapter behavior or missing public artifacts rather than successful
 calculator evaluation.
 
+## 2026-10-26 BAM GPU Validation
+
+- Hardware/environment: NVIDIA TITAN V (CUDA device 0), Python 3.13.5,
+  PyTorch 2.8.0+cu128, ASE 3.29.0, pymatgen 2026.10.24. Separate virtual
+  environments used e3nn 0.5.6 for the original BAM runtime and e3nn 0.6.0
+  for the DeNS runtime. Optional cuEquivariance/OpenEquivariance kernels
+  were not installed; inference used the upstream e3nn path on CUDA.
+- Original runtime: BAM-torch commit
+  `9329db2cec33715f89efa3f560d3e0f791b3f528`.
+  [BAM-MP-core checkpoint](https://ndownloader.figshare.com/files/65859867):
+  MD5 `0d7182820d24ab51a452d475c9e5001d`.
+- DeNS runtime: BAM-torch `BAM_DeNS` commit
+  `24ed0f042660a1e11ad5d91466b4275955df98c6`.
+  [BAM-MP-DeNS checkpoint](https://ndownloader.figshare.com/files/70285206):
+  MD5 `06f303110248a263f9ea2f4d2775af93`.
+  Both hashes match the Matbench model notes.
+- All three combinations passed: original checkpoint/original runtime,
+  DeNS checkpoint/DeNS runtime, and original checkpoint/DeNS runtime.
+  Calculator device and model parameters were checked to reside on CUDA,
+  so a CPU fallback would fail validation.
+- The VPMDK BAM builder matched direct `RACECalculator` energy, forces, and
+  stress (`rtol=1e-5`, `atol=1e-6`). For the original checkpoint, changing
+  to the DeNS runtime gave the same initial energy, with maximum force and
+  stress differences of `1.72e-7` eV/Å and `1.31e-8` eV/Å³.
+- Each combination completed a single point, three ionic relaxation steps,
+  and three NVE MD steps through `run_workdir`, reusing its GPU calculator.
+  Test structure: primitive diamond Si2, `a=5.43 Å`, second atom displaced
+  by `(0.025, -0.015, 0.010) Å`. Relaxation used `IBRION=2`, `ISIF=2`,
+  `POTIM=0.1`, `EDIFFG=-0.0001`, `NSW=3`; MD used `MDALGO=0`,
+  `POTIM=0.1`, `TEBEG=TEEND=300`, `NSW=3`.
+  These are short execution checks, not converged-relaxation or accuracy claims.
+- OUTCAR, OSZICAR, CONTCAR and vasprun.xml were produced for each workflow,
+  plus XDATCAR for MD. ASE read back finite energy, forces and stress from
+  vasprun.xml; MD contained three frames.
+- Independent `python -m vpmdk --dir ...` single-point runs also passed for
+  both models, loading `MLP=BAM`, the checkpoint path, and `DEVICE=cuda` from
+  BCAR without an injected calculator. GPU property integration tests passed
+  for both checkpoints on the DeNS runtime (2 tests) and for the original
+  checkpoint on the original runtime (1 test), with no skips.
+
+| Checkpoint / runtime | Initial energy (eV, Si2) | Maximum force before → after relaxation (eV/Å) |
+|---|---:|---:|
+| BAM-MP-core / original | -10.65976238 | 0.278663 → 0.005861 |
+| BAM-MP-DeNS / DeNS | -10.80325603 | 0.167946 → 0.003672 |
+| BAM-MP-core / DeNS | -10.65976238 | 0.278663 → 0.005860 |
+
+The optional checkpoint tests can reproduce the GPU property checks in a
+DeNS-capable environment with both checkpoint paths set:
+
+```bash
+VPMDK_TEST_REAL_PYMATGEN=1 VPMDK_BAM_DEVICE=cuda \
+  VPMDK_BAM_MODEL=/path/to/BAM-MP-core.pkl \
+  VPMDK_BAM_DENS_MODEL=/path/to/BAM-MP-DeNS-model.pkl \
+  python -m pytest -q tests/integration/test_bam.py -rs
+```
+
 ## 2026-09-19 Prophet Validation
 
 - Environment: Python 3.13.5, ASE 3.29.0, torch 2.8.0+cu128, e3nn 0.6.0,

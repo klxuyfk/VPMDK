@@ -827,7 +827,28 @@ def _load_incar(path: str):
 
         _sys.modules["vpmdk_core"]._require_regular_input_file(path, "INCAR")
         _reject_huge_repeat_counts(path)
-        incar = Incar.from_file(path)
+        try:
+            incar = Incar.from_file(path)
+        except (AttributeError, TypeError, ValueError) as exc:
+            # Older pymatgen fails inside its numeric regex conversion for
+            # e.g. NSW=not-a-number, without naming the offending input.
+            # Diagnose known numeric tags from the original text; preserve
+            # other parser errors and never replace a failed parse with defaults.
+            for key, value in _raw_incar_assignments(
+                path, continuation_values=True
+            ).items():
+                tokens = value.split()
+                if key not in _SCALAR_NUMERIC_INCAR_TAGS or not tokens:
+                    continue
+                token = tokens[0]
+                normalized = _FORTRAN_EXPONENT_RE.sub("E", token.rstrip(","), count=1)
+                try:
+                    float(normalized)
+                except ValueError:
+                    raise ValueError(
+                        f"INCAR tag {key} requires a number; got {token!r}."
+                    ) from exc
+            raise
         _repair_mistyped_real_tags(incar, path)
         _reject_swallowed_incar_tags(incar, path)
         _reject_truncated_integer_tags(incar, path)

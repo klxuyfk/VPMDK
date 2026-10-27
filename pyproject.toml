@@ -19,9 +19,9 @@ classifiers = [
   "Operating System :: OS Independent",
 ]
 dependencies = [
-  "ase",
+  "ase>=3.25.0",
   "numpy",
-  "pymatgen",
+  "pymatgen>=2025.4.20",
 ]
 
 [project.optional-dependencies]

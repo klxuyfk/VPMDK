@@ -12,6 +12,53 @@ from pymatgen.io.vasp import Incar
 import vpmdk
 
 
+@pytest.mark.parametrize("error_type", [AttributeError, TypeError, ValueError])
+@pytest.mark.parametrize(
+    "text, tag, value",
+    [
+        ("NSW = not-a-number\n", "NSW", "not-a-number"),
+        ("IBRION = 0; POTIM = invalid\n", "POTIM", "invalid"),
+    ],
+)
+def test_load_incar_diagnoses_legacy_numeric_parser_errors(
+    tmp_path: Path, monkeypatch, error_type: type[Exception], text: str, tag: str, value: str
+):
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text(text)
+    parser_error = error_type("internal numeric conversion failed")
+
+    def fail_parse(path):
+        raise parser_error
+
+    monkeypatch.setattr(incar_module.Incar, "from_file", fail_parse)
+    with pytest.raises(ValueError, match=f"{tag}.*{value}") as excinfo:
+        vpmdk._load_incar(str(path))
+    assert excinfo.value.__cause__ is parser_error
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["SYSTEM = not-a-number\n", "NSW = 2\n", "POTIM = 1D-1,\n"],
+)
+def test_load_incar_preserves_unrelated_parser_errors(
+    tmp_path: Path, monkeypatch, text: str
+):
+    from vpmdk_core.settings import incar as incar_module
+
+    path = tmp_path / "INCAR"
+    path.write_text(text)
+    parser_error = ValueError("unrelated parser failure")
+
+    def fail_parse(path):
+        raise parser_error
+
+    monkeypatch.setattr(incar_module.Incar, "from_file", fail_parse)
+    with pytest.raises(ValueError) as excinfo:
+        vpmdk._load_incar(str(path))
+    assert excinfo.value is parser_error
+
 def test_incar_parsing_handles_case_whitespace_and_comments(tmp_path: Path):
     incar_content = """
     ! leading comment
