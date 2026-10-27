@@ -14,14 +14,24 @@ Or from a repository checkout:
 pip install -e .
 ```
 
-Core runtime dependencies declared by the package are:
+VPMDK requires Python 3.10 or newer. Core runtime dependencies declared by
+the package are:
 
-- `ase`
+- `ase>=3.25.0`
 - `numpy`
-- `pymatgen`
+- `pymatgen>=2025.4.20`
 
 These are enough to parse VASP-style inputs, expose the public API, and run the
 test suite stubs, but not enough to execute most production force fields.
+
+These minimum versions cover the core runtime; individual potential packages
+may impose newer or conflicting requirements. CI also tests Python 3.10 with
+ASE 3.25.0 and real pymatgen 2025.4.20 (NumPy 1.26.4).
+
+For external analysis of `vasprun.xml` with nonzero `PSTRESS`, use ASE 3.28.0
+or newer: earlier ASE readers return energy including the PV term. This does
+not affect VPMDK's calculations or its own NEB result reader. The ASE
+readback test is skipped on older versions; output-format checks still run.
 
 ## CLI Entry Points
 

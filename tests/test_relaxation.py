@@ -1183,13 +1183,11 @@ def test_vasprun_echoes_the_requested_nsw_not_the_step_count(
     assert len(tree.findall(".//calculation")) == 3
 
 
-def test_pstress_vasprun_energy_carries_pv_term_and_declares_pstress(
+@pytest.fixture
+def pstress_relaxation_output(
     tmp_path: Path, load_atoms
-):
-    import xml.etree.ElementTree as ET
-
-    import ase.io
-
+) -> tuple[Path, float, float]:
+    """Generate pressure-dependent output for writer and reader checks."""
     atoms = load_atoms()
     pstress_kbar = 500.0
     energy_ev = -1.25
@@ -1230,6 +1228,13 @@ def test_pstress_vasprun_energy_carries_pv_term_and_declares_pstress(
         monkeypatch.undo()
 
     pv_term = pstress_kbar * vpmdk.KBAR_TO_EV_PER_A3 * atoms.get_volume()
+    return tmp_path, energy_ev, pv_term
+
+
+def test_pstress_vasprun_energy_carries_pv_term_and_declares_pstress(
+    pstress_relaxation_output: tuple[Path, float, float],
+):
+    tmp_path, energy_ev, pv_term = pstress_relaxation_output
     tree = ET.parse(tmp_path / "vasprun.xml")
     calc_e = float(tree.find(".//calculation/energy/i[@name='e_fr_energy']").text)
     scstep_e = float(
@@ -1240,12 +1245,24 @@ def test_pstress_vasprun_energy_carries_pv_term_and_declares_pstress(
     # PSTRESS is declared in BOTH blocks (ASE reads parameters, lowercased).
     assert tree.find(".//incar/i[@name='PSTRESS']") is not None
     assert tree.find(".//parameters//i[@name='PSTRESS']") is not None
-    # And the documented ASE consumer round-trips back to the plain energy.
-    restored = ase.io.read(str(tmp_path / "vasprun.xml"))
-    assert restored.get_potential_energy() == pytest.approx(energy_ev, abs=1e-5)
     # OSZICAR keeps the plain E, like real VASP.
     oszicar = (tmp_path / "OSZICAR").read_text()
     assert "E0=  -.12500000E+01" in oszicar
+
+
+def test_pstress_vasprun_ase_readback_recovers_plain_energy(
+    pstress_relaxation_output: tuple[Path, float, float],
+):
+    pytest.importorskip(
+        "ase",
+        minversion="3.28.0",
+        reason="ASE < 3.28 does not subtract PSTRESS*V when reading vasprun.xml (ASE MR 2685)",
+    )
+    import ase.io
+
+    tmp_path, energy_ev, _ = pstress_relaxation_output
+    restored = ase.io.read(str(tmp_path / "vasprun.xml"))
+    assert restored.get_potential_energy() == pytest.approx(energy_ev, abs=1e-5)
 
 
 def test_neb_vasprun_readback_undoes_pstress_transformations(tmp_path: Path):
