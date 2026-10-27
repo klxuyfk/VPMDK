@@ -33,7 +33,7 @@ is also an error.
 | `NEQUIX` | `nequix` / `NequixCalculator` | local model file or named model | `nequix-mp-1` | `NEQUIX_BACKEND`, kernel/compile tags; names are checked against `URLS` when exposed, otherwise forwarded to the upstream runtime |
 | `SEVENNET` | `sevenn` / `SevenNetCalculator` | local checkpoint / torchscript or named model | `7net-0` | `SEVENNET_FILE_TYPE`, `SEVENNET_MODAL`, accelerator tags |
 | `FLASHTP` | `sevenn` + `flashTP_e3nn` | same as SevenNet, but checkpoint mode for flash acceleration | `7net-0` | forces flash acceleration and rejects conflicting accelerator flags |
-| `BAM` | `bam-torch` / `RACECalculator` | required local checkpoint file, e.g. the published `BAM-MP-core.pkl` from Hugging Face `myung-group/BAM_MPtrj_v1` | none | `MODEL` required, `DEVICE`; no named-model downloader exists upstream |
+| `BAM` | `bam-torch` / `RACECalculator` | required local checkpoint file: `BAM-MP-core.pkl` or `BAM-MP-DeNS-model.pkl` | none | `MODEL` required, `DEVICE`; DeNS requires the upstream `BAM_DeNS` version (see below) |
 | `NEQUIP` | `nequip` / `NequIPCalculator` | required local deployed or compiled model file | none | `MODEL` required |
 | `ALLEGRO` | `allegro` + `nequip` / `NequIPCalculator` | required local deployed or compiled model file | none | `MODEL` required |
 | `ORB` | `orb-models` / `ORBCalculator` | optional local weights path plus optional ORB model key | `orb-v3-conservative-20-omat` | `ORB_MODEL`, `ORB_PRECISION`, `ORB_COMPILE` |
@@ -61,6 +61,51 @@ entrypoint below.
 | EquFlash / EquFlashV2 checkpoints | `EQUFLASH` | official GGNN `UCalculator` | Set `MODEL` to a downloaded upstream `.pt` checkpoint. This is not the SevenNet `FLASHTP` runtime path. |
 | Allegro deployed/compiled models | `ALLEGRO` | NequIP `NequIPCalculator` | The runtime calculator class is shared with NequIP, but use `MLP=ALLEGRO` for Allegro artifacts. |
 | MatGL / M3GNet checkpoints | `MATGL` or `M3GNET` | MatGL or legacy M3GNet calculator | Both names route to the same VPMDK builder. |
+
+## BAM-MP-core and BAM-MP-DeNS
+
+Both models use `MLP = BAM` and
+`bam_torch.tase.base_calculator.RACECalculator(model=..., device=...)`.
+Existing BAM installations and BCAR files remain supported. There is no new
+MLP tag, filename-based architecture detection, or automatic checkpoint download.
+
+For BAM-MP-DeNS, install the DeNS-capable upstream implementation in your
+VPMDK environment. The [Matbench model specification](https://github.com/janosh/matbench-discovery/blob/main/models/bam/bam-mp-dens.yml)
+pins the following commit on the `BAM_DeNS` branch:
+
+```bash
+python -m pip install "bam-torch @ git+https://github.com/myung-group/BAM-torch@24ed0f042660a1e11ad5d91466b4275955df98c6"
+curl -L --fail https://ndownloader.figshare.com/files/70285206 -o BAM-MP-DeNS-model.pkl
+```
+
+This installs the same `bam-torch` package, replacing its installed version;
+use a separate environment if you need to retain a particular legacy BAM runtime.
+The DeNS commit above was also tested with the original BAM-MP-core checkpoint
+on GPU; see the [validation record](../development/validation.md#2026-10-26-bam-gpu-validation)
+for the exact checkpoints, environments, and results.
+The [upstream model notes](https://github.com/janosh/matbench-discovery/blob/main/models/bam/readme-bam-mp-dens.md)
+explain why the DeNS checkpoint requires this implementation. A successful import
+of a standard BAM calculator alone does not establish DeNS compatibility.
+
+Set BCAR to:
+
+```ini
+MLP = BAM
+MODEL = /absolute/path/to/BAM-MP-DeNS-model.pkl
+DEVICE = cpu
+```
+
+Use `DEVICE = cuda` for GPU execution. For the original model, continue using
+your existing BAM environment and `MODEL = /absolute/path/to/BAM-MP-core.pkl`.
+Checkpoint loading and architecture selection are handled by BAM-torch; VPMDK
+does not rewrite checkpoint settings or retry with another model.
+
+Optional real-checkpoint tests accept `VPMDK_BAM_MODEL` (core) and
+`VPMDK_BAM_DENS_MODEL` (DeNS), with `VPMDK_BAM_DEVICE` defaulting to `cpu`:
+
+```bash
+VPMDK_BAM_DENS_MODEL=/absolute/path/to/BAM-MP-DeNS-model.pkl pytest -m integration tests/integration/test_bam.py
+```
 
 ## Capability Metadata
 

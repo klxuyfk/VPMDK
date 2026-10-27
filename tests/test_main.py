@@ -5680,7 +5680,12 @@ def test_stress_gate_keys_on_the_actual_neb_branch(tmp_path, prepare_inputs, mon
     vpmdk.run_workdir(str(tmp_path), calculator=DummyCalculator())
 
 
-def test_bam_builder_requires_local_model_and_forwards_device(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "checkpoint_name", ["BAM-MP-core.pkl", "BAM-MP-DeNS-model.pkl", "renamed.pkl"]
+)
+def test_bam_builder_requires_local_model_and_forwards_device(
+    tmp_path, monkeypatch, checkpoint_name: str
+):
     # BAM-torch ships checkpoints (e.g. the published BAM-MP-core.pkl) as
     # plain local files with no named-model downloader, so MODEL is a
     # required local path like the NequIP/Allegro rule, and the builder
@@ -5698,7 +5703,7 @@ def test_bam_builder_requires_local_model_and_forwards_device(tmp_path, monkeypa
     with pytest.raises(ValueError, match="MODEL"):
         vpmdk._build_bam_calculator({"MLP": "BAM"})
 
-    checkpoint = tmp_path / "BAM-MP-core.pkl"
+    checkpoint = tmp_path / checkpoint_name
     checkpoint.write_text("dummy")
 
     vpmdk._build_bam_calculator(
@@ -5711,7 +5716,7 @@ def test_bam_builder_requires_local_model_and_forwards_device(tmp_path, monkeypa
     assert seen == {"model": str(checkpoint), "device": None}
 
     monkeypatch.setattr(vpmdk, "BAMCalculator", None)
-    with pytest.raises(RuntimeError, match="bam-torch"):
+    with pytest.raises(RuntimeError, match="bam-torch.*BAM_DeNS.*24ed0f0"):
         vpmdk._build_bam_calculator({"MLP": "BAM", "MODEL": str(checkpoint)})
 
 
