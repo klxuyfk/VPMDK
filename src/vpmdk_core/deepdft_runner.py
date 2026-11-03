@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from itertools import product
 from pathlib import Path
 
 import numpy as np
@@ -100,7 +101,14 @@ def _load_model(model_dir: Path, device: str, densitymodel_module, torch_module)
 
     torch_device = torch_module.device(device)
     model.to(torch_device)
-    state_dict = torch_module.load(checkpoint_path, map_location=torch_device)
+    # Published checkpoints include training metadata (e.g. argparse.Namespace).
+    # As with the model source, CHARGE_MODEL must come from a trusted source.
+    try:
+        state_dict = torch_module.load(
+            checkpoint_path, map_location=torch_device, weights_only=False
+        )
+    except TypeError:
+        state_dict = torch_module.load(checkpoint_path, map_location=torch_device)
     parameters = state_dict["model"] if isinstance(state_dict, dict) and "model" in state_dict else state_dict
     model.load_state_dict(parameters)
     model.eval()
@@ -163,25 +171,59 @@ def _grid_points(cell: np.ndarray, grid_shape: tuple[int, int, int]) -> np.ndarr
     return fractional @ cell
 
 
-def _probes_to_graph(atoms, probe_positions: np.ndarray, cutoff: float):
-    probe_atoms = Atoms(
-        numbers=np.zeros(len(probe_positions), dtype=np.int64),
-        positions=np.asarray(probe_positions, dtype=float),
-        cell=atoms.get_cell(),
-        pbc=atoms.get_pbc(),
+# Bound temporary distance arrays independently of the atom/probe batch sizes.
+_MAX_PROBE_PAIRS = 262_144
+
+
+def _probes_to_graph(
+    atoms: Atoms, probe_positions: np.ndarray, cutoff: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Find only atom–probe edges, including every periodic image in range."""
+    probes = np.asarray(probe_positions, dtype=float).reshape(-1, 3)
+    positions = np.asarray(atoms.positions, dtype=float)
+    empty = (np.zeros((0, 2), dtype=np.int64), np.zeros((0, 3), dtype=np.float32))
+    if not len(probes) or not len(positions) or cutoff <= 0:
+        return empty
+
+    # Complete missing nonperiodic vectors, as ASE does for slab/molecule cells.
+    cell = np.asarray(atoms.cell.complete(), dtype=float)
+    reciprocal = np.linalg.inv(cell)
+    pbc = np.asarray(atoms.pbc, dtype=bool)
+    atom_wrap = np.floor(positions @ reciprocal).astype(np.int64) * pbc
+    probe_wrap = np.floor(probes @ reciprocal).astype(np.int64) * pbc
+    positions = positions - atom_wrap @ cell
+    probes = probes - probe_wrap @ cell
+    # Reciprocal-vector norms give inverse face separations even for skew cells.
+    counts = np.ceil(cutoff * np.linalg.norm(reciprocal, axis=0)).astype(int)
+    ranges = [
+        range(-n, n + 1) if periodic else range(1)
+        for n, periodic in zip(counts, pbc)
+    ]
+    edge_chunks, shift_chunks = [], []
+    atom_chunk = min(len(positions), _MAX_PROBE_PAIRS)
+    probe_chunk = max(1, _MAX_PROBE_PAIRS // atom_chunk)
+    for offset in product(*ranges):
+        shift = np.asarray(offset, dtype=np.int64)
+        translation = shift @ cell
+        for atom_start in range(0, len(positions), atom_chunk):
+            images = positions[atom_start:atom_start + atom_chunk] + translation
+            for start in range(0, len(probes), probe_chunk):
+                delta = images[None, :, :] - probes[start:start + probe_chunk, None, :]
+                distance_sq = np.einsum("ijk,ijk->ij", delta, delta)
+                probe_index, atom_index = np.nonzero(distance_sq < cutoff ** 2)
+                if not probe_index.size:
+                    continue
+                atom_index += atom_start
+                probe_index += start
+                edge_chunks.append(np.stack((atom_index, probe_index), axis=1))
+                # Restore image shifts relative to the original, unwrapped input.
+                shift_chunks.append(shift - atom_wrap[atom_index] + probe_wrap[probe_index])
+    if not edge_chunks:
+        return empty
+    return (
+        np.concatenate(edge_chunks).astype(np.int64, copy=False),
+        np.concatenate(shift_chunks).astype(np.float32, copy=False),
     )
-    atoms_with_probes = atoms.copy()
-    atoms_with_probes.extend(probe_atoms)
-    src, dst, shifts = neighbor_list("ijS", atoms_with_probes, cutoff)
-    atom_count = len(atoms)
-    mask = (src >= atom_count) & (dst < atom_count)
-    if np.any(mask):
-        edges = np.stack((dst[mask], src[mask] - atom_count), axis=1).astype(np.int64, copy=False)
-        displacements = np.asarray(shifts[mask], dtype=np.float32)
-    else:
-        edges = np.zeros((0, 2), dtype=np.int64)
-        displacements = np.zeros((0, 3), dtype=np.float32)
-    return edges, displacements
 
 
 def _probe_batch(probe_positions: np.ndarray, atoms, cutoff: float, torch_module):
