@@ -172,7 +172,23 @@ CHARGE_MODEL=/path/to/deepdft-model-dir
 as `arguments.json` and `best_model.pth`. Passing `best_model.pth` directly is
 also accepted; VPMDK normalizes that to the parent directory.
 
+Probe neighbors are computed directly between grid points and periodic atom
+images, avoiding the unnecessary grid-point pairs that made dense grids slow.
+Temporary distance arrays are processed in bounded blocks; triclinic cells,
+mixed periodicity, and coordinates outside the cell are supported.
+
+Published DeepDFT checkpoints include training metadata, so VPMDK explicitly
+loads them with `weights_only=False` (with compatibility for older PyTorch).
+Use trusted model checkpoints and source code for `CHARGE_MODEL` and
+`CHARGE_SOURCE_DIR`.
+
 ## DeepCDP
+
+SOAP descriptors query atomic neighbors at the probe centers without adding
+probes as atoms. Descriptor generation and inference run in probe batches.
+As with DeepDFT and ChargE3Net, load only trusted checkpoints: VPMDK uses
+`weights_only=False` to support checkpoints containing training metadata,
+with a fallback for older PyTorch versions.
 
 Complete example without relying on metadata inference:
 

@@ -228,6 +228,15 @@ class _DeepCDPNetwork:
         return self.layers(inputs)
 
 
+def _torch_load_checkpoint(torch_module, path: Path, *, map_location) -> Any:
+    # Wrapped checkpoints may include training metadata as well as tensors.
+    # CHARGE_MODEL must therefore refer to a trusted checkpoint.
+    try:
+        return torch_module.load(path, map_location=map_location, weights_only=False)
+    except TypeError:
+        return torch_module.load(path, map_location=map_location)
+
+
 def _extract_state_dict(payload: Any) -> dict[str, Any]:
     if isinstance(payload, dict):
         for key in ("model_state_dict", "state_dict"):
@@ -295,7 +304,7 @@ def _predict_density(
 
     torch_module, soap_cls = _load_modules(source_dir)
     device = _resolve_device_argument(device_arg, torch_module)
-    checkpoint = torch_module.load(checkpoint_path, map_location=device)
+    checkpoint = _torch_load_checkpoint(torch_module, checkpoint_path, map_location=device)
     state_dict = _extract_state_dict(checkpoint)
     model = _build_network(state_dict, config["activation"], torch_module)
     model.to(device)

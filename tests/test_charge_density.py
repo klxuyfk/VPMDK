@@ -1410,3 +1410,43 @@ def test_missing_charge_python_interpreter_is_an_input_error(
 
     with pytest.raises(vpmdk.WorkdirInputError, match="interpreter not found"):
         charge_density_module._run_charge3net_backend(atoms, grid_shape=(2, 2, 2))
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("wrapper", [None, "state_dict", "model_state_dict"])
+def test_deepcdp_checkpoint_loads_training_metadata(legacy, wrapper):
+    parameters = {"0.weight": np.ones((1, 2))}
+    checkpoint = parameters if wrapper is None else {
+        wrapper: parameters, "args": SimpleNamespace(seed=42),
+    }
+    calls = []
+
+    def load(path, *, map_location, **kwargs):
+        assert path == Path("model.pt")
+        assert map_location == "cpu"
+        calls.append(kwargs)
+        if legacy and "weights_only" in kwargs:
+            raise TypeError("unexpected keyword argument 'weights_only'")
+        if not legacy:
+            assert kwargs == {"weights_only": False}
+        return checkpoint
+
+    loaded = deepcdp_runner_module._torch_load_checkpoint(
+        SimpleNamespace(load=load), Path("model.pt"), map_location="cpu",
+    )
+    assert deepcdp_runner_module._extract_state_dict(loaded) is parameters
+    assert calls == ([{"weights_only": False}, {}] if legacy else [{"weights_only": False}])
+
+
+def test_deepcdp_checkpoint_does_not_retry_corrupt_file():
+    calls = []
+
+    def load(*args, **kwargs):
+        calls.append(kwargs)
+        raise RuntimeError("corrupt checkpoint")
+
+    with pytest.raises(RuntimeError, match="corrupt checkpoint"):
+        deepcdp_runner_module._torch_load_checkpoint(
+            SimpleNamespace(load=load), Path("model.pt"), map_location="cpu",
+        )
+    assert len(calls) == 1
