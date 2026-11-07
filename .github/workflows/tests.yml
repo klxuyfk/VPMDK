@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+env:
+  MKL_NUM_THREADS: "1"
+  OMP_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+
 jobs:
   unit-tests:
     name: Unit tests (Python ${{ matrix.python-version }})
@@ -88,8 +93,6 @@ jobs:
 
       - name: Run CHGNet CPU smoke test
         env:
-          MKL_NUM_THREADS: "1"
-          OMP_NUM_THREADS: "1"
           VPMDK_REQUIRE_CHGNET_SMOKE: "1"
           VPMDK_TEST_REAL_PYMATGEN: "1"
         run: python -m pytest -m "integration and backend_smoke" -rs
