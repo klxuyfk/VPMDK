@@ -1,0 +1,6 @@
+[check] loading package ...
+[check] mptraj/energy: max_abs_per_atom=1.192e-07 eV/atom (atol=2e-5, rtol=0)
+[check] mptraj/forces: max_abs=2.426e-06
+[check] mptraj/stress: max_abs=8.089e-08
+Verified AOTI package: /home/nei/.cache/vpmdk/mace-soyo/mace_soyo_mptraj-sm70-cueq061.pt2
+Export report: /home/nei/.cache/vpmdk/mace-soyo/mace_soyo_mptraj-sm70-cueq061.pt2.json

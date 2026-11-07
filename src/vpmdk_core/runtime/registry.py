@@ -18,11 +18,13 @@ _SIMPLE_CALCULATORS: Dict[str, tuple[str, str]] = {}
 
 
 _CALCULATOR_BUILDERS: Dict[str, str] = {
+    "ALIGNN": "_build_alignn_calculator",
     "BAM": "_build_bam_calculator",
     "CHGNET": "_build_chgnet_calculator",
     "MATGL": "_build_m3gnet_calculator",
     "M3GNET": "_build_m3gnet_calculator",
     "MACE": "_build_mace_calculator",
+    "MACE_SOYO": "_build_mace_soyo_calculator",
     "PROPHET": "_build_prophet_calculator",
     "MATTERSIM": "_build_mattersim_calculator",
     "EQNORM": "_build_eqnorm_calculator",

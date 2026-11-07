@@ -9,6 +9,8 @@ and does not include calculation output.
 
 ## Examples
 
+- `mace_soyo_si`: CUDA MACE-SOYO checkpoint inference, optional AOTI export and Si relaxation
+- `alignn_si`: ALIGNN-FF Si relaxation with a public checkpoint; static and MD variants documented
 - `relax_chgnet`: ionic relaxation with CHGNet
 - `md_mace`: short MD run with MACE
 - `neb_nequip_vtst`: NEB-style run with NequIP + VTST `nebresults.pl`

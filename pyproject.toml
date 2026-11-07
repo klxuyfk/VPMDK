@@ -37,6 +37,7 @@ Documentation = "https://github.com/klxuyfk/VPMDK#readme"
 
 [project.scripts]
 vpmdk = "vpmdk_entry:main"
+vpmdk-mace-soyo-export = "vpmdk_core.mace_soyo_export:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

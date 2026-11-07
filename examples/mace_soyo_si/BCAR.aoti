@@ -1,0 +1,4 @@
+MLP = MACE_SOYO
+MODEL = ./model.pt2
+DEVICE = cuda:0
+MACE_SOYO_HEAD = mptraj
