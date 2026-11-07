@@ -1,0 +1,156 @@
+{
+  "0.4.0": {
+    "wheel": "cuequivariance_ops_cu12-0.4.0-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl",
+    "wheel_sha256": "ae72161faffb0e58402b12c870f180b6e04dc9fe58bd90add1915f381e9f9e30",
+    "cubin": [
+      "sm_70",
+      "sm_75",
+      "sm_80",
+      "sm_86",
+      "sm_89",
+      "sm_90"
+    ],
+    "ptx": [
+      "sm_90"
+    ]
+  },
+  "0.5.0": {
+    "wheel": "cuequivariance_ops_cu12-0.5.0-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl",
+    "wheel_sha256": "fabb6de9b0c20f4767a91813f0a20e268dadd3f820743a4d5f854b3306b96abf",
+    "cubin": [
+      "sm_100",
+      "sm_120",
+      "sm_70",
+      "sm_75",
+      "sm_80",
+      "sm_86",
+      "sm_89",
+      "sm_90"
+    ],
+    "ptx": [
+      "sm_100",
+      "sm_120"
+    ]
+  },
+  "0.5.1": {
+    "wheel": "cuequivariance_ops_cu12-0.5.1-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl",
+    "wheel_sha256": "1edae1f6920f12f988cb5d42f410c1483a9e248dfd9f67815f43906c834fc8c4",
+    "cubin": [
+      "sm_100",
+      "sm_120",
+      "sm_70",
+      "sm_75",
+      "sm_80",
+      "sm_86",
+      "sm_89",
+      "sm_90"
+    ],
+    "ptx": [
+      "sm_100",
+      "sm_120"
+    ]
+  },
+  "0.6.1": {
+    "wheel": "cuequivariance_ops_cu12-0.6.1-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl",
+    "wheel_sha256": "b0c32e5b14ac231af252bcd09b0e0bd8ea43339633e26f1d39b86be621dc590e",
+    "cubin": [
+      "sm_100",
+      "sm_120",
+      "sm_70",
+      "sm_75",
+      "sm_80",
+      "sm_86",
+      "sm_89",
+      "sm_90"
+    ],
+    "ptx": [
+      "sm_100",
+      "sm_120"
+    ]
+  },
+  "0.7.0": {
+    "wheel": "cuequivariance_ops_cu12-0.7.0-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl",
+    "wheel_sha256": "343dba087fb86fe38b25e6e0c90490ef397b415d248ede40d4d3cc899bb30bde",
+    "cubin": [
+      "sm_100",
+      "sm_120",
+      "sm_75",
+      "sm_80",
+      "sm_86",
+      "sm_89",
+      "sm_90"
+    ],
+    "ptx": [
+      "sm_100",
+      "sm_120"
+    ]
+  },
+  "0.9.1": {
+    "wheel": "cuequivariance_ops_cu12-0.9.1-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl",
+    "wheel_sha256": "5af92f91dc9b8f5a13ab34e1d6e2809a22952c33d8b5dc0ff7ff70157495fd54",
+    "cubin": [
+      "sm_100",
+      "sm_120",
+      "sm_75",
+      "sm_80",
+      "sm_86",
+      "sm_89",
+      "sm_90"
+    ],
+    "ptx": [
+      "sm_100",
+      "sm_120"
+    ]
+  },
+  "0.11.1": {
+    "wheel": "cuequivariance_ops_cu12-0.11.1-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl",
+    "wheel_sha256": "dfb05a8a87ba657e5aa0019a27ceaccfd0152c69646ce5039bcc9eafc9fc0c33",
+    "cubin": [
+      "sm_100",
+      "sm_120",
+      "sm_75",
+      "sm_80",
+      "sm_86",
+      "sm_89",
+      "sm_90"
+    ],
+    "ptx": [
+      "sm_100",
+      "sm_120"
+    ]
+  },
+  "0.12.0": {
+    "source": "installed standard reference environment",
+    "library_sha256": "0eab3856eaeb330ac24453e9a88ad9ec3f8b7e1c24b275343d18e19a8a9256af",
+    "cubin": [
+      "sm_100",
+      "sm_120",
+      "sm_75",
+      "sm_80",
+      "sm_86",
+      "sm_89",
+      "sm_90"
+    ],
+    "ptx": [
+      "sm_100",
+      "sm_120"
+    ]
+  },
+  "0.13.0": {
+    "wheel": "cuequivariance_ops_cu12-0.13.0-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl",
+    "wheel_sha256": "54fcc31a63b0768946d6ccb83580796dec50de6c795a78022436ca9f47e1bdd2",
+    "cubin": [
+      "sm_100",
+      "sm_120",
+      "sm_75",
+      "sm_80",
+      "sm_86",
+      "sm_89",
+      "sm_90"
+    ],
+    "ptx": [
+      "sm_100",
+      "sm_120"
+    ]
+  }
+}

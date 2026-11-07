@@ -23,3 +23,9 @@ examples/**/*.lammpstrj
 examples/**/*.sock
 examples/**/*.sock.log
 examples/**/*.sock.pid
+
+# Locally exported MACE-SOYO package for the example's target GPU.
+examples/mace_soyo_si/model.pt2
+examples/mace_soyo_si/model.pth
+
+examples/mace_soyo_si/model.pt2.json

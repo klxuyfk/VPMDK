@@ -446,6 +446,8 @@ from .backends.alphanet import (
     _load_alphanet_config,
     _resolve_alphanet_named_model_spec,
 )
+from .backends.alignn import _build_alignn_calculator, _get_alignn_calculator_cls
+from .backends.mace_soyo import _build_mace_soyo_calculator, _get_mace_soyo_calculator_cls
 from .backends.bam import _build_bam_calculator
 from .backends.chgnet import _build_chgnet_calculator, _load_chgnet_model
 from .backends.eqnorm import (

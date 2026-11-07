@@ -1,0 +1,5 @@
+MLP = MACE_SOYO
+MODEL = ./model.pth
+DEVICE = cuda:0
+MACE_SOYO_HEAD = mptraj
+MACE_SOYO_CUEQ_METHOD = naive

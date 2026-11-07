@@ -1,0 +1,51 @@
+{
+  "upstream_commit": "3c39bc7e8b7d33c269a1b2f9127988f72a55b9a2",
+  "head": "mptraj",
+  "device": "cuda:0",
+  "gpu": "NVIDIA TITAN V",
+  "python": "3.13.5",
+  "cueq_method": "naive",
+  "cutoff": 6.0,
+  "packages": {
+    "torch": "2.12.0+cu126",
+    "MACE-SOYO": "0.1.0",
+    "cuequivariance": "0.12.0",
+    "cuequivariance-torch": "0.12.0",
+    "cuequivariance-ops-cu12": "0.12.0",
+    "cuequivariance-ops-torch-cu12": "0.12.0",
+    "nvalchemi-toolkit-ops": "0.4.1",
+    "warp-lang": "1.13.0",
+    "torch-sim-atomistic": "0.6.1",
+    "numpy": "2.5.4",
+    "ase": "3.29.0",
+    "pymatgen": "2026.10.24"
+  },
+  "sha256": {
+    "mace_soyo_mptraj.pth": "d726daf370a92d280b75c72ca8a1551007946e00eb75a2fed6200547cd0a7de3"
+  },
+  "results": {
+    "energy_ev": -10.82544207572937,
+    "forces_ev_per_a": [
+      [
+        0.3907633125782013,
+        5.927868187427521e-07,
+        1.169741153717041e-06
+      ],
+      [
+        -0.3907633125782013,
+        -5.476176738739014e-07,
+        -1.1674128472805023e-06
+      ]
+    ],
+    "stress_ev_per_a3": [
+      -0.009684843942523003,
+      -0.010048821568489075,
+      -0.010048814117908478,
+      0.007418731693178415,
+      4.537548292660176e-08,
+      2.9334144002746143e-08
+    ],
+    "force_x_finite_difference": -0.39076805114746094,
+    "stress_xx_finite_difference": -0.00968547978912453
+  }
+}
