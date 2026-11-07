@@ -91,6 +91,11 @@ jobs:
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
           python -m pip install -e ".[test]" chgnet
 
+      - name: Run optional backend adapter regressions
+        run: >-
+          python -m pytest -q -m "not integration"
+          tests/test_alignn.py tests/test_mace_soyo.py tests/test_mace_soyo_export.py
+
       - name: Run CHGNet CPU smoke test
         env:
           VPMDK_REQUIRE_CHGNET_SMOKE: "1"

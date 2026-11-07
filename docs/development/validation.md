@@ -45,6 +45,16 @@ clean Python 3.12 / ASE 3.29.0 environment. CI also fixes BLAS/OpenMP thread
 counts at one. These controls affect tests and workflow execution, leaving
 production velocity sampling and dynamics unchanged.
 
+Clean detached checkouts of the implementation commit also passed the full
+non-integration suite: **1501 passed, 43 skipped** in the minimum-dependency
+Python 3.10 environment, and **1502 passed, 42 skipped** each with latest
+dependencies on Python 3.11 and 3.12 (82 integration cases deselected).
+The skipped optional Torch tests are explicitly covered in CI's existing
+CPU-Torch/CHGNet job, which now runs the ALIGNN, MACE-SOYO and exporter unit
+files before its real CHGNet smoke calculation.
+The same focused backend/export command passed **280 tests** locally with
+CPU-configured Torch available.
+
 ## 2026-11-07 ALIGNN PBC Boundary Contract
 
 The finding reproduced with the pinned ALIGNN source and public
