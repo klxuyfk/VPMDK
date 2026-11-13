@@ -100,7 +100,7 @@ the GPU comparison. Every PBC rejection regression passed on both devices
 for each real model.
 
 The full CPU-configured regression command
-`CUDA_VISIBLE_DEVICES='' MPLCONFIGDIR=/tmp/vpmdk-mpl pytest -q -m 'not integration'`
+`CUDA_VISIBLE_DEVICES='' pytest -q -m 'not integration'`
 passed **1537 tests**, with one skipped and 82 integration cases deselected.
 `git diff --check` passed.
 
@@ -161,7 +161,7 @@ explicit layer counts, original config bytes, and the earlier rejection
 guards remain covered.
 
 The full CPU-configured regression command
-`CUDA_VISIBLE_DEVICES='' MPLCONFIGDIR=/tmp/vpmdk-mpl pytest -q -m 'not integration'`
+`CUDA_VISIBLE_DEVICES='' pytest -q -m 'not integration'`
 passed **1495 tests**, with one skipped and 75 integration cases deselected.
 `git diff --check` passed.
 
@@ -230,7 +230,7 @@ resident, one-atom and short-range workflows. Accepted real variants check
 energy/force/stress finite differences and unchanged config bytes.
 
 The full CPU-configured regression command
-`CUDA_VISIBLE_DEVICES='' MPLCONFIGDIR=/tmp/vpmdk-mpl pytest -q -m 'not integration'`
+`CUDA_VISIBLE_DEVICES='' pytest -q -m 'not integration'`
 passed **1473 tests**, with one skipped and 68 integration cases deselected.
 `git diff --check` passed.
 
@@ -270,7 +270,7 @@ DGL environment and library paths are the same as in the normalization entry
 below.
 
 The full CPU-configured regression command
-`CUDA_VISIBLE_DEVICES='' MPLCONFIGDIR=/tmp/vpmdk-mpl pytest -q -m 'not integration'`
+`CUDA_VISIBLE_DEVICES='' pytest -q -m 'not integration'`
 passed **1414 tests**, with one skipped and 55 integration cases deselected.
 `git diff --check` passed.
 
@@ -322,16 +322,13 @@ For each of `alignn_ff_mptrj` and `v12.2.2024_dft_3d_307k`, the full integration
 file passed **16 tests, 1 GPU-only skip** on CPU and **17 tests** on TITAN V
 CUDA. eALIGNN's normalization branch was checked against upstream source and
 the unit-test matrix, without claiming a real eALIGNN checkpoint run.
-The fixed upstream archive was available at `/tmp/vpmdk-review/upstream`,
-with jarvis-tools/toolz dependencies under `/tmp/vpmdk-review/deps`; those
-directories and `src` were supplied through `PYTHONPATH`. The removed legacy
-temporary venv was recreated as `/tmp/vpmdk-alignn-normalization-dgl`,
-inheriting `codex_matgl_dgl` and adding xmltodict 0.14.2,
-pydantic-settings 2.12.0, pytest 8.4.2 and scikit-learn 1.6.1. The same
-previously documented DGL NVIDIA library paths were used.
+The pinned upstream source and jarvis-tools/toolz dependencies were supplied
+through `PYTHONPATH`. The legacy DGL environment additionally used xmltodict
+0.14.2, pydantic-settings 2.12.0, pytest 8.4.2 and scikit-learn 1.6.1.
+The previously documented DGL NVIDIA library paths were used.
 
 The full CPU-configured regression command
-`CUDA_VISIBLE_DEVICES='' MPLCONFIGDIR=/tmp/vpmdk-mpl pytest -q -m 'not integration'`
+`CUDA_VISIBLE_DEVICES='' pytest -q -m 'not integration'`
 passed **1402 tests**, with one skipped and 55 integration cases deselected.
 `git diff --check` passed.
 
@@ -373,7 +370,7 @@ VPMDK builder for all three selection forms. The supported `alignn_ff_mptrj`
 and legacy `v12.2.2024_dft_3d_307k` each passed the full ALIGNN integration file
 on CPU (**8 passed, 1 GPU-only skip**) and TITAN V CUDA (**9 passed**).
 The full regression command
-`CUDA_VISIBLE_DEVICES='' MPLCONFIGDIR=/tmp/vpmdk-mpl pytest -q -m 'not integration'`
+`CUDA_VISIBLE_DEVICES='' pytest -q -m 'not integration'`
 passed **1360 tests**, with one skipped and 47 integration cases deselected.
 `git diff --check` passed.
 
@@ -413,7 +410,7 @@ unit tests passed, including disabled/inactive penalties, periodic edge
 counting, intensive/extensive energy conventions, legacy double-count
 prevention, unchanged upstream forces/stress, caching and hook cleanup.
 The full CPU-configured regression run
-(`CUDA_VISIBLE_DEVICES='' MPLCONFIGDIR=/tmp/vpmdk-mpl pytest -q -m 'not integration'`)
+(`CUDA_VISIBLE_DEVICES='' pytest -q -m 'not integration'`)
 passed **1345 tests**, with one skipped and 47 integration cases deselected.
 `git diff --check` also passed.
 
@@ -475,7 +472,7 @@ The uniform_1d CUDA implementation was not found in the public frontend
 repository; no binary architecture labels were patched. The working profile uses kernels
 that were actually distributed for SM 7.0.
 
-The isolated environment `/tmp/vpmdk-soyo-sm70-env` uses Python 3.12.3,
+The isolated SM 7.0 environment uses Python 3.12.3,
 torch 2.12.0+cu126, CUDA toolkit 12.6.20, and `cuequivariance`,
 `cuequivariance-torch`, `cuequivariance-ops-cu12`, and
 `cuequivariance-ops-torch-cu12` all at 0.6.1. Its old torch extension has no
@@ -496,20 +493,21 @@ coefficient tensors are unchanged, and upstream still calls
 The native 0.6.1 direct result was compared with the original 0.12 `naive`
 result before attempting export and passed the E/F/S tolerances.
 
-System Python 3.12 lacked `Python.h`, so `libpython3.12-dev` was downloaded
-and extracted under `/tmp/vpmdk-python312-dev` without a system install.
-The extracted headers were supplied through `CPATH`. The exporter printed a
-warning about the absent default include directory, but compilation succeeded
-using the supplied headers. The reproducible export was:
+Python 3.12 development headers were supplied through `CPATH` from an
+extracted `libpython3.12-dev` package. The exporter printed a warning about
+the absent default include directory, but compilation succeeded using the
+supplied headers. To reproduce with the SM 7.0 environment activated, replace
+`/path/to/python-dev` with the extracted package directory and
+`/path/to/cuda-12.6` with the CUDA toolkit directory:
 
 ```bash
-CPATH=/tmp/vpmdk-python312-dev/usr/include/python3.12:/tmp/vpmdk-python312-dev/usr/include \
+CPATH=/path/to/python-dev/usr/include/python3.12:/path/to/python-dev/usr/include \
 OMP_NUM_THREADS=2 TORCHINDUCTOR_COMPILE_THREADS=2 \
-CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/2024/cuda/12.6 \
-/tmp/vpmdk-soyo-sm70-env/bin/vpmdk-mace-soyo-export \
-  --ckpt-path /home/nei/.cache/vpmdk/mace-soyo/mace_soyo_mptraj.pth \
+CUDA_HOME=/path/to/cuda-12.6 \
+vpmdk-mace-soyo-export \
+  --ckpt-path /absolute/path/to/mace_soyo_mptraj.pth \
   --structure-file examples/mace_soyo_si/POSCAR \
-  --output-path /home/nei/.cache/vpmdk/mace-soyo/mace_soyo_mptraj-sm70-cueq061.pt2 \
+  --output-path /absolute/path/to/mace_soyo_mptraj-sm70-cueq061.pt2 \
   --device cuda:0 --dtype float32 \
   --max-nodes 128 --max-edges 32768 --max-graphs 16
 ```
@@ -531,13 +529,13 @@ comparison errors across those sizes in a separate saved calculation were
 2-atom result also matched the original 0.12 `naive` baseline.
 
 ```bash
-CPATH=/tmp/vpmdk-python312-dev/usr/include/python3.12:/tmp/vpmdk-python312-dev/usr/include \
+CPATH=/path/to/python-dev/usr/include/python3.12:/path/to/python-dev/usr/include \
 OMP_NUM_THREADS=2 TORCHINDUCTOR_COMPILE_THREADS=2 \
 VPMDK_TEST_REAL_PYMATGEN=1 VPMDK_REQUIRE_MACE_SOYO_AOTI=1 \
-VPMDK_MACE_SOYO_MODEL=/home/nei/.cache/vpmdk/mace-soyo/mace_soyo_mptraj-sm70-cueq061.pt2 \
-VPMDK_MACE_SOYO_REFERENCE_MODEL=/home/nei/.cache/vpmdk/mace-soyo/mace_soyo_mptraj.pth \
+VPMDK_MACE_SOYO_MODEL=/absolute/path/to/mace_soyo_mptraj-sm70-cueq061.pt2 \
+VPMDK_MACE_SOYO_REFERENCE_MODEL=/absolute/path/to/mace_soyo_mptraj.pth \
 VPMDK_MACE_SOYO_DEVICE=cuda:0 \
-/tmp/vpmdk-soyo-sm70-env/bin/python -m pytest -q tests/integration/test_mace_soyo.py
+python -m pytest -q tests/integration/test_mace_soyo.py
 ```
 
 Reports, export checks and actual relaxation output are preserved in
@@ -558,7 +556,7 @@ builds and `git diff --check` passed.
 Source: [PrincessHakuryu/MACE-SOYO](https://github.com/PrincessHakuryu/MACE-SOYO),
 commit `3c39bc7e8b7d33c269a1b2f9127988f72a55b9a2`, version 0.1.0.
 The [public v0.1 MPtraj checkpoint](https://github.com/PrincessHakuryu/MACE-SOYO/releases/download/v0.1/mace_soyo_mptraj.pth)
-was downloaded to `/home/nei/.cache/vpmdk/mace-soyo/mace_soyo_mptraj.pth`.
+was downloaded and verified against the following checksum.
 SHA-256: `d726daf370a92d280b75c72ca8a1551007946e00eb75a2fed6200547cd0a7de3`.
 
 Existing-backend compatibility was tested before adding the new integration.
@@ -573,12 +571,11 @@ charge/spin conditioning. Upstream uses a dedicated AOTI-only ASE calculator,
 so the integration uses `MLP=MACE_SOYO`: `.pt2` selects that runtime, while
 `.pth` uses a dedicated direct ASE wrapper around upstream `TensorEFS`.
 
-A separate venv `/tmp/vpmdk-mace-soyo-env` was created with Python 3.13.5.
+The direct-inference environment used Python 3.13.5.
 Runtime: torch 2.12.0+cu126, cuEquivariance/torch/ops 0.12.0,
 nvalchemi-toolkit-ops 0.4.1, warp-lang 1.13.0, TorchSim 0.6.1,
 ASE 3.29.0, NumPy 2.5.4, SciPy 1.18.1, pymatgen 2026.10.24.
-CUDA toolkit: nvcc 12.6.20, with
-`CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/2024/cuda/12.6`.
+CUDA toolkit: nvcc 12.6.20.
 Hardware: NVIDIA TITAN V, compute capability 7.0, 12 GiB, logical CUDA 0.
 
 The ordinary upstream export generated a `.pt2` but failed when executing
@@ -609,13 +606,15 @@ derivatives, CLI static calculation, ionic relaxation, two MD steps, and
 resident reuse for two jobs. A request for a different head was rejected.
 The model remained on `cuda:0` and the resident did not rebuild it.
 
+With the corresponding environment activated:
+
 ```bash
-OMP_NUM_THREADS=2 MPLCONFIGDIR=/tmp/vpmdk-soyo-mpl \
+OMP_NUM_THREADS=2 \
   VPMDK_TEST_REAL_PYMATGEN=1 \
-  VPMDK_MACE_SOYO_MODEL=/home/nei/.cache/vpmdk/mace-soyo/mace_soyo_mptraj.pth \
+  VPMDK_MACE_SOYO_MODEL=/absolute/path/to/mace_soyo_mptraj.pth \
   VPMDK_MACE_SOYO_CUEQ_METHOD=naive VPMDK_MACE_SOYO_DEVICE=cuda:0 \
-  /tmp/vpmdk-mace-soyo-env/bin/python -m pytest -q tests/integration/test_mace_soyo.py
-OMP_NUM_THREADS=2 /tmp/vpmdk-mace-soyo-env/bin/vpmdk --dir examples/mace_soyo_si
+  python -m pytest -q tests/integration/test_mace_soyo.py
+OMP_NUM_THREADS=2 vpmdk --dir examples/mace_soyo_si
 ```
 
 A separate final direct-calculator evaluation gave energy `-10.8254420757 eV`,
@@ -646,10 +645,9 @@ MACE builder was left unchanged.
 `MLP=ALIGNN` was validated with the official
 [atomgptlab/alignn](https://github.com/atomgptlab/alignn) source at commit
 `45097bbf48b3ff9528519f1c7379f05c3bd88afe` (package `2026.11.2`).
-The actual runtime was `/tmp/vpmdk-alignn-env`, created using
-`python -m venv --system-site-packages` from the local `ase_env`, followed by
-installation of the upstream source and editable VPMDK. A clean-environment
-recipe is in [backend environments](backend-environments.md#alignn-ff).
+The runtime used the pinned upstream source and editable VPMDK with the
+package versions listed below. A clean-environment recipe is in
+[backend environments](backend-environments.md#alignn-ff).
 
 - Initial device: CPU, `OMP_NUM_THREADS=2`; GPU and legacy DGL follow-up
   results are recorded below.
@@ -657,7 +655,6 @@ recipe is in [backend environments](backend-environments.md#alignn-ff).
   NumPy 2.4.2, jarvis-tools 2026.6.12.
 - Model: `alignn_ff_mptrj`, downloaded from the upstream registry URL
   <https://ndownloader.figshare.com/files/70840341> (approximately 19.4 MB).
-- Local directory: `/home/nei/.cache/atomgptlab/alignn_ff/alignn_ff_mptrj`.
 - `best_model.pt` SHA-256:
   `666f9dc63d3670fc9250c8225061b603d34f06a8a2e803a80eacda14b8a998f7`.
 - `config.json` SHA-256:
@@ -681,12 +678,14 @@ jobs sharing a calculator without rebuilding it. The CLI checks verify
 nonempty `OUTCAR`, `OSZICAR`, `CONTCAR`, and `vasprun.xml` plus finite final
 coordinates; MD also checks `XDATCAR`.
 
+With the corresponding environment activated:
+
 ```bash
-OMP_NUM_THREADS=2 MPLCONFIGDIR=/tmp/vpmdk-alignn-mpl \
+OMP_NUM_THREADS=2 \
   VPMDK_TEST_REAL_PYMATGEN=1 \
-  VPMDK_ALIGNN_MODEL=/home/nei/.cache/atomgptlab/alignn_ff/alignn_ff_mptrj \
-  /tmp/vpmdk-alignn-env/bin/python -m pytest -q tests/integration/test_alignn.py
-OMP_NUM_THREADS=2 /tmp/vpmdk-alignn-env/bin/vpmdk --dir examples/alignn_si
+  VPMDK_ALIGNN_MODEL=/absolute/path/to/alignn_ff_mptrj \
+  python -m pytest -q tests/integration/test_alignn.py
+OMP_NUM_THREADS=2 vpmdk --dir examples/alignn_si
 ```
 
 Additional verification:
@@ -732,18 +731,16 @@ compares numerical energy within `1e-5 eV` and final coordinates within
 `1e-10 Å`; byte equality failed for a `1e-6 eV` GPU scatter-reduction
 rounding difference between two otherwise successful jobs.
 
-The actual legacy runtime was `/tmp/vpmdk-alignn-dgl-env`: Python 3.10.19,
-NumPy 1.26.4, torchdata 0.7.1, ASE 3.25.0, pymatgen 2025.10.7,
-jarvis-tools 2026.6.12, ALIGNN 2026.11.2. It inherited the installed
-`codex_matgl_dgl` packages. DGL GraphBolt initially could not find
+The legacy runtime used Python 3.10.19, NumPy 1.26.4, torchdata 0.7.1,
+ASE 3.25.0, pymatgen 2025.10.7, jarvis-tools 2026.6.12 and ALIGNN 2026.11.2.
+DGL GraphBolt initially could not find
 `libnvrtc.so.12`; adding the base environment's
 `site-packages/nvidia/cuda_nvrtc/lib` and `nvidia/cusparse/lib` to
 `LD_LIBRARY_PATH` fixed it. A DGL graph was explicitly moved to `cuda:0`
 before running the legacy model checks.
 
 Legacy checkpoint: `v12.2.2024_dft_3d_307k`,
-[official Figshare download](https://ndownloader.figshare.com/files/50904240),
-cached at `/home/nei/.cache/atomgptlab/alignn_ff/v12.2.2024_dft_3d_307k`.
+[official Figshare download](https://ndownloader.figshare.com/files/50904240).
 Its configuration is `alignn_atomwise`, `radius_graph`, cutoff 4 Å,
 `energy_mult_natoms=true`. SHA-256 values:
 
@@ -952,7 +949,7 @@ integration tests rather than by preserving individual development-run counts.
 
 - Structure: ASE `bulk("Si", "diamond", a=5.43)` (`Si2`)
 - API path: `BackendConfig(mlp="EQUIFORMER_V3")` -> `single_point`
-- Environment: `codex_fairchem_v1`, torch 2.4.1+cu121, fairchem-core 1.10.0,
+- Environment: torch 2.4.1+cu121, fairchem-core 1.10.0,
   official `atomicarchitects/equiformer_v3` source at commit
   `a7300c58df683dc99cb48027d5bfd4c887486c48`
 - Checkpoint: local `omat24-mptrj-salex_gradient.pt`

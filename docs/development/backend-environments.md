@@ -328,10 +328,9 @@ fixed.
 
 ### Legacy DGL checkpoints on CPU and CUDA
 
-`v12.2.2024_dft_3d_307k` passed the same CPU and GPU workflows. The actual
-validation venv `/tmp/vpmdk-alignn-dgl-env` inherited system packages from
-`codex_matgl_dgl` and added the pinned ALIGNN source and editable VPMDK.
-The tested stack was Python 3.10.19, torch 2.2.1+cu121, DGL 2.1.0+cu121,
+`v12.2.2024_dft_3d_307k` passed the same CPU and GPU workflows using the
+pinned ALIGNN source and editable VPMDK. The tested stack was Python 3.10.19,
+torch 2.2.1+cu121, DGL 2.1.0+cu121,
 torchdata 0.7.1, NumPy 1.26.4, ASE 3.25.0, pymatgen 2025.10.7,
 jarvis-tools 2026.6.12, and ALIGNN 2026.11.2 at the same commit above.
 
@@ -396,8 +395,7 @@ The upstream dependencies pin cuEquivariance and its CUDA/Torch ops to 0.12.0,
 nvalchemi-toolkit-ops to 0.4.1, warp-lang to 1.13.0, and
 TorchSim (`torch-sim-atomistic`) to 0.6.1. Direct `.pth` inference needs no AOTI export. Optional `.pt2` export requires
 the target GPU, a matching `nvcc` toolkit and a C++ compiler.
-The actual local environment is `/tmp/vpmdk-mace-soyo-env`; CUDA toolkit
-12.6.20 is under `/opt/nvidia/hpc_sdk/Linux_x86_64/2024/cuda/12.6`.
+Export was tested with CUDA toolkit 12.6.20.
 See the [example export command](../../examples/mace_soyo_si/README.md).
 
 ```bash
@@ -487,14 +485,14 @@ under both `m` and `fallback`, retaining the same objects, tensors and Python
 alias. It does not suppress missing learned parameters or use `strict=False`.
 The normal 0.12 construction is unaffected.
 
-The local test environment is `/tmp/vpmdk-soyo-sm70-env`. System Python 3.12
-lacked development headers. Its `libpython3.12-dev` package was downloaded
-and extracted under `/tmp/vpmdk-python312-dev`, without a system install;
-compilation used:
+Compilation requires matching Python development headers. The validation
+used headers from an extracted `libpython3.12-dev` package via `CPATH`.
+With the SM 7.0 environment activated, set the extracted package directory
+and CUDA toolkit directory for your installation:
 
 ```bash
-export CPATH=/tmp/vpmdk-python312-dev/usr/include/python3.12:/tmp/vpmdk-python312-dev/usr/include
-export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/2024/cuda/12.6
+export CPATH=/path/to/python-dev/usr/include/python3.12:/path/to/python-dev/usr/include
+export CUDA_HOME=/path/to/cuda-12.6
 export TORCHINDUCTOR_COMPILE_THREADS=2
 ```
 
