@@ -323,7 +323,7 @@ This check applies to the DGL `alignn_atomwise` edge-derivative branch and to
 `alignn_atomwise_pure`, which always uses edge derivatives.
 VPMDK does not silently change a
 pretrained force field's gradient scale. See the
-[GPU/DGL validation](../development/validation.md#gpu-and-legacy-dgl-follow-up).
+[GPU/DGL validation](../development/validation.md#2026-11-07-alignn-ff-validation).
 
 The upstream calculator multiplies per-atom energies by the atom count and
 converts stress from GPa to ASE eV/Å³. VPMDK retains these conversions and uses
@@ -344,7 +344,7 @@ not exposed. This backend requires fully periodic structures.
 Use the standard [CLI workflows](../user-guide/cli-workflows.md) with the BCAR
 settings above. See the
 [environment recipe](../development/backend-environments.md#alignn-ff) and
-[real-model checks](../development/validation.md#2026-11-06-alignn-ff-validation).
+[real-model checks](../development/validation.md#2026-11-07-alignn-ff-validation).
 
 ## MACE-SOYO
 

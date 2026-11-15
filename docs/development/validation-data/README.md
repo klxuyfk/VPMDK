@@ -1,14 +1,24 @@
-# Backend validation artifacts
+# Backend validation data
 
-These files preserve numerical reports and historical calculation outputs
-referenced by the [validation record](../validation.md). They apply to the
-dated checkpoints, runtime versions and hardware recorded there.
+These dated numerical records support the [validation summary](../validation.md).
+They record execution and consistency checks for specific checkpoints and
+runtimes; they are not accuracy benchmarks against DFT.
 
-- [ALIGNN](alignn/README.md): relaxation outputs and pure-PyTorch/DGL CPU/CUDA
-  comparisons.
-- [MACE-SOYO](mace-soyo/README.md): direct and compiled results, GPU architecture
-  inspection and the experimental SM 7.0 library pins.
+## ALIGNN
 
-These are development records rather than accuracy benchmarks or additional
-user workflows. The [AOTI example](../../../examples/mace_soyo_aoti/README.md)
-demonstrates checkpoint evaluation, verified export and compiled inference.
+- [`pure-cpu-gpu.json`](alignn/pure-cpu-gpu.json) and
+  [`dgl-cpu-gpu.json`](alignn/dgl-cpu-gpu.json): runtime versions, checkpoint/config
+  hashes, energy/forces/stress, finite differences and CPU/CUDA comparisons.
+
+## MACE-SOYO
+
+- [`gpu-validation.json`](mace-soyo/gpu-validation.json): direct-inference
+  versions, checkpoint hash, energy/forces/stress and finite differences.
+- [`export-report.json`](mace-soyo/aoti-sm70/export-report.json): verified SM 7.0
+  package provenance, runtime, bounds and target metadata.
+- [`export-check.log`](mace-soyo/aoti-sm70/export-check.log): numerical checks at
+  export; file paths are generic placeholders.
+- [`calculation-report.json`](mace-soyo/aoti-sm70/calculation-report.json): measured
+  compiled/direct differences for 2/4/8 atoms and the original `naive` baseline.
+- [`requirements-sm70-cueq.txt`](mace-soyo/requirements-sm70-cueq.txt): exact
+  experimental override pins; see the [environment recipe](../backend-environments.md#experimental-sm-70-library-replacement).

@@ -74,5 +74,5 @@ The compiled calculation writes `OUTCAR`, `OSZICAR`, `CONTCAR` and
 `output/eager`. Small floating-point differences are expected; the exporter's
 verification provides the numerical acceptance checks.
 
-Detailed CPU/CUDA reports, historical relaxation outputs and the SM 7.0
-library investigation are in the [development validation record](../../docs/development/validation.md#2026-11-06-mace-soyo-aoti-and-sm-70-compatibility).
+Tested environments, numerical results and hardware limitations are in the
+[development validation record](../../docs/development/validation.md#2026-11-06-mace-soyo-validation).

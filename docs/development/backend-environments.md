@@ -373,7 +373,7 @@ the CPU/GPU comparison test then skips. An explicit CUDA request verifies the
 model parameters are on CUDA and compares energy, forces and stress against
 CPU. The legacy `v5.27.2024` configuration failed gradient consistency checks
 and is rejected; do not substitute it for the validated model. See the
-[validation record](validation.md#gpu-and-legacy-dgl-follow-up).
+[validation record](validation.md#2026-11-07-alignn-ff-validation).
 
 ## MACE-SOYO
 
@@ -503,10 +503,7 @@ that a full model works.
 The 0.6.1 configuration **passed native CUDA execution and all six AOTI
 integration tests on TITAN V**, including static, relaxation, MD, resident
 reuse, energy gradients, and comparisons for 2/4/8 atoms. The native outputs
-also matched the original 0.12 `naive` reference. A modern 0.13 forced install
-still failed with no kernel image; replacing only the low-level 0.4 library
-under the modern frontend failed to load native ops. Mixing these package
-versions is not a working workaround.
+also matched the original 0.12 `naive` reference.
 
 The reproducible override pins are in
 [`requirements-sm70-cueq.txt`](validation-data/mace-soyo/requirements-sm70-cueq.txt).
