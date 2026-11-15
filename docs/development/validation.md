@@ -11,6 +11,10 @@ This page records backend validation that has been run against real upstream
 calculators.  It complements the regression tests under `tests/` and the
 optional integration tests under `tests/integration/`.
 
+Saved numerical reports and historical outputs are collected under
+[`validation-data/`](validation-data/README.md). They document the dated runs;
+user-facing examples focus on distinct calculation workflows.
+
 The most recent sweep below was run manually because several backends require
 mutually incompatible Python, PyTorch, TensorFlow, DGL, JAX, or CUDA dependency
 sets.  A passed single-point entry means the VPMDK wrapper built the real ASE
@@ -451,7 +455,7 @@ Native AOTI export and VPMDK inference were completed on NVIDIA TITAN V
 (SM 7.0) using an isolated legacy-library configuration. The standard
 0.12 profile and its requirements remain unchanged. The implementation for
 GPUs supported by that standard profile includes the verified exporter,
-`BCAR.aoti`, provenance reports, failure-safe publication, and compiled/direct
+the compiled BCAR template, provenance reports, failure-safe publication, and compiled/direct
 integration comparisons. No SM 7.5+ GPU is installed here, so the actual
 end-to-end hardware validation below uses SM 7.0 and the experimental profile.
 
@@ -467,7 +471,7 @@ Library replacement investigation:
 Wheel inspection found SM 7.0 cubins in 0.4.0, 0.5.0, 0.5.1 and 0.6.1.
 The inspected 0.7.0, 0.9.1, 0.11.1, 0.12.0 and 0.13.0 libraries lack SM 7.0.
 Exact wheel/library hashes and cubin/PTX targets are saved in
-[`cueq-architectures.json`](../../examples/mace_soyo_si/reference/cueq-architectures.json).
+[`cueq-architectures.json`](validation-data/mace-soyo/cueq-architectures.json).
 The uniform_1d CUDA implementation was not found in the public frontend
 repository; no binary architecture labels were patched. The working profile uses kernels
 that were actually distributed for SM 7.0.
@@ -481,7 +485,7 @@ these packages were replaced with `--no-deps --force-reinstall`. `pip check`
 therefore reports the four intentional disagreements with MACE-SOYO's 0.12
 pins. This is an experimental compatibility profile, not a change to upstream
 requirements. Exact override pins are provided in
-[`requirements-sm70-cueq.txt`](../../examples/mace_soyo_si/requirements-sm70-cueq.txt).
+[`requirements-sm70-cueq.txt`](validation-data/mace-soyo/requirements-sm70-cueq.txt).
 The original Python 3.13/0.12 environment remains intact.
 
 Old Linear registers the same evaluator as both `m` and `fallback`, while
@@ -506,7 +510,7 @@ OMP_NUM_THREADS=2 TORCHINDUCTOR_COMPILE_THREADS=2 \
 CUDA_HOME=/path/to/cuda-12.6 \
 vpmdk-mace-soyo-export \
   --ckpt-path /absolute/path/to/mace_soyo_mptraj.pth \
-  --structure-file examples/mace_soyo_si/POSCAR \
+  --structure-file examples/mace_soyo_aoti/POSCAR \
   --output-path /absolute/path/to/mace_soyo_mptraj-sm70-cueq061.pt2 \
   --device cuda:0 --dtype float32 \
   --max-nodes 128 --max-edges 32768 --max-graphs 16
@@ -539,7 +543,7 @@ python -m pytest -q tests/integration/test_mace_soyo.py
 ```
 
 Reports, export checks and actual relaxation output are preserved in
-[`reference/aoti-sm70/`](../../examples/mace_soyo_si/reference/aoti-sm70/README.md).
+[`validation-data/mace-soyo/aoti-sm70/`](validation-data/mace-soyo/aoti-sm70/README.md).
 These are runtime/adapter checks and do not establish model accuracy against
 DFT or performance on other GPU families.
 
@@ -593,11 +597,11 @@ Checkpoint and installed source files are unchanged. This mode is separate
 from the accelerated kernel path, which does not run on this hardware.
 An exploratory AOTI export of the portable graph was stopped after direct
 inference passed; no portable compiled artifact is claimed as validated. A direct GPU evaluation with the upstream
-`TensorEFS` wrapper and all weights loaded strictly completed for the bundled
+`TensorEFS` wrapper and all weights loaded strictly completed for the displaced
 Si structure: total energy `-10.8254423141 eV`, x forces `+0.39076358` and
 `-0.39076358 eV/Å`, xx stress `-0.0096848393 eV/Å³`.
 Exact outputs are saved in
-[`eager-gpu.json`](../../examples/mace_soyo_si/reference/eager-gpu.json).
+[`eager-gpu.json`](validation-data/mace-soyo/eager-gpu.json).
 See the [environment recipe](backend-environments.md#mace-soyo).
 
 The dedicated direct-checkpoint ASE runtime completed **5 real integration
@@ -614,7 +618,7 @@ OMP_NUM_THREADS=2 \
   VPMDK_MACE_SOYO_MODEL=/absolute/path/to/mace_soyo_mptraj.pth \
   VPMDK_MACE_SOYO_CUEQ_METHOD=naive VPMDK_MACE_SOYO_DEVICE=cuda:0 \
   python -m pytest -q tests/integration/test_mace_soyo.py
-OMP_NUM_THREADS=2 vpmdk --dir examples/mace_soyo_si
+OMP_NUM_THREADS=2 vpmdk --dir /absolute/path/to/mace-soyo-calculation
 ```
 
 A separate final direct-calculator evaluation gave energy `-10.8254420757 eV`,
@@ -624,10 +628,12 @@ Central differences gave `-0.390768051 eV/Å` with displacement `0.001 Å`, and
 `0.002 eV/Å` and `0.00005 eV/Å³`, respectively. These are checks of the
 implementation and do not establish accuracy against DFT.
 
-The bundled relaxation completed in three evaluations, lowering total energy
+The recorded relaxation used `IBRION=2`, `NSW=5`, `ISIF=2` and
+`EDIFFG=-0.01` with the displaced Si structure described above. It completed
+in three evaluations, lowering total energy
 from `-10.82544231` to `-10.83130479 eV`. Actual output snapshots and the final
 calculator values, package versions, device, head and checksum are preserved
-in [`examples/mace_soyo_si/reference/`](../../examples/mace_soyo_si/reference/README.md).
+in [`validation-data/mace-soyo/`](validation-data/mace-soyo/README.md).
 Existing NumPy/ASE and TorchScript deprecation warnings were emitted. One
 upstream GPU-information message uses a fallback A6000 description when NVML
 fails; actual device identity was checked with PyTorch and `nvidia-smi` and
@@ -685,7 +691,7 @@ OMP_NUM_THREADS=2 \
   VPMDK_TEST_REAL_PYMATGEN=1 \
   VPMDK_ALIGNN_MODEL=/absolute/path/to/alignn_ff_mptrj \
   python -m pytest -q tests/integration/test_alignn.py
-OMP_NUM_THREADS=2 vpmdk --dir examples/alignn_si
+OMP_NUM_THREADS=2 vpmdk --dir /absolute/path/to/alignn-calculation
 ```
 
 Additional verification:
@@ -706,9 +712,10 @@ expected metadata fixes `DEVICE=cpu`; the CPU-configured full run above passed.
 No Matlantis implementation or test expectations were changed. Existing
 warnings from optional packages and server shutdown tests remain.
 
-The bundled example completed with energy decreasing from `-10.78106499` to
+The recorded relaxation used `IBRION=2`, `NSW=5`, `ISIF=2` and
+`EDIFFG=-0.01`, with energy decreasing from `-10.78106499` to
 `-10.78510571 eV`. Actual relaxation outputs are saved in
-[`examples/alignn_si/reference/`](../../examples/alignn_si/reference/README.md).
+[`validation-data/alignn/`](validation-data/alignn/README.md).
 These are workflow checks, not accuracy benchmarks against DFT.
 
 ### GPU and Legacy DGL Follow-up
@@ -758,8 +765,8 @@ were:
 The legacy energy was `-7.9502038956 eV` on CPU and `-7.9502053261 eV` on
 CUDA. Exact per-device values, numerical derivatives, package versions,
 checksums, and device placement are saved in
-[`pure-cpu-gpu.json`](../../examples/alignn_si/reference/pure-cpu-gpu.json) and
-[`dgl-cpu-gpu.json`](../../examples/alignn_si/reference/dgl-cpu-gpu.json).
+[`pure-cpu-gpu.json`](validation-data/alignn/pure-cpu-gpu.json) and
+[`dgl-cpu-gpu.json`](validation-data/alignn/dgl-cpu-gpu.json).
 These values validate the wrapper and runtime, not accuracy against DFT.
 
 To reproduce, use the [DGL environment recipe](backend-environments.md#legacy-dgl-checkpoints-on-cpu-and-cuda)

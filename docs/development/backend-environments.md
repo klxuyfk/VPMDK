@@ -396,7 +396,7 @@ nvalchemi-toolkit-ops to 0.4.1, warp-lang to 1.13.0, and
 TorchSim (`torch-sim-atomistic`) to 0.6.1. Direct `.pth` inference needs no AOTI export. Optional `.pt2` export requires
 the target GPU, a matching `nvcc` toolkit and a C++ compiler.
 Export was tested with CUDA toolkit 12.6.20.
-See the [example export command](../../examples/mace_soyo_si/README.md).
+See the [example export command](../../examples/mace_soyo_aoti/README.md).
 
 ```bash
 OMP_NUM_THREADS=2 VPMDK_TEST_REAL_PYMATGEN=1 \
@@ -437,7 +437,7 @@ For a GPU supported by the installed CUDA/PyTorch/cuEquivariance stack:
 ```bash
 vpmdk-mace-soyo-export \
   --ckpt-path /absolute/path/to/mace_soyo_mptraj.pth \
-  --structure-file examples/mace_soyo_si/POSCAR \
+  --structure-file examples/mace_soyo_aoti/POSCAR \
   --output-path /absolute/path/to/model.pt2 \
   --device cuda:0 --dtype float32 \
   --max-nodes 128 --max-edges 32768 --max-graphs 16
@@ -450,7 +450,7 @@ checks pass. Failed exports preserve any existing package. Use `--overwrite`
 to explicitly replace one. `--inductor-config key=value` forwards an upstream
 compiler option. Export bounds must cover the intended structures.
 
-Use `examples/mace_soyo_si/BCAR.aoti`, set `MODEL` to the verified package,
+Use `examples/mace_soyo_aoti/BCAR`, set `MODEL` to the verified package,
 and omit the direct-checkpoint `MACE_SOYO_CUEQ_METHOD=naive` tag. To require
 compiled inference and compare different atom counts against the checkpoint:
 
@@ -467,13 +467,12 @@ OMP_NUM_THREADS=2 VPMDK_TEST_REAL_PYMATGEN=1 \
 
 The standard 0.12 library pins are unchanged. An isolated Python 3.12
 experiment used the same torch 2.12.0+cu126 and MACE-SOYO source, replacing
-all four cuEquivariance packages together:
+all four cuEquivariance packages together. From the repository root, with
+that environment activated:
 
 ```bash
 python -m pip install --no-deps --force-reinstall \
-  cuequivariance==0.6.1 cuequivariance-torch==0.6.1 \
-  cuequivariance-ops-cu12==0.6.1 cuequivariance-ops-torch-cu12==0.6.1
-python -m pip install pynvml
+  -r docs/development/validation-data/mace-soyo/requirements-sm70-cueq.txt
 ```
 
 This intentionally conflicts with MACE-SOYO's declared 0.12 pins; keep it in
@@ -510,7 +509,7 @@ under the modern frontend failed to load native ops. Mixing these package
 versions is not a working workaround.
 
 The reproducible override pins are in
-[`requirements-sm70-cueq.txt`](../../examples/mace_soyo_si/requirements-sm70-cueq.txt).
+[`requirements-sm70-cueq.txt`](validation-data/mace-soyo/requirements-sm70-cueq.txt).
 The standard 0.12 profile remains the default. A compiled artifact and its
 report must stay with the runtime that exported it; changing the libraries
 requires a new export and numerical checks.

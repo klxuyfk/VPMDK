@@ -1,3 +1,0 @@
-MLP = ALIGNN
-MODEL = alignn_ff_mptrj
-DEVICE = cpu

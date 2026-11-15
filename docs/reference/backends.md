@@ -341,8 +341,9 @@ The adapter exposes the standard energy, forces and
 stress workflows, including resident reuse. Training and spin prediction are
 not exposed. This backend requires fully periodic structures.
 
-See the [runnable example](../../examples/alignn_si/README.md),
-[environment recipe](../development/backend-environments.md#alignn-ff), and
+Use the standard [CLI workflows](../user-guide/cli-workflows.md) with the BCAR
+settings above. See the
+[environment recipe](../development/backend-environments.md#alignn-ff) and
 [real-model checks](../development/validation.md#2026-11-06-alignn-ff-validation).
 
 ## MACE-SOYO
@@ -375,12 +376,11 @@ checks native kernels and publishes the package and a JSON provenance report
 only after the upstream numerical verification succeeds.
 The package fixes its cutoff, precision, ABI and method at export time;
 `MACE_SOYO_CUEQ_METHOD=naive` is rejected for `.pt2` because runtime selection
-cannot change compiled operations. The corresponding `BCAR.aoti` example and compiled-versus-eager integration
-checks are included. An isolated Python 3.12/cuEquivariance 0.6.1 configuration
-also passed native AOTI inference on TITAN V (SM 7.0). This is an experimental
-override of upstream's 0.12 pins, with a version-scoped fix for duplicate Linear
-evaluator registrations; it does not change learned parameters. See the
-validation notes for the exact environment and package hashes.
+cannot change compiled operations. The [AOTI example](../../examples/mace_soyo_aoti/README.md)
+shows direct evaluation, export and compiled inference. Compiled-versus-eager
+integration checks are included. The experimental SM 7.0 environment and its
+numerical checks are documented in the
+[development notes](../development/backend-environments.md#experimental-sm-70-library-replacement).
 
 `MODEL` is required and local; VPMDK does not download weights implicitly.
 CPU requests and unsupported file formats fail explicitly. Head names are
@@ -391,6 +391,6 @@ training and spin prediction are not exposed. For periodic stress, use fully
 periodic structures; nonperiodic stress follows the upstream placeholder
 convention.
 
-See the [example](../../examples/mace_soyo_si/README.md),
+See the [AOTI workflow example](../../examples/mace_soyo_aoti/README.md),
 [environment recipe](../development/backend-environments.md#mace-soyo), and
 [validation record](../development/validation.md#2026-11-06-mace-soyo-validation).

@@ -17,5 +17,5 @@ is kept outside Git. Re-export in the matching environment if hardware,
 libraries or bounds change.
 The standard 0.12 profile remains available independently.
 
-See the [full validation record](../../../../docs/development/validation.md#2026-11-06-mace-soyo-aoti-and-sm-70-compatibility)
-and [environment instructions](../../../../docs/development/backend-environments.md#experimental-sm-70-library-replacement).
+See the [full validation record](../../../validation.md#2026-11-06-mace-soyo-aoti-and-sm-70-compatibility)
+and [environment instructions](../../../backend-environments.md#experimental-sm-70-library-replacement).

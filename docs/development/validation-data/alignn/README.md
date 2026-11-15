@@ -1,7 +1,7 @@
-# Reference run
+# ALIGNN validation artifacts
 
-Generated on 2026-11-06 on CPU using the bundled input files and the public
-`alignn_ff_mptrj` checkpoint. See the [validation record](../../../docs/development/validation.md#2026-11-06-alignn-ff-validation)
+Generated on 2026-11-06 on CPU using displaced diamond Si and the public
+`alignn_ff_mptrj` checkpoint. See the [validation record](../../validation.md#2026-11-06-alignn-ff-validation)
 for package versions, source revision, checksum, and commands.
 
 `OUTCAR.txt`, `OSZICAR.txt`, and `CONTCAR.vasp` preserve the actual relaxation

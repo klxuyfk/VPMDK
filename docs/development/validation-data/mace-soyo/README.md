@@ -6,8 +6,8 @@ trained model using PyTorch operations on CUDA. It does not use the unsupported
 SM 7.5+ cuEquivariance binary kernels.
 
 `eager-gpu.json` contains the upstream tensor wrapper's direct energy, forces
-and stress for the bundled displaced Si structure. See the
-[validation record](../../../docs/development/validation.md#2026-11-06-mace-soyo-validation)
+and stress for the displaced Si structure described in the validation record. See the
+[validation record](../../validation.md#2026-11-06-mace-soyo-validation)
 for the runtime, checkpoint checksum and export procedure.
 
 `OUTCAR.txt`, `OSZICAR.txt` and `CONTCAR.vasp` preserve the actual VPMDK CLI
@@ -20,3 +20,7 @@ The later [native AOTI SM 7.0 validation](aoti-sm70/README.md) uses an isolated
 0.6.1 library profile and passed the compiled workflow tests.
 `cueq-architectures.json` records the wheel/library hashes and SM targets
 inspected with `cuobjdump` during the compatibility investigation.
+
+`requirements-sm70-cueq.txt` contains the experimental library override pins.
+Use the [environment recipe](../../backend-environments.md#experimental-sm-70-library-replacement)
+for installation and compilation requirements.
