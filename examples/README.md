@@ -9,6 +9,7 @@ and does not include calculation output.
 
 ## Examples
 
+- `mace_soyo_aoti`: direct checkpoint evaluation, verified AOTI export, and compiled inference on the same Si structure
 - `relax_chgnet`: ionic relaxation with CHGNet
 - `md_mace`: short MD run with MACE
 - `neb_nequip_vtst`: NEB-style run with NequIP + VTST `nebresults.pl`

@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "verified": true,
+  "cueq_method": "native",
+  "checkpoint_sha256": "d726daf370a92d280b75c72ca8a1551007946e00eb75a2fed6200547cd0a7de3",
+  "structure_sha256": "0586d6819dd584864694db6bdad15c222aba5b4481e77742c99ef43303e35323",
+  "package_sha256": "25ebbd8b19cd6f0a7e38d88369810cead1667d363a461c2180dc90f30ab5886b",
+  "metadata": {
+    "mace_soyo_aoti_inputs": "z frac_pos cell batch edge_index image head_id pbc",
+    "mace_soyo_aoti_use_spin_charge": "0",
+    "mace_soyo_aoti_outputs": "energy forces stress",
+    "mace_soyo_aoti_cutoff": "6.0",
+    "mace_soyo_aoti_dtype": "float32",
+    "mace_soyo_aoti_runtime_constant_folding": "1",
+    "mace_soyo_aoti_keep_tensor_constants": "1",
+    "mace_soyo_aoti_safe_norm": "0",
+    "mace_soyo_aoti_abi": "batched_noq_multihead_efs_v4",
+    "mace_soyo_aoti_edge_index": "receiver sender",
+    "mace_soyo_aoti_metadata_schema": "3",
+    "mace_soyo_aoti_num_heads": "1",
+    "mace_soyo_aoti_head_names": "[\"mptraj\"]",
+    "mace_soyo_aoti_max_nodes": "128",
+    "mace_soyo_aoti_max_edges": "32768",
+    "mace_soyo_aoti_max_graphs": "16",
+    "AOTI_DEVICE_KEY": "cuda",
+    "AOTI_PLATFORM": "linux",
+    "AOTI_MACHINE": "x86_64",
+    "AOTI_CPU_ISA": "AVX2",
+    "AOTI_COMPUTE_CAPABILITY": "70"
+  },
+  "runtime": {
+    "packages": {
+      "MACE-SOYO": "0.1.0",
+      "torch": "2.12.0+cu126",
+      "cuequivariance": "0.6.1",
+      "cuequivariance-torch": "0.6.1",
+      "cuequivariance-ops-cu12": "0.6.1",
+      "cuequivariance-ops-torch-cu12": "0.6.1"
+    },
+    "python": "3.12.3",
+    "cuda": "12.6",
+    "gpu": "NVIDIA TITAN V",
+    "compute_capability": [
+      7,
+      0
+    ]
+  },
+  "elapsed_seconds": 128.71404244599398
+}

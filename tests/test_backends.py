@@ -14,6 +14,7 @@ from vpmdk_core.backends import misc as backend_misc
 
 _P = vpmdk.BackendModelPolicy
 _EXPECTED_BACKEND_MODEL_POLICY = {
+    "ALIGNN": _P(default_value="alignn_ff_mptrj", allow_named=True),
     "BAM": _P(required=True, local_only=True),
     "CHGNET": _P(allow_named=True),
     "MATGL": _P(
@@ -27,6 +28,7 @@ _EXPECTED_BACKEND_MODEL_POLICY = {
         delegate_registry_ids=True,
     ),
     "MACE": _P(local_only=True),
+    "MACE_SOYO": _P(required=True, local_only=True),
     "PROPHET": _P(required=True, local_only=True),
     "MATTERSIM": _P(allow_named=True),
     "MATLANTIS": _P(
@@ -99,6 +101,7 @@ def test_backend_model_policy_matrix_covers_every_builtin_backend():
 @pytest.mark.parametrize(
     ("backend", "expected_model"),
     [
+        ("ALIGNN", "alignn_ff_mptrj"),
         ("CHGNET", None),
         ("MACE", None),
         ("MATTERSIM", None),

@@ -1,0 +1,9 @@
+# Experimental override for Python 3.12 / torch 2.12.0+cu126.
+# Install the normal MACE-SOYO environment first, then use
+# pip install --no-deps --force-reinstall -r requirements-sm70-cueq.txt
+# This intentionally differs from upstream MACE-SOYO's 0.12 pins.
+cuequivariance==0.6.1
+cuequivariance-torch==0.6.1
+cuequivariance-ops-cu12==0.6.1
+cuequivariance-ops-torch-cu12==0.6.1
+pynvml==13.0.1

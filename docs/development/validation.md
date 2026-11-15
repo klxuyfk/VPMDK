@@ -11,6 +11,9 @@ This page records backend validation that has been run against real upstream
 calculators.  It complements the regression tests under `tests/` and the
 optional integration tests under `tests/integration/`.
 
+Numerical records and reproducible override pins are collected under
+[`validation-data/`](validation-data/README.md) for the dated runs below.
+
 The most recent sweep below was run manually because several backends require
 mutually incompatible Python, PyTorch, TensorFlow, DGL, JAX, or CUDA dependency
 sets.  A passed single-point entry means the VPMDK wrapper built the real ASE
@@ -19,6 +22,86 @@ exposed by the upstream calculator.  It is a runnable backend smoke validation,
 not a benchmark-quality comparison against reference DFT data.  Blocked entries
 record adapter behavior or missing public artifacts rather than successful
 calculator evaluation.
+
+## 2026-11-07 ALIGNN-FF Validation
+
+- Source: ALIGNN 2026.11.2 at commit
+  `45097bbf48b3ff9528519f1c7379f05c3bd88afe`.
+- Hardware: CPU and NVIDIA TITAN V, 12 GiB, logical `cuda:0`. CUDA checks
+  verify model parameter placement and compare results against CPU.
+- Checkpoints and final integration-suite results:
+
+| Checkpoint | Runtime | CPU | CUDA |
+|---|---|---|---|
+| `alignn_ff_mptrj` | Python 3.13.5, torch 2.8.0+cu128, ASE 3.27.0; pure PyTorch | 39 passed, 5 skipped | 40 passed, 4 skipped |
+| `v12.2.2024_dft_3d_307k` | Python 3.10.19, torch 2.2.1+cu121, DGL 2.1.0+cu121, ASE 3.25.0 | 43 passed, 1 skipped | 44 passed |
+
+The pure-PyTorch environment skips four cases requiring DGL; CPU also skips
+GPU comparison. Package versions, checkpoint/config SHA-256 values and
+per-device numerical results are recorded in
+[`pure-cpu-gpu.json`](validation-data/alignn/pure-cpu-gpu.json) and
+[`dgl-cpu-gpu.json`](validation-data/alignn/dgl-cpu-gpu.json).
+
+Both checkpoints passed energy/force/stress checks on diamond Si2
+(`a=5.43 Å`, second atom displaced by `0.03 Å` along x), energy finite
+differences, CLI static calculation, short ionic
+relaxation and MD, resident reuse, and CPU/CUDA comparisons. A one-atom FCC Cu
+cell also completed static calculation. Configuration regressions cover
+normalization, derivative paths, cutoff/short-range penalties, stress,
+resident configuration identity and rejection of nonperiodic inputs.
+
+Supported calculations require fully periodic structures and the
+[documented E/F/S profile](../reference/backends.md#alignn-ff).
+`v5.27.2024` and `alignnff_fmult` failed gradient consistency checks and are
+rejected. This record does not establish support for every registry model.
+
+To reproduce, use the [pure-PyTorch or legacy DGL environment recipe](backend-environments.md#alignn-ff)
+and run each checkpoint with `VPMDK_ALIGNN_DEVICE=cpu` and `cuda`:
+
+```bash
+OMP_NUM_THREADS=2 VPMDK_TEST_REAL_PYMATGEN=1 \
+  VPMDK_ALIGNN_MODEL=/absolute/path/to/model_directory \
+  VPMDK_ALIGNN_DEVICE=cuda python -m pytest -q tests/integration/test_alignn.py
+```
+
+## 2026-11-06 MACE-SOYO Validation
+
+- Source: MACE-SOYO 0.1.0 at commit
+  `3c39bc7e8b7d33c269a1b2f9127988f72a55b9a2`.
+- Checkpoint: public [v0.1 MPtraj weights](https://github.com/PrincessHakuryu/MACE-SOYO/releases/download/v0.1/mace_soyo_mptraj.pth),
+  head `mptraj`; SHA-256 is recorded in
+  [`gpu-validation.json`](validation-data/mace-soyo/gpu-validation.json).
+- Hardware: NVIDIA TITAN V, 12 GiB, compute capability 7.0, logical `cuda:0`.
+  Model placement was checked explicitly.
+
+| Inference path | Runtime | Integration result |
+|---|---|---|
+| Direct `.pth`, `naive` | Python 3.13.5, torch 2.12.0+cu126, cuEquivariance 0.12.0, ASE 3.29.0 | 5 passed; compiled comparison not applicable |
+| Native AOTI `.pt2` | Python 3.12.3, torch 2.12.0+cu126, cuEquivariance packages 0.6.1, CUDA toolkit 12.6.20 | 6 passed |
+
+Both paths passed energy/force/stress finite differences on diamond Si2
+(`a=5.43 Å`, second atom displaced by `0.03 Å` along x), CLI static
+calculation, short relaxation and MD, and resident reuse. AOTI
+also matched direct inference for 2, 4 and 8 atoms: maximum differences were
+`1.49e-7 eV/atom`, `2.80e-6 eV/Å` and `7.44e-8 eV/Å³` for energy, forces
+and stress. The exporter completed native CUDA preflight and numerical
+verification before publication. Package/checkpoint hashes, target metadata
+and comparisons are preserved in
+[`aoti-sm70/`](validation-data/README.md#mace-soyo).
+
+The standard cuEquivariance 0.12 native kernels failed on SM 7.0 with
+`cudaErrorNoKernelImageForDevice`. Native AOTI passed only with the
+[experimental matched 0.6.1 override](backend-environments.md#experimental-sm-70-library-replacement),
+which conflicts with upstream pins. No SM 7.5+ GPU was available for a
+standard-profile AOTI run. CPU inference is unsupported; these results do
+not cover other checkpoints, GPUs or runtime versions.
+
+Reproduction commands are in the [environment recipe](backend-environments.md#mace-soyo)
+and [AOTI example](../../examples/mace_soyo_aoti/README.md). The optional
+[`test_mace_soyo.py`](../../tests/integration/test_mace_soyo.py) suite uses
+`VPMDK_MACE_SOYO_MODEL`; compiled comparisons additionally require
+`VPMDK_REQUIRE_MACE_SOYO_AOTI=1` and the original weights in
+`VPMDK_MACE_SOYO_REFERENCE_MODEL`.
 
 ## 2026-10-26 BAM GPU Validation
 
@@ -153,7 +236,7 @@ integration tests rather than by preserving individual development-run counts.
 
 - Structure: ASE `bulk("Si", "diamond", a=5.43)` (`Si2`)
 - API path: `BackendConfig(mlp="EQUIFORMER_V3")` -> `single_point`
-- Environment: `codex_fairchem_v1`, torch 2.4.1+cu121, fairchem-core 1.10.0,
+- Environment: torch 2.4.1+cu121, fairchem-core 1.10.0,
   official `atomicarchitects/equiformer_v3` source at commit
   `a7300c58df683dc99cb48027d5bfd4c887486c48`
 - Checkpoint: local `omat24-mptrj-salex_gradient.pt`
@@ -252,6 +335,12 @@ Useful command:
 ```bash
 pytest -m "not integration"
 ```
+
+The thermostat-conservation regression uses separate local RNGs with seeds
+0, 42 and 137 and a 0.5 fs step, preserving 60 fs of dynamics, 40 fs bath
+coupling and the tenfold conservation criterion. CI runs Python 3.10–3.12,
+minimum dependencies, optional backend regressions with CPU Torch, a real
+CHGNet smoke test, and package builds.
 
 `tests/integration/test_integration_md.py` covers short MD workflows for a
 backend matrix and skips optional backends unless packages, checkpoints, and

@@ -23,3 +23,9 @@ examples/**/*.lammpstrj
 examples/**/*.sock
 examples/**/*.sock.log
 examples/**/*.sock.pid
+
+# Local model artifacts and AOTI example baseline outputs.
+examples/**/model.pth
+examples/**/model.pt2
+examples/**/model.pt2.json
+examples/mace_soyo_aoti/output/

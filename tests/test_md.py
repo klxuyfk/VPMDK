@@ -858,37 +858,79 @@ def test_non_finite_energy_reports_the_divergence_not_an_unpack_error():
     assert vpmdk._format_energy_value(-16.328932) == "-.16328932E+02"
 
 
-def test_thermostat_energy_is_reported_so_the_total_is_conserved():
+@pytest.fixture
+def seeded_thermostat_rngs(monkeypatch):
+    """Keep both initialization and Bussi draws independent of suite order."""
+    def configure(seed: int) -> None:
+        sampler = getattr(vpmdk.velocitydistribution, "thermalize_momenta", None)
+        if not callable(sampler):
+            sampler = vpmdk.velocitydistribution.MaxwellBoltzmannDistribution
+
+        def thermalize(atoms, temperature: float) -> None:
+            sampler(atoms, temperature_K=temperature, rng=np.random.RandomState(seed))
+
+        monkeypatch.setattr(vpmdk, "_thermalize_momenta", thermalize)
+        bussi_cls = vpmdk.Bussi
+        if bussi_cls is not None:
+            def bussi(*args, **kwargs):
+                return bussi_cls(*args, rng=np.random.RandomState(seed + 1), **kwargs)
+            monkeypatch.setattr(vpmdk, "Bussi", bussi)
+    return configure
+
+
+@pytest.mark.parametrize("seed", [0, 42, 137])
+@pytest.mark.parametrize("mdalgo,thermostat_kwargs", [
+    (2, {"NHC_PERIOD": 80.0}),
+    (5, {"CSVR_PERIOD": 40.0}),
+])
+def test_thermostat_energy_is_reported_so_the_total_is_conserved(
+    tmp_path, monkeypatch, seeded_thermostat_rngs, seed: int,
+    mdalgo: int, thermostat_kwargs: dict[str, float],
+):
     from ase.build import bulk
     from ase.calculators.emt import EMT
 
     from vpmdk_core.compat import vasp as vasp_compat_models
     from vpmdk_core import execution as execution_module
 
-    for mdalgo, thermostat_kwargs in ((2, {"NHC_PERIOD": 20.0}), (5, {"CSVR_PERIOD": 40.0})):
-        atoms = bulk("Cu", "fcc", a=3.6, cubic=True) * (2, 2, 1)
-        config = vpmdk.MDConfig(
-            steps=30,
-            timestep_fs=2.0,
-            temperature=600.0,
-            thermostat_kwargs=thermostat_kwargs,
-            compat=vasp_compat_models.VaspMDConfig(mdalgo=mdalgo),
-        )
-        result = execution_module.execute_md(atoms, EMT(), config=config)
+    monkeypatch.chdir(tmp_path)
+    seeded_thermostat_rngs(seed)
+    atoms = bulk("Cu", "fcc", a=3.6, cubic=True) * (2, 2, 1)
+    # Resolve the integrator's error without relaxing the conservation test:
+    # keep 60 fs of dynamics and both baths' 40 fs time constants. NHC_PERIOD
+    # is measured in steps, whereas CSVR_PERIOD is already measured in fs.
+    # Seed 137 reproduced the old 2 fs test's failure on the minimum ASE stack.
+    config = vpmdk.MDConfig(
+        steps=120,
+        timestep_fs=0.5,
+        temperature=600.0,
+        thermostat_kwargs=thermostat_kwargs,
+        compat=vasp_compat_models.VaspMDConfig(mdalgo=mdalgo),
+    )
+    result = execution_module.execute_md(atoms, EMT(), config=config)
 
-        totals = np.array([step.total_energy for step in result.steps])
-        bare = np.array(
-            [step.potential_energy + step.kinetic_energy for step in result.steps]
-        )
-        thermostat = np.array(
-            [step.thermostat_potential + step.thermostat_kinetic for step in result.steps]
-        )
-        assert np.any(thermostat != 0.0), f"MDALGO={mdalgo} reported a zero thermostat"
-        # The thermostat term is what makes the reported total the conserved one.
-        total_drift = float(totals.max() - totals.min())
-        bare_drift = float(bare.max() - bare.min())
-        assert total_drift < bare_drift / 10.0, f"MDALGO={mdalgo} total not conserved"
+    totals = np.array([step.total_energy for step in result.steps])
+    bare = np.array(
+        [step.potential_energy + step.kinetic_energy for step in result.steps]
+    )
+    thermostat = np.array(
+        [step.thermostat_potential + step.thermostat_kinetic for step in result.steps]
+    )
+    assert np.any(thermostat != 0.0), f"MDALGO={mdalgo} reported a zero thermostat"
+    # The thermostat term is what makes the reported total the conserved one.
+    total_drift = float(totals.max() - totals.min())
+    bare_drift = float(bare.max() - bare.min())
+    assert total_drift < bare_drift / 10.0, f"MDALGO={mdalgo} total not conserved"
 
+
+def test_nose_hoover_thermostat_energy_matches_ase(
+    tmp_path, monkeypatch, seeded_thermostat_rngs
+):
+    from ase.build import bulk
+    from ase.calculators.emt import EMT
+
+    monkeypatch.chdir(tmp_path)
+    seeded_thermostat_rngs(0)
     # The Nose-Hoover split must reproduce ASE's own public sum exactly.
     atoms = bulk("Cu", "fcc", a=3.6, cubic=True) * (2, 2, 1)
     atoms.calc = EMT()

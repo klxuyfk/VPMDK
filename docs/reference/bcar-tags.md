@@ -367,3 +367,25 @@ CHARGE_PYTHON=./env/bin/python
 ```
 
 For that use case, prefer an absolute path or an environment-variable fallback.
+
+## ALIGNN-FF
+
+Select `MLP=ALIGNN`. `MODEL` defaults to `alignn_ff_mptrj`; it also accepts an
+upstream force-field registry name, a directory with `best_model.pt` and
+`config.json`, or a checkpoint file with a sibling `config.json`. `DEVICE`
+accepts the usual PyTorch device strings. No ALIGNN-specific BCAR tags are
+required. See the [backend reference](backends.md#alignn-ff).
+
+## MACE-SOYO
+
+| Tag | Meaning | Default |
+|-----|---------|---------|
+| `MLP` | select `MACE_SOYO` | none |
+| `MODEL` | required local `.pth` checkpoint (direct inference) or `.pt2` package (AOTI) | none |
+| `DEVICE` | NVIDIA CUDA device; CPU is rejected | auto-detected CUDA when available |
+| `MACE_SOYO_HEAD` | case-sensitive checkpoint/package head name | single-head inference |
+| `MACE_SOYO_CUEQ_METHOD` | `native` or `naive` for direct checkpoints; `naive` uses PyTorch operations on CUDA | `native` |
+
+Head and method are resident construction settings. `.pt2` fixes its method
+at export, so a runtime `naive` override is rejected for that format.
+See the [backend reference](backends.md#mace-soyo).

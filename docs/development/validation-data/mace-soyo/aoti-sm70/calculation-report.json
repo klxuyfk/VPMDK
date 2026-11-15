@@ -1,0 +1,36 @@
+{
+  "runtime": "AOTI",
+  "device": "cuda:0",
+  "head": "mptraj",
+  "comparisons": [
+    {
+      "atoms": 2,
+      "differences": {
+        "energy_ev_per_atom": 1.1920928955078125e-07,
+        "force_max_ev_per_a": 2.800342372211162e-06,
+        "stress_max_ev_per_a3": 7.440343452458364e-08
+      }
+    },
+    {
+      "atoms": 4,
+      "differences": {
+        "energy_ev_per_atom": 1.1920928955078125e-07,
+        "force_max_ev_per_a": 1.7583370208740234e-06,
+        "stress_max_ev_per_a3": 5.7899399052985245e-08
+      }
+    },
+    {
+      "atoms": 8,
+      "differences": {
+        "energy_ev_per_atom": 1.4901161193847656e-07,
+        "force_max_ev_per_a": 2.16066837310791e-06,
+        "stress_max_ev_per_a3": 3.632158041000366e-08
+      }
+    }
+  ],
+  "difference_from_original_cueq012_naive": {
+    "energy_ev_per_atom": 1.1920928955078125e-07,
+    "force_max_ev_per_a": 2.585032234492246e-06,
+    "stress_max_ev_per_a3": 6.667610286115178e-08
+  }
+}

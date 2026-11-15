@@ -108,6 +108,7 @@ _BACKEND_MODEL_POLICIES: Mapping[str, BackendModelPolicy] = {
     # Local checkpoint only. An explicit missing value is always an error;
     # omission is allowed only where the upstream calculator has a default.
     "MACE": BackendModelPolicy(local_only=True),
+    "MACE_SOYO": BackendModelPolicy(required=True, local_only=True),
     "PROPHET": BackendModelPolicy(required=True, local_only=True),
     # ORB weights_path accepts a local checkpoint or a remote URI (the bundled
     # defaults are https/s3 URLs that orb-models downloads via cached_path). A
@@ -152,6 +153,7 @@ _BACKEND_MODEL_POLICIES: Mapping[str, BackendModelPolicy] = {
     ),
     # Named-model capable backends. Path-looking missing values remain errors
     # unless the upstream-selector group above explicitly delegates them.
+    "ALIGNN": BackendModelPolicy(default_value="alignn_ff_mptrj", allow_named=True),
     "CHGNET": BackendModelPolicy(allow_named=True),
     # matgl.load_model resolves its own registry and Hugging Face identifiers
     # (e.g. owner/model), so slash-qualified registry names are delegated to the

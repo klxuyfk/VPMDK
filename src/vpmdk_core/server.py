@@ -1122,6 +1122,8 @@ BACKEND_CONFIGURATION_TAGS = frozenset(
         "GRACE_FLOAT_DTYPE",
         "DEEPMD_TYPE_MAP",
         "DEEPMD_HEAD",
+        "MACE_SOYO_HEAD",
+        "MACE_SOYO_CUEQ_METHOD",
     }
 )
 
@@ -1140,6 +1142,7 @@ BACKEND_CONFIGURATION_TAGS = frozenset(
 #   - GRAPH_CONVERTER* (CHGNet/MatRIS + nequip_family, read via delegation)
 #   - the non-prefixed Matlantis aliases MODEL_VERSION / PRIORITY / CALC_MODE
 _EXCLUSIVE_BACKEND_TAG_PREFIXES = {
+    "MACE_SOYO_": "MACE_SOYO",
     "ORB_": "ORB",
     "MATTERSIM_": "MATTERSIM",
     "MATLANTIS_": "MATLANTIS",
@@ -1210,6 +1213,7 @@ _FLOAT_CONFIGURATION_TAGS = frozenset(
 )
 _LOWERCASE_CONFIGURATION_TAGS = frozenset(
     {
+        "MACE_SOYO_CUEQ_METHOD",
         "GRAPH_CONVERTER_ALGORITHM",
         "MATRIS_TASK",
         "HIENET_FILE_TYPE",
@@ -1339,7 +1343,7 @@ _BACKEND_CONFIGURATION_DEFAULTS: dict[str, dict[str, Any]] = {
     },
 }
 
-# MODEL is resolved through _normalize_model_identity, never through
+# MODEL is resolved through _canonical_model_configuration, never through
 # _normalize_configuration_value, so it is intentionally not listed here.
 _PATH_CONFIGURATION_TAGS = frozenset({"ALPHANET_CONFIG", "FAIRCHEM_CONFIG"})
 _MLP_IDENTITY_ALIASES = {
@@ -1407,6 +1411,7 @@ _DEVICE_IGNORING_IDENTITIES = frozenset(
 _DEVICE_BLANK_TO_CPU_IDENTITIES = frozenset(
     _canonical_mlp_identity(m)
     for m in (
+        "ALIGNN",
         # RACECalculator(device=None) selects cpu, and the BAM builder drops
         # a blank DEVICE before it reaches the calculator.
         "BAM",
@@ -1503,17 +1508,29 @@ def _normalize_path_or_name(value: str, base_dir: str) -> str:
     return os.path.realpath(candidate) if looks_like_path else text
 
 
-def _normalize_model_identity(mlp: str, value: Any, base_dir: str) -> str:
-    """Return the MODEL identity selected by the shared backend resolver."""
-
-    reference = _root()._resolve_backend_model_reference(
-        mlp,
-        str(value),
-        base_dir=base_dir,
+def _canonical_model_configuration(mlp: str, value: Any, base_dir: str) -> dict[str, str]:
+    """Resolve MODEL once, including config files that determine its behavior."""
+    root = _root()
+    reference = root._resolve_backend_model_reference(
+        mlp, str(value), base_dir=base_dir,
     )
     if reference.value is None:  # pragma: no cover - explicit MODEL is nonempty
         raise ValueError(f"{mlp} MODEL did not resolve to a model identity.")
-    return str(reference.identity or reference.value)
+    configuration = {"MODEL": str(reference.identity or reference.value)}
+    if mlp == "ALIGNN" and reference.kind is root.ModelReferenceKind.LOCAL_PATH:
+        import hashlib
+        from .backends.alignn import _alignn_model_files
+
+        checkpoint, config_path = _alignn_model_files(reference.value)
+        # MODEL's real path alone loses the lexical parent used by ALIGNN.
+        # Snapshot the config too, so edits after startup cannot masquerade as
+        # the settings already loaded by the resident calculator.
+        configuration["MODEL"] = str(checkpoint.resolve())
+        configuration["ALIGNN_CONFIG"] = str(config_path.resolve())
+        configuration["ALIGNN_CONFIG_SHA256"] = hashlib.sha256(
+            config_path.read_bytes()
+        ).hexdigest()
+    return configuration
 
 
 def _normalize_configuration_value(
@@ -1607,7 +1624,7 @@ def _canonical_configuration(
     device: str | None = None,
     tolerant: bool = False,
 ) -> dict[str, Any]:
-    """Return explicitly supplied construction tags under effective names.
+    """Return explicit tags and inferred model companions under effective names.
 
     With ``tolerant=True`` (the resident/startup path), a tag whose value fails
     to canonicalize is DROPPED instead of raising. That is safe there because the
@@ -1690,9 +1707,7 @@ def _canonical_configuration(
                 # (a non-final operand) is still skipped above and defaults.
                 continue
             if canonical_tag == "MODEL":
-                configuration[canonical_tag] = _normalize_model_identity(
-                    mlp, value, base_dir
-                )
+                configuration.update(_canonical_model_configuration(mlp, value, base_dir))
             else:
                 normalized_value = _normalize_or_drop(canonical_tag, value)
                 # _OMIT_TAG => the builder ignores this value (use its default),
@@ -1740,8 +1755,8 @@ def _canonical_configuration(
             # either silently accepted or turned into a permanent exit-5.
             continue
         if tag == "MODEL":
-            configuration[tag] = _normalize_model_identity(
-                mlp, normalized[tag], base_dir
+            configuration.update(
+                _canonical_model_configuration(mlp, normalized[tag], base_dir)
             )
             continue
         normalized_value = _normalize_or_drop(tag, normalized[tag])
@@ -1817,6 +1832,8 @@ def _effective_configuration(
                 if not extension:
                     break
                 candidate = stem
+    if mlp == "MACE_SOYO":
+        defaults["MACE_SOYO_CUEQ_METHOD"] = "native"
     if mlp == "UPET":
         defaults["UPET_NEIGHBORLIST_DEVICE"] = "auto"
     if mlp in {"FAIRCHEM", "FAIRCHEM_V2", "ESEN"}:
@@ -2960,6 +2977,13 @@ class VPMDKServer:
                 effective_backend_tags["GRAPH_CONVERTER_ALGORITHM"] = (
                     detected_algorithm
                 )
+        if resident_mlp == "MACE_SOYO":
+            selected_head = getattr(calculator, "head", None)
+            if selected_head is not None:
+                effective_backend_tags["MACE_SOYO_HEAD"] = str(selected_head)
+            selected_method = getattr(calculator, "cueq_method", None)
+            if selected_method is not None:
+                effective_backend_tags["MACE_SOYO_CUEQ_METHOD"] = str(selected_method)
         self.backend = backend_identity(
             effective_backend_tags, base_dir=backend_base_dir
         )

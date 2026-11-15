@@ -56,11 +56,13 @@ def _require_backend_config(backend: object) -> BackendConfig:
 
 
 _BASE_CAPABILITIES: dict[str, BackendCapabilities] = {
+    "ALIGNN": BackendCapabilities(),
     "BAM": BackendCapabilities(),
     "CHGNET": BackendCapabilities(spin=True),
     "MATGL": BackendCapabilities(spin=False),
     "M3GNET": BackendCapabilities(spin=False),
     "MACE": BackendCapabilities(spin=True, fine_tune=True),
+    "MACE_SOYO": BackendCapabilities(),
     "PROPHET": BackendCapabilities(),
     "MATTERSIM": BackendCapabilities(),
     "MATLANTIS": BackendCapabilities(uncertainty=False),
@@ -110,11 +112,13 @@ def _backend_available(name: str) -> bool:
 
     root = _root()
     checks = {
+        "ALIGNN": lambda: root._get_alignn_calculator_cls() is not None,
         "BAM": lambda: root.BAMCalculator is not None,
         "CHGNET": lambda: root.CHGNetCalculator is not None,
         "MATGL": lambda: root.M3GNetCalculator is not None,
         "M3GNET": lambda: root.M3GNetCalculator is not None,
         "MACE": lambda: root.MACECalculator is not None,
+        "MACE_SOYO": lambda: root._get_mace_soyo_calculator_cls() is not None,
         "PROPHET": lambda: root.ProphetCalculator is not None,
         "MATTERSIM": lambda: root.MatterSimCalculator is not None,
         "MATLANTIS": lambda: (

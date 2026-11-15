@@ -79,6 +79,8 @@ environment unless you are only using the charge-density runners through
 
 Common packages:
 
+- `MACE-SOYO` from its [official repository](https://github.com/PrincessHakuryu/MACE-SOYO) for `MLP=MACE_SOYO`; requires CUDA, a matching runtime, and a local `.pth` checkpoint or exported `.pt2` package; AOTI export also requires the matching compiler toolkit. See the [environment recipe](../development/backend-environments.md#mace-soyo).
+- `alignn` for `MLP=ALIGNN` (ALIGNN-FF); see the [tested environment recipe](../development/backend-environments.md#alignn-ff) for the pinned upstream source and legacy DGL requirements
 - `chgnet` for `MLP=CHGNET`
 - `mace-torch` for `MLP=MACE`
 - `prophet-mlip` for `MLP=PROPHET`; install from the official repository with
